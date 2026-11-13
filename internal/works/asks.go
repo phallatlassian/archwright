@@ -244,8 +244,10 @@ func (r *Runs) CancelAsk(id, who string) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, err := r.st.CancelAsk(id, who); err != nil {
-		return nil, err
+	if a.Status != store.AskCancelled { // a cancelled ask whose Job is still open is a retry of the close
+		if _, err := r.st.CancelAsk(id, who); err != nil {
+			return nil, err
+		}
 	}
 	r.mu.Lock()
 	sm := r.sites

@@ -243,10 +243,10 @@ type AskFilter struct{ Job, Guild, Status, Holder string }
 func (s *Store) Asks(f AskFilter) ([]Ask, error) {
 	var conds []string
 	var args []any
-	for col, v := range map[string]string{"job_id": f.Job, "guild": f.Guild, "status": f.Status, "holder": f.Holder} {
-		if v != "" {
-			conds = append(conds, col+" = ?")
-			args = append(args, v)
+	for _, c := range []struct{ col, v string }{{"job_id", f.Job}, {"guild", f.Guild}, {"status", f.Status}, {"holder", f.Holder}} {
+		if c.v != "" {
+			conds = append(conds, c.col+" = ?")
+			args = append(args, c.v)
 		}
 	}
 	where := ""
