@@ -457,7 +457,7 @@ func (r *Runs) reviewNext(job store.Job, reviews []store.Review) string {
 // later handback, or an integration branch that has moved since.
 func (r *Runs) reviewStale(rev store.Review) error {
 	if hb, err := r.st.LatestHandback(rev.JobID); err != nil || hb.ID != rev.HandbackID {
-		return fmt.Errorf("Engineering has handed back since this review: %w", store.ErrConflict)
+		return fmt.Errorf("a handback has landed since this review: %w", store.ErrConflict)
 	}
 	r.mu.Lock()
 	sm := r.sites
