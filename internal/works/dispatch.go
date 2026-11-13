@@ -76,6 +76,8 @@ var dispatchTools = map[string]tool{
 	"accept_piece":    {roles: []string{RoleWarden}, call: acceptPiece},
 	"handback":        {roles: []string{RoleWarden}, call: handback},
 	"report_result":   {roles: []string{RoleWright}, call: reportResult},
+	"show_queue":      {roles: []string{RoleArchwright}, call: showQueue},
+	"show_needs_you":  {roles: []string{RoleArchwright}, call: showNeedsYou},
 	"show_dispatches": {roles: []string{RoleArchwright}, call: showDispatches},
 	"show_handback":   {roles: []string{RoleArchwright}, call: showHandback},
 	"list_flags":      {roles: []string{RoleArchwright}, call: listFlags},
@@ -128,8 +130,24 @@ type DispatchInfo struct {
 	DispatchID string `json:"dispatch_id,omitempty"`
 	Piece      string `json:"piece"`
 	Round      int    `json:"round"`
-	Status     string `json:"status"`           // running, or failed when the piece is out of rework rounds
-	Reason     string `json:"reason,omitempty"` // set when the piece failed
+	Status     string `json:"status"`                   // running, queued behind the caps, or failed when the piece is out of rework rounds
+	Reason     string `json:"reason,omitempty"`         // set when the piece failed
+	QueuePos   int    `json:"queue_position,omitempty"` // set when queued: 1 is next
+}
+
+// launch warns of any scope overlap with other Jobs on the Site, then hands
+// the dispatch to the scheduler.
+func (c *callCtx) launch(d store.Dispatch, b Brief) (DispatchInfo, error) {
+	c.runs.warnScopeOverlap(d, b)
+	pos, err := c.runs.launch(d)
+	if err != nil {
+		return DispatchInfo{}, err
+	}
+	info := DispatchInfo{DispatchID: d.ID, Piece: d.Piece, Round: d.Round, Status: store.DispatchRunning}
+	if pos > 0 {
+		info.Status, info.QueuePos = store.DispatchQueued, pos
+	}
+	return info, nil
 }
 
 func dispatchWright(c *callCtx, in json.RawMessage) (any, error) {
@@ -156,10 +174,7 @@ func dispatchWright(c *callCtx, in json.RawMessage) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := c.runs.launch(d); err != nil {
-		return nil, err
-	}
-	return DispatchInfo{DispatchID: d.ID, Piece: d.Piece, Round: d.Round, Status: store.DispatchRunning}, nil
+	return c.launch(d, b)
 }
 
 func reworkWright(c *callCtx, in json.RawMessage) (any, error) {
@@ -195,10 +210,7 @@ func reworkWright(c *callCtx, in json.RawMessage) (any, error) {
 	if d == nil { // out of rounds: the piece fails
 		return DispatchInfo{Piece: p.Piece, Round: p.Reworks, Status: store.PieceFailed, Reason: p.Reason}, nil
 	}
-	if err := c.runs.launch(*d); err != nil {
-		return nil, err
-	}
-	return DispatchInfo{DispatchID: d.ID, Piece: d.Piece, Round: d.Round, Status: store.DispatchRunning}, nil
+	return c.launch(*d, b)
 }
 
 // Inspection is what a Warden sees of a piece: never any flags.
@@ -272,7 +284,7 @@ func handback(c *callCtx, in json.RawMessage) (any, error) {
 		}
 	}
 	for _, p := range mine {
-		if d, err := c.st.LatestDispatch(p.JobID, p.Piece); err == nil && d.Status == store.DispatchRunning {
+		if d, err := c.st.LatestDispatch(p.JobID, p.Piece); err == nil && (d.Status == store.DispatchRunning || d.Status == store.DispatchQueued) {
 			return nil, fmt.Errorf("piece %q still has a Wright running: %w", p.Piece, store.ErrConflict)
 		}
 	}
@@ -339,6 +351,20 @@ func showDispatches(c *callCtx, in json.RawMessage) (any, error) {
 	return c.st.Dispatches(id)
 }
 
+func showQueue(c *callCtx, in json.RawMessage) (any, error) {
+	if err := decode(in, &struct{}{}); err != nil {
+		return nil, err
+	}
+	return c.runs.Queue(), nil
+}
+
+func showNeedsYou(c *callCtx, in json.RawMessage) (any, error) {
+	if err := decode(in, &struct{}{}); err != nil {
+		return nil, err
+	}
+	return c.st.NeedsYou()
+}
+
 func showHandback(c *callCtx, in json.RawMessage) (any, error) {
 	id, err := jobArg(in)
 	if err != nil {
@@ -376,19 +402,24 @@ func listFlags(c *callCtx, in json.RawMessage) (any, error) {
 	return c.st.Flags(id)
 }
 
-// launch starts the Wright run for a dispatch on the configured Runner. The
-// run ends when the Runner returns; a dispatch that never reported then fails.
-func (r *Runs) launch(d store.Dispatch) error {
-	err := r.start(d)
-	if err != nil {
-		raw, _ := json.Marshal(WrightResult{Status: ResultFailed, Uncertainty: "the run could not start: " + err.Error()})
-		if rerr := r.st.RecordResult(d.ID, raw); rerr != nil {
-			log.Printf("dispatch %s: recording failure: %v", d.ID, rerr)
-		}
+// launch hands a recorded dispatch to the scheduler, which starts its Wright
+// run on the configured Runner once the caps allow, and queues it until then.
+// It returns the dispatch's place in the queue (zero if it started at once),
+// or an error if the run started at once and could not be launched; a
+// dispatch that never reported then fails.
+func (r *Runs) launch(d store.Dispatch) (queuePosition int, err error) { return r.sched.submit(d) }
+
+// failDispatch records a failed result for a dispatch that has not reported.
+func (r *Runs) failDispatch(id, msg string) {
+	raw, _ := json.Marshal(WrightResult{Status: ResultFailed, Uncertainty: msg})
+	if err := r.st.RecordResult(id, raw); err != nil && !errors.Is(err, store.ErrConflict) {
+		log.Printf("dispatch %s: recording failure: %v", id, err)
 	}
-	return err
 }
 
+// start launches the Wright run for a dispatch the scheduler has released.
+// The run ends when the Runner returns: a dispatch that never reported then
+// fails, unless the Runner was rate-limited, which requeues it.
 func (r *Runs) start(d store.Dispatch) error {
 	r.mu.Lock()
 	runner, root, closed := r.runner, r.spoolRoot, r.bg.Err() != nil
@@ -416,17 +447,23 @@ func (r *Runs) start(d store.Dispatch) error {
 	go func() {
 		defer r.wg.Done()
 		runErr := runner.Run(r.bg, RunRequest{Env: env, Job: d.JobID, Piece: d.Piece, DispatchID: d.ID, Brief: d.Rendered})
+		unreported := false
 		if cur, err := r.st.GetDispatch(d.ID); err == nil && cur.Status == store.DispatchRunning {
+			unreported = true
+		}
+		r.End(env.Run)
+		if rl, ok := asRateLimit(runErr); ok && unreported {
+			r.sched.rateLimited(d.ID, rl)
+			return
+		}
+		if unreported {
 			msg := "the run ended without reporting a result"
 			if runErr != nil {
 				msg = "the run failed: " + runErr.Error()
 			}
-			raw, _ := json.Marshal(WrightResult{Status: ResultFailed, Uncertainty: msg})
-			if err := r.st.RecordResult(d.ID, raw); err != nil {
-				log.Printf("dispatch %s: recording failure: %v", d.ID, err)
-			}
+			r.failDispatch(d.ID, msg)
 		}
-		r.End(env.Run)
+		r.sched.finished(d.ID)
 	}()
 	return nil
 }

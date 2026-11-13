@@ -17,6 +17,7 @@ const (
 
 // Dispatch statuses.
 const (
+	DispatchQueued   = "queued"   // waiting for the scheduler to have room (ADR 0008)
 	DispatchRunning  = "running"  // the Wright's run has not reported
 	DispatchReported = "reported" // a result is stored, awaiting the Warden's inspection
 	DispatchRejected = "rejected" // the Warden sent the piece back, or it failed
@@ -114,7 +115,7 @@ func (s *Store) NewPiece(jobID, guild, piece string, brief json.RawMessage, rend
 
 func (s *Store) insertDispatch(tx *sql.Tx, jobID, guild, piece string, round int, brief json.RawMessage, rendered string) (Dispatch, error) {
 	at := s.stamp()
-	d := Dispatch{ID: newID("dsp-"), JobID: jobID, Piece: piece, Guild: guild, Round: round, Brief: brief, Rendered: rendered, Status: DispatchRunning}
+	d := Dispatch{ID: newID("dsp-"), JobID: jobID, Piece: piece, Guild: guild, Round: round, Brief: brief, Rendered: rendered, Status: DispatchQueued}
 	if _, err := tx.Exec("INSERT INTO dispatches (id, job_id, piece, guild, round, brief, rendered, status, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
 		d.ID, jobID, piece, guild, round, string(brief), rendered, d.Status, at); err != nil {
 		return Dispatch{}, err
@@ -185,6 +186,60 @@ func latestDispatch(q queryer, jobID, piece string) (Dispatch, error) {
 // Dispatches lists a Job's dispatches in order.
 func (s *Store) Dispatches(jobID string) ([]Dispatch, error) {
 	rows, err := s.db.Query("SELECT "+dispatchCols+" FROM dispatches WHERE job_id = ? ORDER BY rowid", jobID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	ds := []Dispatch{}
+	for rows.Next() {
+		d, err := scanDispatch(rows)
+		if err != nil {
+			return nil, err
+		}
+		ds = append(ds, d)
+	}
+	return ds, rows.Err()
+}
+
+// StartDispatch moves a queued dispatch to running as the scheduler launches it.
+func (s *Store) StartDispatch(id string) error {
+	return s.moveDispatch(id, DispatchQueued, DispatchRunning, "wright.started")
+}
+
+// RequeueDispatch returns a running dispatch to the queue, as when its runner
+// was rate-limited before it could report.
+func (s *Store) RequeueDispatch(id string) error {
+	return s.moveDispatch(id, DispatchRunning, DispatchQueued, "wright.requeued")
+}
+
+func (s *Store) moveDispatch(id, from, to, event string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var jobID, piece string
+	if err := tx.QueryRow("SELECT job_id, piece FROM dispatches WHERE id = ?", id).Scan(&jobID, &piece); errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("dispatch %q: %w", id, ErrNotFound)
+	} else if err != nil {
+		return err
+	}
+	res, err := tx.Exec("UPDATE dispatches SET status = ? WHERE id = ? AND status = ?", to, id, from)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("dispatch %q is not %s: %w", id, from, ErrConflict)
+	}
+	if err := appendEvent(tx, s.stamp(), jobID, event, map[string]any{"dispatch": id, "piece": piece}); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// QueuedDispatches lists dispatches waiting to run, oldest first.
+func (s *Store) QueuedDispatches() ([]Dispatch, error) {
+	rows, err := s.db.Query("SELECT "+dispatchCols+" FROM dispatches WHERE status = ? ORDER BY rowid", DispatchQueued)
 	if err != nil {
 		return nil, err
 	}

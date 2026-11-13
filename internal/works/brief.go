@@ -17,10 +17,13 @@ type Brief struct {
 	} `json:"scope"`
 	// Constraints is a pointer so that an absent field (rejected) differs from
 	// an empty list (stated: there are none).
-	Constraints      *[]string `json:"constraints"`
-	Inputs           []string  `json:"inputs"` // pointers to what the Wright needs, not the content
-	DefinitionOfDone []string  `json:"definition_of_done"`
-	ReturnShape      string    `json:"return_shape"`
+	Constraints *[]string `json:"constraints"`
+	// ReadOnly declares that the Wright writes nothing, so its scope cannot
+	// conflict with another Job's. Absent means the piece writes.
+	ReadOnly         bool     `json:"read_only,omitempty"`
+	Inputs           []string `json:"inputs"` // pointers to what the Wright needs, not the content
+	DefinitionOfDone []string `json:"definition_of_done"`
+	ReturnShape      string   `json:"return_shape"`
 	Limits           struct {
 		TimeoutMinutes int `json:"timeout_minutes"`
 		MaxTurns       int `json:"max_turns"`

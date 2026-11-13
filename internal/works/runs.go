@@ -48,6 +48,8 @@ type Runs struct {
 	sites       *sites.Manager
 	gateTimeout time.Duration
 
+	sched *scheduler // when dispatched Wrights may start (ADR 0008)
+
 	mu   sync.Mutex
 	runs map[string]*run
 }
@@ -68,8 +70,10 @@ type run struct {
 // NewRuns returns an empty registry over st.
 func NewRuns(st *store.Store) *Runs {
 	bg, cancel := context.WithCancel(context.Background())
-	return &Runs{st: st, poll: 25 * time.Millisecond, runs: map[string]*run{}, bg: bg, cancelBg: cancel,
+	r := &Runs{st: st, poll: 25 * time.Millisecond, runs: map[string]*run{}, bg: bg, cancelBg: cancel,
 		spoolRoot: filepath.Join(os.TempDir(), fmt.Sprintf("archwright-%d", os.Getuid()))}
+	r.sched = newScheduler(r)
+	return r
 }
 
 // RunContext binds a run to the work it serves.
@@ -142,6 +146,7 @@ func (r *Runs) Close() {
 	r.mu.Lock()
 	r.cancelBg()
 	r.mu.Unlock()
+	r.sched.stop()
 	r.wg.Wait() // dispatched Wrights end their own runs
 	r.mu.Lock()
 	all := r.runs

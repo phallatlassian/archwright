@@ -123,6 +123,23 @@ func TestJobAndPlanOverAPI(t *testing.T) {
 	}
 }
 
+func TestQueueAndNeedsYouOverAPI(t *testing.T) {
+	d := dirs(t)
+	var n atomic.Int32
+	c, err := Connect(context.Background(), d, inProcess(t, &n))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var q QueueStatus
+	if err := c.Do("GET", "/queue", nil, &q); err != nil || q.Limits != DefaultLimits || len(q.Queued) != 0 {
+		t.Fatalf("%+v %v", q, err)
+	}
+	var items []store.NeedsYouItem
+	if err := c.Do("GET", "/needs-you", nil, &items); err != nil || len(items) != 0 {
+		t.Fatalf("%+v %v", items, err)
+	}
+}
+
 func TestShutdownReleasesLock(t *testing.T) {
 	d := dirs(t)
 	var n atomic.Int32
