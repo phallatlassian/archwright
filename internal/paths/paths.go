@@ -66,3 +66,6 @@ func (d Dirs) PidFile() string { return filepath.Join(d.State, "works.pid") }
 
 // Log is the detached Works' output log.
 func (d Dirs) Log() string { return filepath.Join(d.State, "works.log") }
+
+// Worktrees is the directory holding Works-managed git worktrees, outside every Site (ADR 0008).
+func (d Dirs) Worktrees() string { return filepath.Join(d.State, "worktrees") }

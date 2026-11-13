@@ -19,6 +19,8 @@ type Job struct {
 	ID          string    `json:"id"`
 	Title       string    `json:"title"`
 	Description string    `json:"description,omitempty"`
+	Site        string    `json:"site,omitempty"`
+	Outcome     string    `json:"outcome,omitempty"` // accepted or discarded once closed
 	CreatedAt   time.Time `json:"created_at"`
 }
 
@@ -50,32 +52,38 @@ func newID(prefix string) string {
 
 // CreateJob records a new Job and a job.created event.
 func (s *Store) CreateJob(title, description string) (Job, error) {
+	return s.createJob("", title, description)
+}
+
+func (s *Store) createJob(site, title, description string) (Job, error) {
 	title = strings.TrimSpace(title)
 	if title == "" {
 		return Job{}, errors.New("job title is required")
 	}
 	now := s.now().UTC()
 	at := now.Format(time.RFC3339Nano)
-	j := Job{ID: newID("job-"), Title: title, Description: description, CreatedAt: now}
+	j := Job{ID: newID("job-"), Title: title, Description: description, Site: site, CreatedAt: now}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return Job{}, err
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec("INSERT INTO jobs (id, title, description, created_at) VALUES (?,?,?,?)", j.ID, j.Title, j.Description, at); err != nil {
+	if _, err := tx.Exec("INSERT INTO jobs (id, title, description, site, created_at) VALUES (?,?,?,NULLIF(?,''),?)", j.ID, j.Title, j.Description, j.Site, at); err != nil {
 		return Job{}, err
 	}
-	if err := appendEvent(tx, at, j.ID, "job.created", map[string]string{"title": j.Title}); err != nil {
+	if err := appendEvent(tx, at, j.ID, "job.created", map[string]string{"title": j.Title, "site": j.Site}); err != nil {
 		return Job{}, err
 	}
 	return j, tx.Commit()
 }
 
+const jobCols = "id, title, description, COALESCE(site,''), COALESCE(outcome,''), created_at"
+
 // GetJob reads one Job.
 func (s *Store) GetJob(id string) (Job, error) {
 	var j Job
 	var at string
-	err := s.db.QueryRow("SELECT id, title, description, created_at FROM jobs WHERE id = ?", id).Scan(&j.ID, &j.Title, &j.Description, &at)
+	err := s.db.QueryRow("SELECT "+jobCols+" FROM jobs WHERE id = ?", id).Scan(&j.ID, &j.Title, &j.Description, &j.Site, &j.Outcome, &at)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Job{}, fmt.Errorf("job %q: %w", id, ErrNotFound)
 	}
@@ -88,7 +96,7 @@ func (s *Store) GetJob(id string) (Job, error) {
 
 // ListJobs returns all Jobs, oldest first.
 func (s *Store) ListJobs() ([]Job, error) {
-	rows, err := s.db.Query("SELECT id, title, description, created_at FROM jobs ORDER BY created_at, id")
+	rows, err := s.db.Query("SELECT " + jobCols + " FROM jobs ORDER BY created_at, id")
 	if err != nil {
 		return nil, err
 	}
@@ -97,7 +105,7 @@ func (s *Store) ListJobs() ([]Job, error) {
 	for rows.Next() {
 		var j Job
 		var at string
-		if err := rows.Scan(&j.ID, &j.Title, &j.Description, &at); err != nil {
+		if err := rows.Scan(&j.ID, &j.Title, &j.Description, &j.Site, &j.Outcome, &at); err != nil {
 			return nil, err
 		}
 		j.CreatedAt, _ = time.Parse(time.RFC3339Nano, at)
