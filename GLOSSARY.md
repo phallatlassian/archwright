@@ -65,7 +65,7 @@ The one inspected result a Warden returns to the Archwright: done, partial or fa
 _Avoid_: report, response
 
 **Review**:
-A separate, read-only task issued by the Archwright after Masonry's handback and run by a fresh Warden that shares no context with the builder. It reports Standards and Spec independently as pass, fail or not evaluated, with findings tied to file and line. One fail sends the Job back to Engineering once, automatically; a second parks it. The PR go-ahead needs an overall pass (ADR 0012).
+A separate, read-only task issued by the Archwright after Masonry's handback and run by a fresh Warden that shares no context with the builder. It reports Standards and Spec independently as pass, fail or not evaluated, with findings tied to file and line. One fail sends the Job back to Masonry once, automatically; a second parks it. The PR go-ahead needs an overall pass (ADR 0012).
 _Avoid_: code review, QA, approval
 
 **Ask**:
