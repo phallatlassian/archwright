@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/phallatlassian/archwright/internal/sites"
 	"github.com/phallatlassian/archwright/internal/store"
 )
 
@@ -31,7 +32,7 @@ type JobWithPlan struct {
 	Plan *store.Plan `json:"plan"`
 }
 
-func newHandler(st *store.Store, runs *Runs, token string, pid int, shutdown func()) http.Handler {
+func newHandler(st *store.Store, runs *Runs, sm *sites.Manager, token string, pid int, shutdown func()) http.Handler {
 	mux := http.NewServeMux()
 	reply := func(w http.ResponseWriter, code int, v any) {
 		w.Header().Set("Content-Type", "application/json")
@@ -40,8 +41,13 @@ func newHandler(st *store.Store, runs *Runs, token string, pid int, shutdown fun
 	}
 	fail := func(w http.ResponseWriter, err error) {
 		code := http.StatusBadRequest // validation failures; genuine database errors are rare enough to share it
-		if errors.Is(err, store.ErrNotFound) {
+		switch {
+		case errors.Is(err, store.ErrNotFound):
 			code = http.StatusNotFound
+		case errors.Is(err, store.ErrExists):
+			code = http.StatusConflict
+		case errors.Is(err, sites.ErrUnregistered):
+			code = http.StatusForbidden
 		}
 		reply(w, code, map[string]string{"error": err.Error()})
 	}
@@ -54,12 +60,24 @@ func newHandler(st *store.Store, runs *Runs, token string, pid int, shutdown fun
 		go shutdown()
 	})
 	mux.HandleFunc("POST /jobs", func(w http.ResponseWriter, r *http.Request) {
-		var in struct{ Title, Description string }
+		var in struct{ Title, Description, Site, Path string }
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 			fail(w, err)
 			return
 		}
-		j, err := st.CreateJob(in.Title, in.Description)
+		var j store.Job
+		var err error
+		switch {
+		case in.Path != "": // the directory the developer launched from
+			var site store.Site
+			if site, err = sm.Resolve(in.Path); err == nil {
+				j, err = st.CreateJobOn(site.Name, in.Title, in.Description)
+			}
+		case in.Site != "":
+			j, err = st.CreateJobOn(in.Site, in.Title, in.Description)
+		default:
+			j, err = st.CreateJob(in.Title, in.Description)
+		}
 		if err != nil {
 			fail(w, err)
 			return
@@ -104,6 +122,89 @@ func newHandler(st *store.Store, runs *Runs, token string, pid int, shutdown fun
 			return
 		}
 		reply(w, 200, p)
+	})
+
+	mux.HandleFunc("POST /sites", func(w http.ResponseWriter, r *http.Request) {
+		var in sites.RegisterInput
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			fail(w, err)
+			return
+		}
+		site, err := sm.Register(in)
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		reply(w, 201, site)
+	})
+	mux.HandleFunc("GET /sites", func(w http.ResponseWriter, r *http.Request) {
+		list, err := st.ListSites()
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		reply(w, 200, list)
+	})
+	mux.HandleFunc("GET /sites/detect", func(w http.ResponseWriter, r *http.Request) {
+		p, err := sm.Detect(r.URL.Query().Get("path"))
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		reply(w, 200, p)
+	})
+	mux.HandleFunc("GET /sites/resolve", func(w http.ResponseWriter, r *http.Request) {
+		site, err := sm.Resolve(r.URL.Query().Get("path"))
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		reply(w, 200, site)
+	})
+	mux.HandleFunc("POST /jobs/{id}/worktrees", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Kind    string `json:"kind"`
+			BaseRef string `json:"base_ref"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			fail(w, err)
+			return
+		}
+		wt, err := sm.CreateWorktree(r.PathValue("id"), in.Kind, in.BaseRef)
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		reply(w, 201, wt)
+	})
+	mux.HandleFunc("GET /jobs/{id}/worktrees", func(w http.ResponseWriter, r *http.Request) {
+		wts, err := st.Worktrees(r.PathValue("id"))
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		reply(w, 200, wts)
+	})
+	mux.HandleFunc("POST /jobs/{id}/worktrees/cleanup", func(w http.ResponseWriter, r *http.Request) {
+		removed, err := sm.CleanupMerged(r.PathValue("id"))
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		reply(w, 200, removed)
+	})
+	mux.HandleFunc("POST /jobs/{id}/close", func(w http.ResponseWriter, r *http.Request) {
+		var in struct{ Outcome string }
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			fail(w, err)
+			return
+		}
+		removed, err := sm.Close(r.PathValue("id"), in.Outcome)
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		reply(w, 200, removed)
 	})
 
 	// The adapters start and end runs through these; each run gets its own spool and token.

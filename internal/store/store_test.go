@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -156,7 +157,7 @@ func TestMigratesForwardAfterBackup(t *testing.T) {
 	if v, _ := s2.version(); v != extra[len(extra)-1].version {
 		t.Fatalf("version %d", v)
 	}
-	baks, _ := filepath.Glob(path + ".v1.*.bak")
+	baks, _ := filepath.Glob(fmt.Sprintf("%s.v%d.*.bak", path, ms[len(ms)-1].version))
 	if len(baks) != 1 {
 		t.Fatalf("want one backup, got %v", baks)
 	}

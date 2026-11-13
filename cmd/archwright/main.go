@@ -9,13 +9,16 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/phallatlassian/archwright/internal/paths"
+	"github.com/phallatlassian/archwright/internal/sites"
 	"github.com/phallatlassian/archwright/internal/spool"
 	"github.com/phallatlassian/archwright/internal/store"
 	"github.com/phallatlassian/archwright/internal/works"
@@ -23,7 +26,18 @@ import (
 
 const usage = `usage: archwright <command>
 
-  job create --title T [--description D]   create a Job
+  site detect PATH                         propose Site values and gate commands for a repository
+  site register --path P --base-branch B --typecheck C --lint C --test C [--name N] [--remote R] [--cap N]
+                                           register a repository as a Site (the trust act); gates must be given
+  site list                                list Sites
+  site resolve PATH                        show the Site a path belongs to; refused if unregistered
+  job create --title T [--description D] [--site NAME | --path DIR]
+                                           create a Job (on a registered Site)
+  job close ID accepted|discarded          end a Job and remove its remaining worktrees
+  worktree create ID integration|wright|readonly [--base-ref REF]
+                                           create a Job's worktree outside the Site
+  worktree list ID                         list a Job's worktrees
+  worktree cleanup ID                      remove worktrees of Wrights merged into the integration branch
   job list                                 list Jobs
   job show ID                              show a Job and its Plan
   plan set ID [FILE]                       set a Job's Plan from JSON ({"steps":[...]}); stdin if no FILE
@@ -102,10 +116,85 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 		fs := flag.NewFlagSet("job create", flag.ContinueOnError)
 		title := fs.String("title", "", "Job title")
 		desc := fs.String("description", "", "Job description")
+		site := fs.String("site", "", "registered Site name")
+		dir := fs.String("path", "", "directory inside a registered Site")
 		if err := fs.Parse(args[2:]); err != nil {
 			return err
 		}
-		return call("POST", "/jobs", map[string]string{"title": *title, "description": *desc})
+		return call("POST", "/jobs", map[string]string{"title": *title, "description": *desc, "site": *site, "path": absPath(*dir)})
+	case "site detect":
+		p, err := arg(args, 2)
+		if err != nil {
+			return err
+		}
+		return call("GET", "/sites/detect?path="+url.QueryEscape(absPath(p)), nil)
+	case "site resolve":
+		p, err := arg(args, 2)
+		if err != nil {
+			return err
+		}
+		return call("GET", "/sites/resolve?path="+url.QueryEscape(absPath(p)), nil)
+	case "site list":
+		return call("GET", "/sites", nil)
+	case "site register":
+		fs := flag.NewFlagSet("site register", flag.ContinueOnError)
+		in := sites.RegisterInput{Gates: &store.Gates{}}
+		fs.StringVar(&in.Name, "name", "", "Site name (default: directory name)")
+		fs.StringVar(&in.Path, "path", "", "repository root")
+		fs.StringVar(&in.BaseBranch, "base-branch", "", "default branch the factory never commits to")
+		fs.StringVar(&in.Remote, "remote", "", "git remote name")
+		fs.IntVar(&in.ConcurrencyCap, "cap", 0, "concurrent runs (default 3)")
+		fs.StringVar(&in.Gates.Typecheck, "typecheck", "", "type-check gate command")
+		fs.StringVar(&in.Gates.Lint, "lint", "", "lint gate command")
+		fs.StringVar(&in.Gates.Test, "test", "", "test gate command")
+		if err := fs.Parse(args[2:]); err != nil {
+			return err
+		}
+		if in.Path == "" {
+			return errors.New("--path is required")
+		}
+		in.Path = absPath(in.Path)
+		if in.Name == "" {
+			in.Name = filepath.Base(in.Path)
+		}
+		return call("POST", "/sites", in)
+	case "worktree create":
+		id, err := arg(args, 2)
+		if err != nil {
+			return err
+		}
+		kind, err := arg(args, 3)
+		if err != nil {
+			return err
+		}
+		fs := flag.NewFlagSet("worktree create", flag.ContinueOnError)
+		ref := fs.String("base-ref", "", "base ref (default: the Job's integration branch, else the Site's base branch)")
+		if err := fs.Parse(args[4:]); err != nil {
+			return err
+		}
+		return call("POST", "/jobs/"+id+"/worktrees", map[string]string{"kind": kind, "base_ref": *ref})
+	case "worktree list":
+		id, err := arg(args, 2)
+		if err != nil {
+			return err
+		}
+		return call("GET", "/jobs/"+id+"/worktrees", nil)
+	case "worktree cleanup":
+		id, err := arg(args, 2)
+		if err != nil {
+			return err
+		}
+		return call("POST", "/jobs/"+id+"/worktrees/cleanup", nil)
+	case "job close":
+		id, err := arg(args, 2)
+		if err != nil {
+			return err
+		}
+		outcome, err := arg(args, 3)
+		if err != nil {
+			return err
+		}
+		return call("POST", "/jobs/"+id+"/close", map[string]string{"outcome": outcome})
 	case "job list":
 		return call("GET", "/jobs", nil)
 	case "job show":
@@ -151,6 +240,17 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 		return emit(map[string]bool{"stopped": true})
 	}
 	return errors.New(usage)
+}
+
+// absPath makes a CLI path absolute against the working directory; "" stays "".
+func absPath(p string) string {
+	if p == "" {
+		return ""
+	}
+	if abs, err := filepath.Abs(p); err == nil {
+		return abs
+	}
+	return p
 }
 
 func key(args []string, n int) string {

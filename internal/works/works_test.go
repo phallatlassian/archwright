@@ -4,12 +4,17 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/url"
+	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/phallatlassian/archwright/internal/paths"
+	"github.com/phallatlassian/archwright/internal/sites"
 	"github.com/phallatlassian/archwright/internal/store"
 )
 
@@ -140,5 +145,66 @@ func TestShutdownReleasesLock(t *testing.T) {
 	}
 	if _, err := Connect(context.Background(), d, inProcess(t, &n)); err != nil || n.Load() != 2 {
 		t.Fatalf("restart: %v spawned=%d", err, n.Load())
+	}
+}
+
+func TestSitesAndWorktreesOverAPI(t *testing.T) {
+	d := dirs(t)
+	var n atomic.Int32
+	c, err := Connect(context.Background(), d, inProcess(t, &n))
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, _ := filepath.EvalSymlinks(t.TempDir())
+	for _, args := range [][]string{{"init", "-b", "main"}, {"-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "--allow-empty", "-m", "init"}} {
+		if out, err := exec.Command("git", append([]string{"-C", repo}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("%v\n%s", err, out)
+		}
+	}
+
+	// Unregistered paths are refused, for lookups and for Jobs.
+	if err := c.Do("GET", "/sites/resolve?path="+url.QueryEscape(repo), nil, nil); err == nil {
+		t.Fatal("unregistered path resolved")
+	}
+	if err := c.Do("POST", "/jobs", map[string]string{"title": "T", "path": repo}, nil); err == nil {
+		t.Fatal("job created on unregistered path")
+	}
+	if err := c.Do("POST", "/sites", sites.RegisterInput{Name: "r", Path: repo, BaseBranch: "main"}, nil); err == nil {
+		t.Fatal("registered without confirmed gates")
+	}
+
+	in := sites.RegisterInput{Name: "r", Path: repo, BaseBranch: "main", Gates: &store.Gates{Test: "go test ./..."}}
+	var site store.Site
+	if err := c.Do("POST", "/sites", in, &site); err != nil || site.ConcurrencyCap != 3 {
+		t.Fatalf("%+v %v", site, err)
+	}
+	if err := c.Do("POST", "/sites", in, nil); err == nil {
+		t.Fatal("registered twice")
+	}
+	var list []store.Site
+	if err := c.Do("GET", "/sites", nil, &list); err != nil || len(list) != 1 || list[0].Name != "r" {
+		t.Fatalf("%+v %v", list, err)
+	}
+
+	var job store.Job
+	if err := c.Do("POST", "/jobs", map[string]string{"title": "T", "path": repo}, &job); err != nil || job.Site != "r" {
+		t.Fatalf("%+v %v", job, err)
+	}
+	var wt store.Worktree
+	if err := c.Do("POST", "/jobs/"+job.ID+"/worktrees", map[string]string{"kind": "wright"}, &wt); err != nil {
+		t.Fatal(err)
+	}
+	if strings.HasPrefix(wt.Path, repo+"/") || !strings.HasPrefix(wt.Path, d.Worktrees()) {
+		t.Fatalf("worktree at %s", wt.Path)
+	}
+	var wts []store.Worktree
+	if err := c.Do("GET", "/jobs/"+job.ID+"/worktrees", nil, &wts); err != nil || len(wts) != 1 {
+		t.Fatalf("%+v %v", wts, err)
+	}
+	if err := c.Do("POST", "/jobs/"+job.ID+"/close", map[string]string{"outcome": "discarded"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(wt.Path); !os.IsNotExist(err) {
+		t.Fatal("worktree kept after discard")
 	}
 }
