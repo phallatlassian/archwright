@@ -10,10 +10,12 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/phallatlassian/archwright/internal/paths"
+	"github.com/phallatlassian/archwright/internal/spool"
 	"github.com/phallatlassian/archwright/internal/store"
 	"github.com/phallatlassian/archwright/internal/works"
 )
@@ -25,14 +27,32 @@ const usage = `usage: archwright <command>
   job show ID                              show a Job and its Plan
   plan set ID [FILE]                       set a Job's Plan from JSON ({"steps":[...]}); stdin if no FILE
   plan show ID                             show a Job's Plan
+  tool NAME [--id ID] [--wait D]           call a Works tool inside a run: JSON on stdin, JSON on stdout
+                                           (exit 75 if the Works does not answer within D, default 60s)
   works status                             report whether the Works is running
   stop                                     stop the Works
 
 All output is JSON. The Works starts on demand.`
 
+// exitWorksUnreachable is the exit code of a tool call the Works never answered (EX_TEMPFAIL).
+const exitWorksUnreachable = 75
+
+// exitError carries a specific process exit code.
+type exitError struct {
+	code int
+	err  error
+}
+
+func (e *exitError) Error() string { return e.err.Error() }
+func (e *exitError) Unwrap() error { return e.err }
+
 func main() {
 	if err := run(os.Args[1:], os.Stdin, os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, "archwright:", err)
+		var ee *exitError
+		if errors.As(err, &ee) {
+			os.Exit(ee.code)
+		}
 		os.Exit(1)
 	}
 }
@@ -40,6 +60,9 @@ func main() {
 func run(args []string, stdin io.Reader, stdout io.Writer) error {
 	if len(args) == 0 {
 		return errors.New(usage)
+	}
+	if args[0] == "tool" {
+		return tool(args[1:], stdin, stdout)
 	}
 	dirs, err := paths.Resolve(os.Getenv)
 	if err != nil {
@@ -154,4 +177,43 @@ func serve(dirs paths.Dirs) error {
 		fmt.Fprintf(os.Stderr, "%s works: %v\n", time.Now().Format(time.RFC3339), err)
 	}
 	return err
+}
+
+// tool makes one call to the Works over the run's spool (ADR 0014, 0018).
+func tool(args []string, stdin io.Reader, stdout io.Writer) error {
+	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
+		return errors.New("missing tool name\n" + usage)
+	}
+	name := args[0]
+	fs := flag.NewFlagSet("tool", flag.ContinueOnError)
+	id := fs.String("id", spool.NewID(), "request id; repeating one is idempotent")
+	wait := fs.Duration("wait", spool.DefaultWait, "how long to wait for the Works")
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	env, err := spool.EnvFrom(os.Getenv)
+	if err != nil {
+		return err
+	}
+	input, err := io.ReadAll(io.LimitReader(stdin, spool.MaxRequestBytes))
+	if err != nil {
+		return err
+	}
+	if len(strings.TrimSpace(string(input))) > 0 && !json.Valid(input) {
+		return errors.New("tool input is not valid JSON")
+	}
+	resp, err := spool.Call(context.Background(), env, *id, name, input, *wait)
+	if errors.Is(err, spool.ErrTimeout) {
+		return &exitError{exitWorksUnreachable, err}
+	}
+	if err != nil {
+		return err
+	}
+	enc := json.NewEncoder(stdout)
+	enc.SetIndent("", "  ")
+	if !resp.OK {
+		enc.Encode(resp)
+		return resp.Error
+	}
+	return enc.Encode(json.RawMessage(resp.Output))
 }

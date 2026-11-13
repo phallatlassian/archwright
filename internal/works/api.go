@@ -31,7 +31,7 @@ type JobWithPlan struct {
 	Plan *store.Plan `json:"plan"`
 }
 
-func newHandler(st *store.Store, token string, pid int, shutdown func()) http.Handler {
+func newHandler(st *store.Store, runs *Runs, token string, pid int, shutdown func()) http.Handler {
 	mux := http.NewServeMux()
 	reply := func(w http.ResponseWriter, code int, v any) {
 		w.Header().Set("Content-Type", "application/json")
@@ -75,15 +75,8 @@ func newHandler(st *store.Store, token string, pid int, shutdown func()) http.Ha
 		reply(w, 200, jobs)
 	})
 	mux.HandleFunc("GET /jobs/{id}", func(w http.ResponseWriter, r *http.Request) {
-		j, err := st.GetJob(r.PathValue("id"))
+		out, err := jobWithPlan(st, r.PathValue("id"))
 		if err != nil {
-			fail(w, err)
-			return
-		}
-		out := JobWithPlan{Job: j}
-		if p, err := st.GetPlan(j.ID); err == nil {
-			out.Plan = &p
-		} else if !errors.Is(err, store.ErrNotFound) {
 			fail(w, err)
 			return
 		}
@@ -111,6 +104,28 @@ func newHandler(st *store.Store, token string, pid int, shutdown func()) http.Ha
 			return
 		}
 		reply(w, 200, p)
+	})
+
+	// The adapters start and end runs through these; each run gets its own spool and token.
+	mux.HandleFunc("POST /runs", func(w http.ResponseWriter, r *http.Request) {
+		var in struct{ Role, SpoolRoot string }
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			fail(w, err)
+			return
+		}
+		env, err := runs.Start(in.Role, in.SpoolRoot)
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		reply(w, 201, env)
+	})
+	mux.HandleFunc("DELETE /runs/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if err := runs.End(r.PathValue("id")); err != nil {
+			fail(w, err)
+			return
+		}
+		reply(w, 200, map[string]bool{"ok": true})
 	})
 
 	return requireToken(token, mux)
