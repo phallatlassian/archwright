@@ -120,7 +120,7 @@ func scanReview(r scanner) (Review, error) {
 }
 
 // NewReview opens a Job's next review. Only one review of a Job runs at a time.
-func (s *Store) NewReview(jobID string, handbackID int64, branch, sha, specBasis, brief string) (Review, error) {
+func (s *Store) NewReview(jobID string, handbackID int64, branch, sha, specBasis string, render func(Review) string) (Review, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return Review{}, err
@@ -138,9 +138,10 @@ func (s *Store) NewReview(jobID string, handbackID int64, branch, sha, specBasis
 		return Review{}, err
 	}
 	at := s.stamp()
-	v := Review{ID: newID("rev-"), JobID: jobID, Seq: seq, HandbackID: handbackID, Branch: branch, SHA: sha, Status: ReviewRunning, SpecBasis: specBasis, Brief: brief}
+	v := Review{ID: newID("rev-"), JobID: jobID, Seq: seq, HandbackID: handbackID, Branch: branch, SHA: sha, Status: ReviewRunning, SpecBasis: specBasis}
+	v.Brief = render(v)
 	if _, err := tx.Exec("INSERT INTO reviews (id, job_id, seq, handback_id, branch, sha, status, spec_basis, brief, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
-		v.ID, jobID, seq, handbackID, branch, sha, v.Status, specBasis, brief, at); err != nil {
+		v.ID, jobID, seq, handbackID, branch, sha, v.Status, specBasis, v.Brief, at); err != nil {
 		return Review{}, err
 	}
 	if err := appendEvent(tx, at, jobID, "review.started", map[string]any{"review": v.ID, "seq": seq, "sha": sha, "spec_basis": specBasis}); err != nil {
@@ -351,14 +352,14 @@ func (s *Store) GrantGoAhead(jobID, reviewID string) error {
 		return err
 	}
 	defer tx.Rollback()
-	var parked string
-	if err := tx.QueryRow("SELECT COALESCE(parked_reason,'') FROM jobs WHERE id = ?", jobID).Scan(&parked); errors.Is(err, sql.ErrNoRows) {
+	var parked, outcome string
+	if err := tx.QueryRow("SELECT COALESCE(parked_reason,''), COALESCE(outcome,'') FROM jobs WHERE id = ?", jobID).Scan(&parked, &outcome); errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("job %q: %w", jobID, ErrNotFound)
 	} else if err != nil {
 		return err
 	}
-	if parked != "" {
-		return fmt.Errorf("job %q is parked for the Archwright: %w", jobID, ErrConflict)
+	if parked != "" || outcome != "" {
+		return fmt.Errorf("job %q is parked or closed: %w", jobID, ErrConflict)
 	}
 	last, err := scanReview(tx.QueryRow("SELECT "+reviewCols+" FROM reviews WHERE job_id = ? ORDER BY seq DESC LIMIT 1", jobID))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -389,8 +390,10 @@ func describeReview(v Review) string {
 	}
 }
 
-// SetReviewBrief stores the brief a review's Warden was given.
-func (s *Store) SetReviewBrief(id, brief string) error {
-	_, err := s.db.Exec("UPDATE reviews SET brief = ? WHERE id = ?", brief, id)
+// InterruptReviews errors reviews a stopped Works left running, so a Job is
+// never stuck waiting on a run that is gone.
+func (s *Store) InterruptReviews() error {
+	_, err := s.db.Exec("UPDATE reviews SET status = ?, reason = ?, finished_at = ? WHERE status = ?",
+		ReviewErrored, "the Works stopped before the review reported", s.stamp(), ReviewRunning)
 	return err
 }

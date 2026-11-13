@@ -227,25 +227,21 @@ func (r *Runs) startReview(jobID string) (store.Review, error) {
 	if err != nil {
 		return store.Review{}, err
 	}
-	branch := wt.BaseRef
-	rev, err := r.st.NewReview(jobID, hb.ID, branch, wt.BaseSHA, basis, "")
+	rev, err := r.st.NewReview(jobID, hb.ID, wt.BaseRef, wt.BaseSHA, basis, func(v store.Review) string {
+		return renderReviewBrief(g, v, wt.Path, material)
+	})
 	if err != nil {
 		return store.Review{}, err
 	}
-	brief := renderReviewBrief(g, rev, wt.Path, material)
-	if err := r.st.SetReviewBrief(rev.ID, brief); err != nil {
-		return store.Review{}, err
-	}
-	rev.Brief = brief
-
+	brief := rev.Brief
 	env, err := r.StartFor(RoleWarden, root, RunContext{Job: jobID, Guild: g.Name, Review: rev.ID})
 	if err != nil {
-		r.st.ErrorReview(rev.ID, "starting the run: "+err.Error())
+		r.errorReview(rev.ID, "starting the run: "+err.Error())
 		return store.Review{}, err
 	}
 	if err := r.st.AttachReviewRun(rev.ID, env.Run); err != nil {
 		r.End(env.Run)
-		r.st.ErrorReview(rev.ID, "starting the run: "+err.Error())
+		r.errorReview(rev.ID, "starting the run: "+err.Error())
 		return store.Review{}, err
 	}
 	r.mu.Lock()
@@ -255,7 +251,7 @@ func (r *Runs) startReview(jobID string) (store.Review, error) {
 	r.mu.Unlock()
 	if closed {
 		r.End(env.Run)
-		r.st.ErrorReview(rev.ID, "the Works is shutting down")
+		r.errorReview(rev.ID, "the Works is shutting down")
 		return store.Review{}, fmt.Errorf("%w: the Works is shutting down", errInvalidInput)
 	}
 	go func() {
@@ -266,14 +262,19 @@ func (r *Runs) startReview(jobID string) (store.Review, error) {
 		if runErr != nil {
 			msg = "the run failed: " + runErr.Error()
 		}
-		if err := r.st.ErrorReview(rev.ID, msg); err != nil { // a no-op once it reported
-			log.Printf("review %s: recording the end of its run: %v", rev.ID, err)
-		}
+		r.errorReview(rev.ID, msg) // a no-op once it reported
 	}()
 	return rev, nil
 }
 
-// validate checks an axis as a Warden reports it.
+// errorReview ends a review that never got a verdict; a failure to record it is logged.
+func (r *Runs) errorReview(id, reason string) {
+	if err := r.st.ErrorReview(id, reason); err != nil {
+		log.Printf("review %s: recording that it errored: %v", id, err)
+	}
+}
+
+// validateAxis checks an axis as a Warden reports it.
 func validateAxis(name string, a store.Axis) error {
 	for i, f := range a.Findings {
 		switch {
@@ -484,6 +485,15 @@ func showReview(c *callCtx, in json.RawMessage) (any, error) {
 	reviews, err := c.st.Reviews(id)
 	if err != nil {
 		return nil, err
+	}
+	// A second fail whose parking did not complete is finished here, so the Job is never left wedged.
+	if n := len(reviews); n > 0 && job.ParkedFor == "" && reviews[n-1].Overall == store.VerdictFail && reviews[n-1].ReworkedAt == nil {
+		if used, err := c.st.ReworkRounds(id); err == nil && used >= MaxReviewReworks {
+			if _, err := c.runs.afterReview(reviews[n-1]); err != nil {
+				return nil, err
+			}
+			job, _ = c.st.GetJob(id)
+		}
 	}
 	return ReviewState{Reviews: reviews, Next: c.runs.reviewNext(job, reviews)}, nil
 }

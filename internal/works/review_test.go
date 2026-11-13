@@ -315,7 +315,7 @@ func TestReportShapeIsEnforced(t *testing.T) {
 	g := newReviewRig(t)
 	g.handBack("p")
 	hb, _ := g.st.LatestHandback(g.job.ID)
-	rev, err := g.st.NewReview(g.job.ID, hb.ID, "b", "sha", store.SpecWrit, "")
+	rev, err := g.st.NewReview(g.job.ID, hb.ID, "b", "sha", store.SpecWrit, func(store.Review) string { return "" })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -380,5 +380,21 @@ func TestWritAndReviewsOverAPI(t *testing.T) {
 	var s ReviewState
 	if err := c.Do("GET", "/jobs/"+j.ID+"/reviews", nil, &s); err != nil || len(s.Reviews) != 0 || s.Next != "request_review" {
 		t.Fatalf("%+v %v", s, err)
+	}
+}
+
+func TestRunningReviewIsErroredWhenTheWorksRestarts(t *testing.T) {
+	g := newReviewRig(t)
+	g.handBack("p")
+	hb, _ := g.st.LatestHandback(g.job.ID)
+	rev, err := g.st.NewReview(g.job.ID, hb.ID, "b", "sha", store.SpecWrit, func(store.Review) string { return "brief" })
+	if err != nil || rev.Brief != "brief" {
+		t.Fatalf("%+v %v", rev, err)
+	}
+	if err := g.st.InterruptReviews(); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := g.st.GetReview(rev.ID); got.Status != store.ReviewErrored || got.Reason == "" {
+		t.Fatalf("%+v", got)
 	}
 }
