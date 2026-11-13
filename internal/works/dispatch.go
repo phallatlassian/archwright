@@ -352,14 +352,16 @@ func showHandback(c *callCtx, in json.RawMessage) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	gates, err := c.st.GateRunFor(h.ID)
-	if err != nil {
+	var gates *store.GateRun // absent for a handback saved before gates were recorded
+	if g, err := c.st.GateRunFor(h.ID); err == nil {
+		gates = &g
+	} else if !errors.Is(err, store.ErrNotFound) {
 		return nil, err
 	}
 	return struct {
 		store.Handback
-		Flags []store.Flag  `json:"flags"`
-		Gates store.GateRun `json:"gates"` // the Works' own re-run, trusted over any Warden claim
+		Flags []store.Flag   `json:"flags"`
+		Gates *store.GateRun `json:"gates,omitempty"` // the Works' own re-run, trusted over any Warden claim
 	}{h, flags, gates}, nil
 }
 
