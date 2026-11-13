@@ -270,6 +270,11 @@ func TestWardenAskGoesStraightToTheArchwrightAndSurvivesRestart(t *testing.T) {
 	if rec.Holder != store.HolderArchwright || !rec.Blocking {
 		t.Fatalf("receipt %+v", rec)
 	}
+	for _, want := range []string{"Needs-you inbox", "show_ask", "no fresh run"} {
+		if !strings.Contains(rec.Next, want) {
+			t.Fatalf("warden receipt next %q lacks %q", rec.Next, want)
+		}
+	}
 	items, _ := g.st.NeedsYou()
 	if len(items) != 1 {
 		t.Fatalf("needs-you: %+v", items)

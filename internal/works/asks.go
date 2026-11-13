@@ -79,6 +79,9 @@ func raiseAsk(c *callCtx, in json.RawMessage) (any, error) {
 	next := "Carry on; the answer will be in a later brief."
 	if ask.Blocking {
 		next = "Stop now and end your run without reporting a result: your task is parked, and a fresh run starts with this brief plus the answers."
+		if c.run.role != RoleWright {
+			next = "End your run. The Archwright will answer through the Needs-you inbox; no fresh run starts automatically. Read the answer with show_ask or list_asks when you are next summoned."
+		}
 	}
 	return AskReceipt{AskID: ask.ID, Holder: ask.Holder, Blocking: ask.Blocking, Next: next}, nil
 }
