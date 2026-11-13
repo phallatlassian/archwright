@@ -264,3 +264,156 @@ func TestGateChangesNeedApprovalAtATerminal(t *testing.T) {
 		t.Fatalf("%s", out)
 	}
 }
+
+// cmdWith runs the binary with extra environment entries and, if env is not
+// empty, as the run it describes.
+func (s *sandbox) cmdWith(extra []string, stdin string, args ...string) (string, error) {
+	c := exec.Command(binary, args...)
+	c.Env = append(append([]string(nil), s.env...), extra...)
+	c.Stdin = strings.NewReader(stdin)
+	out, err := c.Output()
+	return string(out), err
+}
+
+func (s *sandbox) startRunFor(role, job, guild string) works.RunEnv {
+	s.t.Helper()
+	s.run("job", "list")
+	c, _ := works.Running(paths.Dirs{Config: s.cfg, State: s.st})
+	var env works.RunEnv
+	if err := c.Do("POST", "/runs", map[string]string{"role": role, "spoolRoot": s.t.TempDir(), "job": job, "guild": guild}, &env); err != nil {
+		s.t.Fatal(err)
+	}
+	return env
+}
+
+type askView struct {
+	ID, Status string
+	AnsweredBy string `json:"answered_by"`
+	Answers    []struct {
+		QuestionID string `json:"question_id"`
+		Values     []string
+		Skipped    bool
+	}
+}
+
+func (s *sandbox) ask(id string) askView {
+	s.t.Helper()
+	var shown struct{ Ask askView }
+	if err := json.Unmarshal([]byte(s.run("ask", "show", id)), &shown); err != nil {
+		s.t.Fatal(err)
+	}
+	return shown.Ask
+}
+
+func TestAsksReachTheDeveloperThroughLavishOrPlainText(t *testing.T) {
+	s := newSandbox(t)
+	var job struct{ ID string }
+	json.Unmarshal([]byte(s.run("job", "create", "--title", "Add login")), &job)
+	warden := s.startRunFor("warden", job.ID, "engineering")
+	arch := s.startRun("archwright")
+
+	// A stand-in lavish-axi that logs how it was called.
+	bin, logFile := t.TempDir(), filepath.Join(t.TempDir(), "lavish.log")
+	script := "#!/bin/sh\necho \"$@\" >> " + logFile + "\n"
+	if err := os.WriteFile(filepath.Join(bin, "lavish-axi"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	withLavish := []string{"PATH=" + bin + ":" + os.Getenv("PATH")}
+	noLavish := []string{"PATH=/usr/bin:/bin"}
+	lavishLog := func() string { b, _ := os.ReadFile(logFile); return string(b) }
+
+	raise := func(text string) string {
+		out, _, err := s.tool(warden, `{"kind":"decision","blocking":true,"why":"needs you","questions":[{"id":"scheme","text":"`+text+`","options":["jwt","session"],"default":"session"}]}`, "ask")
+		if err != nil {
+			t.Fatalf("%v\n%s", err, out)
+		}
+		var r struct {
+			AskID string `json:"ask_id"`
+		}
+		json.Unmarshal([]byte(out), &r)
+		return r.AskID
+	}
+	record := func(env works.RunEnv, extra []string, id, submission string) map[string]any {
+		c := exec.Command(binary, "ask", "record", id)
+		c.Env = append(append(append([]string(nil), s.env...), env.Environ()...), extra...)
+		c.Stdin = strings.NewReader(submission)
+		out, err := c.Output()
+		if err != nil {
+			t.Fatalf("record: %v\n%s", err, out)
+		}
+		var m map[string]any
+		json.Unmarshal(out, &m)
+		return m
+	}
+
+	// 1. Lavish: the page is opened and the submitted answer is recorded through the tool API.
+	a1 := raise("Which scheme?")
+	out, err := s.cmdWith(withLavish, "", "ask", "page", a1)
+	if err != nil || !strings.Contains(out, `"mode": "lavish"`) {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	page := filepath.Join(s.st, "asks", a1+".html")
+	if b, err := os.ReadFile(page); err != nil || !strings.Contains(string(b), "Which scheme?") || !strings.Contains(string(b), `value="jwt"`) {
+		t.Fatalf("page: %v", err)
+	}
+	if !strings.Contains(lavishLog(), page) {
+		t.Fatalf("lavish-axi was not asked to open the page: %q", lavishLog())
+	}
+	res := record(arch, withLavish, a1, `{"ask_id":"`+a1+`","action":"answer","answers":[{"question_id":"scheme","values":["jwt"]}]}`)
+	if res["recorded"] != true || res["page_ended"] != true || !strings.Contains(lavishLog(), "end "+page) {
+		t.Fatalf("%v\n%s", res, lavishLog())
+	}
+	if a := s.ask(a1); a.Status != "answered" || a.AnsweredBy != "archwright" || a.Answers[0].Values[0] != "jwt" {
+		t.Fatalf("%+v", a)
+	}
+
+	// 2. The dashboard answered first: the page's later answer is rejected by the Works and the page is ended.
+	a2 := raise("Which scheme again?")
+	if _, err := s.cmdWith(withLavish, "", "ask", "page", a2); err != nil {
+		t.Fatal(err)
+	}
+	s.run("ask", "accept-default", a2)
+	page2 := filepath.Join(s.st, "asks", a2+".html")
+	res = record(arch, withLavish, a2, `{"ask_id":"`+a2+`","action":"answer","answers":[{"question_id":"scheme","values":["jwt"]}]}`)
+	if res["recorded"] != false || res["page_ended"] != true || !strings.Contains(lavishLog(), "end "+page2) || res["tell_developer"] == nil {
+		t.Fatalf("%v\n%s", res, lavishLog())
+	}
+	if a := s.ask(a2); a.AnsweredBy != "dashboard" || a.Answers[0].Values[0] != "session" {
+		t.Fatalf("the first answer must stand: %+v", a)
+	}
+
+	// 3. Without lavish-axi the same ask is plain text and can still be answered.
+	a3 := raise("Which scheme, in text?")
+	out, err = s.cmdWith(noLavish, "", "ask", "page", a3)
+	if err != nil || !strings.Contains(out, `"mode": "text"`) || !strings.Contains(out, "Which scheme, in text?") || !strings.Contains(out, "recommended default: session") {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if out, err := s.cmd(`{"answers":[{"question_id":"scheme","values":["jwt"]}]}`, "ask", "answer", a3); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if a := s.ask(a3); a.Status != "answered" || a.Answers[0].Values[0] != "jwt" {
+		t.Fatalf("%+v", a)
+	}
+	// a second answer on the other surface loses
+	if out, err := s.cmd("", "ask", "skip", a3); err == nil {
+		t.Fatalf("a second answer was accepted: %s", out)
+	}
+	if out, err := s.cmd("", "ask", "page", a3); err == nil {
+		t.Fatalf("an answered ask was put to the developer again: %s", out)
+	}
+
+	// 4. Skip and cancel are developer actions too; cancel discards the Job.
+	a4 := raise("Skip me")
+	s.run("ask", "skip", a4)
+	if a := s.ask(a4); !a.Answers[0].Skipped {
+		t.Fatalf("%+v", a)
+	}
+	a5 := raise("Cancel me")
+	s.run("ask", "cancel", a5)
+	if a := s.ask(a5); a.Status != "cancelled" {
+		t.Fatalf("%+v", a)
+	}
+	if out := s.run("job", "show", job.ID); !strings.Contains(out, `"outcome": "discarded"`) {
+		t.Fatalf("%s", out)
+	}
+}

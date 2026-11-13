@@ -122,7 +122,17 @@ func jobWithPlan(st *store.Store, id string) (JobWithPlan, error) {
 	if err != nil {
 		return JobWithPlan{}, err
 	}
-	out := JobWithPlan{Job: j}
+	out := JobWithPlan{Job: j, Asks: []store.Ask{}}
+	for _, status := range []string{store.AskOpen, store.AskEscalated} {
+		asks, err := st.Asks(store.AskFilter{Job: id, Status: status})
+		if err != nil {
+			return JobWithPlan{}, err
+		}
+		out.Asks = append(out.Asks, asks...)
+	}
+	for _, a := range out.Asks {
+		out.BlockedOnYou = out.BlockedOnYou || (a.Holder == store.HolderArchwright && a.Status == store.AskOpen && a.Blocking)
+	}
 	if p, err := st.GetPlan(id); err == nil {
 		out.Plan = &p
 	} else if !errors.Is(err, store.ErrNotFound) {

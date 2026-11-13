@@ -203,7 +203,11 @@ func reworkWright(c *callCtx, in json.RawMessage) (any, error) {
 		return nil, err
 	}
 	raw, _ := json.Marshal(b)
-	p, d, err := c.st.Rework(c.run.ctx.Job, a.Piece, g.reworkLimit(), a.Reason, a.Diagnosis, raw, b.Render(g.Name, g.Standards, piece.Reworks+1, a.Reason))
+	asks, err := c.st.PieceAsks(c.run.ctx.Job, a.Piece)
+	if err != nil {
+		return nil, err
+	}
+	p, d, err := c.st.Rework(c.run.ctx.Job, a.Piece, g.reworkLimit(), a.Reason, a.Diagnosis, raw, b.Render(g.Name, g.Standards, piece.Reworks+1, a.Reason)+qaSection(asks))
 	if err != nil {
 		return nil, err
 	}
@@ -284,8 +288,8 @@ func handback(c *callCtx, in json.RawMessage) (any, error) {
 		}
 	}
 	for _, p := range mine {
-		if d, err := c.st.LatestDispatch(p.JobID, p.Piece); err == nil && (d.Status == store.DispatchRunning || d.Status == store.DispatchQueued) {
-			return nil, fmt.Errorf("piece %q still has a Wright running: %w", p.Piece, store.ErrConflict)
+		if d, err := c.st.LatestDispatch(p.JobID, p.Piece); err == nil && (d.Status == store.DispatchRunning || d.Status == store.DispatchQueued || d.Status == store.DispatchBlocked) {
+			return nil, fmt.Errorf("piece %q still has a Wright running or blocked on an ask: %w", p.Piece, store.ErrConflict)
 		}
 	}
 	if err := a.Validate(mine); err != nil {

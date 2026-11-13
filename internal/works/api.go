@@ -30,6 +30,10 @@ type Health struct {
 type JobWithPlan struct {
 	store.Job
 	Plan *store.Plan `json:"plan"`
+	// Asks are the Job's asks still waiting for an answer; BlockedOnYou says
+	// one of them waits on the developer (ADR 0015).
+	Asks         []store.Ask `json:"asks"`
+	BlockedOnYou bool        `json:"blocked_on_you"`
 }
 
 func newHandler(st *store.Store, runs *Runs, sm *sites.Manager, token string, pid int, shutdown func()) http.Handler {
@@ -135,6 +139,65 @@ func newHandler(st *store.Store, runs *Runs, sm *sites.Manager, token string, pi
 			return
 		}
 		reply(w, 200, items)
+	})
+
+	// Asks (ADR 0015): the dashboard answers through the same Works path as
+	// the Archwright's tool calls, so the first answer wins on either surface.
+	mux.HandleFunc("GET /asks", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		list, err := st.Asks(store.AskFilter{Job: q.Get("job"), Status: q.Get("status"), Holder: q.Get("holder")})
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		reply(w, 200, list)
+	})
+	mux.HandleFunc("GET /asks/{id}", func(w http.ResponseWriter, r *http.Request) {
+		a, err := st.GetAsk(r.PathValue("id"))
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		reply(w, 200, a)
+	})
+	mux.HandleFunc("POST /asks/{id}/answer", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Answers []store.Answer `json:"answers"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			fail(w, err)
+			return
+		}
+		res, err := runs.AnswerAsk(r.PathValue("id"), RoleArchwright, AnsweredByDashboard, in.Answers)
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		reply(w, 200, res)
+	})
+	mux.HandleFunc("POST /asks/{id}/accept-default", func(w http.ResponseWriter, r *http.Request) {
+		res, err := runs.AcceptDefault(r.PathValue("id"), AnsweredByDashboard)
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		reply(w, 200, res)
+	})
+	mux.HandleFunc("POST /asks/{id}/skip", func(w http.ResponseWriter, r *http.Request) {
+		res, err := runs.SkipAsk(r.PathValue("id"), AnsweredByDashboard)
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		reply(w, 200, res)
+	})
+	mux.HandleFunc("POST /asks/{id}/cancel", func(w http.ResponseWriter, r *http.Request) {
+		res, err := runs.CancelAsk(r.PathValue("id"), AnsweredByDashboard)
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		reply(w, 200, res)
 	})
 
 	mux.HandleFunc("POST /sites", func(w http.ResponseWriter, r *http.Request) {

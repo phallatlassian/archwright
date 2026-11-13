@@ -51,6 +51,17 @@ const usage = `usage: archwright <command>
   plan set ID [FILE]                       set a Job's Plan from JSON ({"steps":[...]}); stdin if no FILE
   plan show ID                             show a Job's Plan
   queue show                               show running and queued Wrights, the caps and any runner pause
+  ask list [--status S] [--holder H] [--job ID]
+                                           list asks (an agent's structured questions; ADR 0015)
+  ask show ID                              an ask and its plain-text form
+  ask page ID                              put an ask to the developer as a Lavish page (lavish-axi),
+                                           or as plain text if Lavish is unavailable
+  ask record ID                            inside a run: record the page's submitted answer (JSON on stdin)
+                                           through the tool API, and end the page; a rejected one is reported
+  ask end ID                               end an ask's Lavish page
+  ask answer ID                            answer an ask as the developer ({"answers":[...]} on stdin)
+  ask accept-default ID | skip ID | cancel ID
+                                           accept the recommended defaults, skip, or cancel the Job
   needs-you list                           list the Needs-you inbox (such as scope-overlap warnings)
   tool NAME [--id ID] [--wait D]           call a Works tool inside a run: JSON on stdin, JSON on stdout
                                            (exit 75 if the Works does not answer within D, default 60s)
@@ -279,6 +290,8 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 			return err
 		}
 		return call("POST", "/jobs/"+id+"/close", map[string]string{"outcome": outcome})
+	case "ask list", "ask show", "ask page", "ask end", "ask record", "ask answer", "ask accept-default", "ask skip", "ask cancel":
+		return askCommand(args, stdin, stdout, dirs, connect)
 	case "queue show":
 		return call("GET", "/queue", nil)
 	case "needs-you list":
