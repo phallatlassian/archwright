@@ -83,6 +83,10 @@ func Serve(ctx context.Context, d paths.Dirs, ready chan<- struct{}) error {
 	if err := st.InterruptGateRuns(); err != nil {
 		return err
 	}
+	// In-flight Wrights are re-dispatched from their stored briefs; Resume queues them.
+	if _, err := st.InterruptDispatches(); err != nil {
+		return err
+	}
 	sm := sites.New(st, d.Worktrees(), d.Clones())
 	runs := NewRuns(st)
 	defer runs.Close()
@@ -91,7 +95,11 @@ func Serve(ctx context.Context, d paths.Dirs, ready chan<- struct{}) error {
 	reg := defs.New(defs.Shipped(), d.Config)
 	ReloadDefinitions(reg)
 	runs.UseDefinitions(reg)
-	runs.Configure(GuildsFromRegistry(reg, DefaultProfiles()), NewFakeRunner(nil))
+	fake := NewFakeRunner(nil)
+	if d, err := time.ParseDuration(os.Getenv("ARCHWRIGHT_FAKE_RUN_DELAY")); err == nil {
+		fake.WithDelay(d) // lets a live check kill the Works while a Wright is in flight
+	}
+	runs.Configure(GuildsFromRegistry(reg, DefaultProfiles()), fake)
 	runs.SetLimits(LimitsFromEnv(os.Getenv))
 	if err := runs.Resume(); err != nil {
 		return err

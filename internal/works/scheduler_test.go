@@ -369,3 +369,39 @@ func TestScopesOverlapGlobs(t *testing.T) {
 		}
 	}
 }
+
+func TestRestartRedispatchesInFlightWrightFromStoredBrief(t *testing.T) {
+	g, h := newHeldRig(t, Limits{})
+	d := g.send("a")
+	g.send("b")
+	h.release("b")
+	g.waitReported("b")
+	before, _ := g.st.GetDispatch(d.DispatchID)
+
+	// The Works dies with a running; a successor opens the same database.
+	if _, err := g.st.InterruptDispatches(); err != nil {
+		t.Fatal(err)
+	}
+	r2 := NewRuns(g.st)
+	r2.poll = 5 * time.Millisecond
+	t.Cleanup(r2.Close)
+	runner := NewFakeRunner(nil)
+	r2.Configure(func(name string) (Guild, error) { return Guild{Name: name}, nil }, runner)
+	if err := r2.Resume(); err != nil {
+		t.Fatal(err)
+	}
+	g.r = r2
+	last := g.waitReported("a")
+	if last.Round != 1 || last.Status != store.DispatchReported || last.Rendered != before.Rendered || string(last.Brief) != string(before.Brief) {
+		t.Fatalf("%+v", last)
+	}
+	if old, _ := g.st.GetDispatch(d.DispatchID); old.Status != store.DispatchInterrupted {
+		t.Fatalf("old dispatch is %s", old.Status)
+	}
+	if reqs := runner.Requests(); len(reqs) != 1 || reqs[0].Piece != "a" || reqs[0].Brief != before.Rendered {
+		t.Fatalf("%+v", reqs)
+	}
+	if b, _ := g.st.LatestDispatch(g.job.ID, "b"); b.Round != 0 || b.Status != store.DispatchReported {
+		t.Fatalf("finished piece disturbed: %+v", b)
+	}
+}

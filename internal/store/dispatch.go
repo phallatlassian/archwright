@@ -17,12 +17,13 @@ const (
 
 // Dispatch statuses.
 const (
-	DispatchQueued   = "queued"   // waiting for the scheduler to have room (ADR 0008)
-	DispatchRunning  = "running"  // the Wright's run has not reported
-	DispatchBlocked  = "blocked"  // the run ended on an ask; the piece is parked (ADR 0015)
-	DispatchAnswered = "answered" // its ask was answered and a fresh dispatch took over
-	DispatchReported = "reported" // a result is stored, awaiting the Warden's inspection
-	DispatchRejected = "rejected" // the Warden sent the piece back, or it failed
+	DispatchQueued      = "queued"      // waiting for the scheduler to have room (ADR 0008)
+	DispatchRunning     = "running"     // the Wright's run has not reported
+	DispatchBlocked     = "blocked"     // the run ended on an ask; the piece is parked (ADR 0015)
+	DispatchAnswered    = "answered"    // its ask was answered and a fresh dispatch took over
+	DispatchInterrupted = "interrupted" // the Works stopped mid-run and a fresh dispatch took over
+	DispatchReported    = "reported"    // a result is stored, awaiting the Warden's inspection
+	DispatchRejected    = "rejected"    // the Warden sent the piece back, or it failed
 )
 
 // ErrConflict means the request is valid but the state does not allow it.
@@ -262,6 +263,53 @@ func (s *Store) QueuedDispatches() ([]Dispatch, error) {
 		ds = append(ds, d)
 	}
 	return ds, rows.Err()
+}
+
+// InterruptDispatches marks every dispatch a stopped Works left running as
+// interrupted and queues a fresh one from its stored brief, as the next round
+// of its piece (ADR 0002): the run is never resumed, and the restart is not a
+// rework. It returns the fresh dispatches.
+func (s *Store) InterruptDispatches() ([]Dispatch, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	rows, err := tx.Query("SELECT "+dispatchCols+" FROM dispatches WHERE status = ? ORDER BY rowid", DispatchRunning)
+	if err != nil {
+		return nil, err
+	}
+	var stale []Dispatch
+	for rows.Next() {
+		d, err := scanDispatch(rows)
+		if err != nil {
+			rows.Close()
+			return nil, err
+		}
+		stale = append(stale, d)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	next := []Dispatch{}
+	for _, d := range stale {
+		if _, err := tx.Exec("UPDATE dispatches SET status = ? WHERE id = ?", DispatchInterrupted, d.ID); err != nil {
+			return nil, err
+		}
+		if err := appendEvent(tx, s.stamp(), d.JobID, "wright.interrupted", map[string]any{"dispatch": d.ID, "piece": d.Piece, "round": d.Round}); err != nil {
+			return nil, err
+		}
+		round, err := nextRound(tx, d.JobID, d.Piece)
+		if err != nil {
+			return nil, err
+		}
+		n, err := s.insertDispatch(tx, d.JobID, d.Guild, d.Piece, round, d.Brief, d.Rendered)
+		if err != nil {
+			return nil, err
+		}
+		next = append(next, n)
+	}
+	return next, tx.Commit()
 }
 
 // AttachRun records which run carries out a dispatch.

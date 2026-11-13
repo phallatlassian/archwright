@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/phallatlassian/archwright/internal/spool"
 )
@@ -17,6 +18,14 @@ type FakeRunner struct {
 	script map[string][]WrightResult
 	asks   map[string][]string // per piece, the ask input a run raises instead of reporting
 	briefs []RunRequest
+	delay  time.Duration
+}
+
+// WithDelay makes each run wait before it reports, so a Wright can be in
+// flight long enough to be interrupted.
+func (f *FakeRunner) WithDelay(d time.Duration) *FakeRunner {
+	f.delay = d
+	return f
 }
 
 // ScriptAsk makes the piece's next run raise an ask with this JSON input and
@@ -55,6 +64,13 @@ func (f *FakeRunner) Run(ctx context.Context, req RunRequest) error {
 		res, f.script[req.Piece] = q[0], q[1:]
 	}
 	f.mu.Unlock()
+	if f.delay > 0 {
+		select {
+		case <-time.After(f.delay):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 	if ask != "" {
 		resp, err := spool.Call(ctx, spool.Env{Run: req.Env.Run, Dir: req.Env.Spool, Token: req.Env.Token}, "ask-"+req.DispatchID, "ask", json.RawMessage(ask), spool.DefaultWait)
 		if err != nil {
