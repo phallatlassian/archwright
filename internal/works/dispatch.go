@@ -371,6 +371,17 @@ func listFlags(c *callCtx, in json.RawMessage) (any, error) {
 // launch starts the Wright run for a dispatch on the configured Runner. The
 // run ends when the Runner returns; a dispatch that never reported then fails.
 func (r *Runs) launch(d store.Dispatch) error {
+	err := r.start(d)
+	if err != nil {
+		raw, _ := json.Marshal(WrightResult{Status: ResultFailed, Uncertainty: "the run could not start: " + err.Error()})
+		if rerr := r.st.RecordResult(d.ID, raw); rerr != nil {
+			log.Printf("dispatch %s: recording failure: %v", d.ID, rerr)
+		}
+	}
+	return err
+}
+
+func (r *Runs) start(d store.Dispatch) error {
 	r.mu.Lock()
 	runner, root, closed := r.runner, r.spoolRoot, r.bg.Err() != nil
 	if !closed {
