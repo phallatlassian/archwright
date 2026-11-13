@@ -20,9 +20,16 @@ const (
 // errInvalidInput marks a request whose input fails the tool's schema.
 var errInvalidInput = errors.New("invalid input")
 
+// callCtx is what a tool call can reach: the store, and the run making the call.
+type callCtx struct {
+	st   *store.Store
+	runs *Runs
+	run  *run
+}
+
 type tool struct {
 	roles []string
-	call  func(st *store.Store, in json.RawMessage) (any, error)
+	call  func(c *callCtx, in json.RawMessage) (any, error)
 }
 
 func (t tool) allows(role string) bool {
@@ -59,20 +66,20 @@ func requireField(name, v string) error {
 
 // catalogue is the tool API served over the spool, keyed by tool name.
 var catalogue = map[string]tool{
-	"create_job": {roles: []string{RoleArchwright}, call: func(st *store.Store, in json.RawMessage) (any, error) {
+	"create_job": {roles: []string{RoleArchwright}, call: func(c *callCtx, in json.RawMessage) (any, error) {
 		var a struct{ Title, Description string }
 		if err := decode(in, &a); err != nil {
 			return nil, err
 		}
-		return st.CreateJob(a.Title, a.Description)
+		return c.st.CreateJob(a.Title, a.Description)
 	}},
-	"list_jobs": {roles: []string{RoleArchwright}, call: func(st *store.Store, in json.RawMessage) (any, error) {
+	"list_jobs": {roles: []string{RoleArchwright}, call: func(c *callCtx, in json.RawMessage) (any, error) {
 		if err := decode(in, &struct{}{}); err != nil {
 			return nil, err
 		}
-		return st.ListJobs()
+		return c.st.ListJobs()
 	}},
-	"show_job": {roles: []string{RoleArchwright}, call: func(st *store.Store, in json.RawMessage) (any, error) {
+	"show_job": {roles: []string{RoleArchwright}, call: func(c *callCtx, in json.RawMessage) (any, error) {
 		var a struct{ ID string }
 		if err := decode(in, &a); err != nil {
 			return nil, err
@@ -80,9 +87,9 @@ var catalogue = map[string]tool{
 		if err := requireField("id", a.ID); err != nil {
 			return nil, err
 		}
-		return jobWithPlan(st, a.ID)
+		return jobWithPlan(c.st, a.ID)
 	}},
-	"set_plan": {roles: []string{RoleArchwright}, call: func(st *store.Store, in json.RawMessage) (any, error) {
+	"set_plan": {roles: []string{RoleArchwright}, call: func(c *callCtx, in json.RawMessage) (any, error) {
 		var a struct {
 			JobID string       `json:"job_id"`
 			Steps []store.Step `json:"steps"`
@@ -93,9 +100,9 @@ var catalogue = map[string]tool{
 		if err := requireField("job_id", a.JobID); err != nil {
 			return nil, err
 		}
-		return st.SetPlan(a.JobID, a.Steps)
+		return c.st.SetPlan(a.JobID, a.Steps)
 	}},
-	"show_plan": {roles: []string{RoleArchwright}, call: func(st *store.Store, in json.RawMessage) (any, error) {
+	"show_plan": {roles: []string{RoleArchwright}, call: func(c *callCtx, in json.RawMessage) (any, error) {
 		var a struct {
 			JobID string `json:"job_id"`
 		}
@@ -105,7 +112,7 @@ var catalogue = map[string]tool{
 		if err := requireField("job_id", a.JobID); err != nil {
 			return nil, err
 		}
-		return st.GetPlan(a.JobID)
+		return c.st.GetPlan(a.JobID)
 	}},
 }
 

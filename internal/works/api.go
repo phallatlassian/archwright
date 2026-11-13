@@ -209,12 +209,12 @@ func newHandler(st *store.Store, runs *Runs, sm *sites.Manager, token string, pi
 
 	// The adapters start and end runs through these; each run gets its own spool and token.
 	mux.HandleFunc("POST /runs", func(w http.ResponseWriter, r *http.Request) {
-		var in struct{ Role, SpoolRoot string }
+		var in struct{ Role, SpoolRoot, Job, Guild string }
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 			fail(w, err)
 			return
 		}
-		env, err := runs.Start(in.Role, in.SpoolRoot)
+		env, err := runs.StartFor(in.Role, in.SpoolRoot, RunContext{Job: in.Job, Guild: in.Guild})
 		if err != nil {
 			fail(w, err)
 			return

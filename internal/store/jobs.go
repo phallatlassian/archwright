@@ -20,7 +20,8 @@ type Job struct {
 	Title       string    `json:"title"`
 	Description string    `json:"description,omitempty"`
 	Site        string    `json:"site,omitempty"`
-	Outcome     string    `json:"outcome,omitempty"` // accepted or discarded once closed
+	Outcome     string    `json:"outcome,omitempty"`    // accepted or discarded once closed
+	ParkedFor   string    `json:"parked_for,omitempty"` // why the Job awaits the Archwright, after a partial handback
 	CreatedAt   time.Time `json:"created_at"`
 }
 
@@ -77,13 +78,13 @@ func (s *Store) createJob(site, title, description string) (Job, error) {
 	return j, tx.Commit()
 }
 
-const jobCols = "id, title, description, COALESCE(site,''), COALESCE(outcome,''), created_at"
+const jobCols = "id, title, description, COALESCE(site,''), COALESCE(outcome,''), COALESCE(parked_reason,''), created_at"
 
 // GetJob reads one Job.
 func (s *Store) GetJob(id string) (Job, error) {
 	var j Job
 	var at string
-	err := s.db.QueryRow("SELECT "+jobCols+" FROM jobs WHERE id = ?", id).Scan(&j.ID, &j.Title, &j.Description, &j.Site, &j.Outcome, &at)
+	err := s.db.QueryRow("SELECT "+jobCols+" FROM jobs WHERE id = ?", id).Scan(&j.ID, &j.Title, &j.Description, &j.Site, &j.Outcome, &j.ParkedFor, &at)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Job{}, fmt.Errorf("job %q: %w", id, ErrNotFound)
 	}
@@ -105,7 +106,7 @@ func (s *Store) ListJobs() ([]Job, error) {
 	for rows.Next() {
 		var j Job
 		var at string
-		if err := rows.Scan(&j.ID, &j.Title, &j.Description, &j.Site, &j.Outcome, &at); err != nil {
+		if err := rows.Scan(&j.ID, &j.Title, &j.Description, &j.Site, &j.Outcome, &j.ParkedFor, &at); err != nil {
 			return nil, err
 		}
 		j.CreatedAt, _ = time.Parse(time.RFC3339Nano, at)

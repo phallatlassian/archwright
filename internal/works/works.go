@@ -78,6 +78,8 @@ func Serve(ctx context.Context, d paths.Dirs, ready chan<- struct{}) error {
 	defer st.Close()
 	runs := NewRuns(st)
 	defer runs.Close()
+	// Until the vendor adapters land, dispatched Wrights run on the fake runner.
+	runs.Configure(GuildsFromDir(filepath.Join(d.Config, "guilds")), NewFakeRunner(nil))
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
