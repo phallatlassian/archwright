@@ -11,6 +11,7 @@ const (
 	NeedsScopeOverlap       = "scope-overlap"
 	NeedsReviewParked       = "review-parked"        // a second failed review parked the Job (ADR 0012)
 	NeedsReviewNotEvaluated = "review-not-evaluated" // a review could not evaluate an axis, so the Job cannot pass
+	NeedsPermissionWanted   = "permission-wanted"    // a runner denied an action that would have prompted (ADR 0011)
 )
 
 // NeedsYouItem is one entry in the Needs-you inbox.

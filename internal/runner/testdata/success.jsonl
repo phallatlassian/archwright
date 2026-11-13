@@ -1,0 +1,5 @@
+{"type":"system","subtype":"init","session_id":"s-1","cwd":"/work","model":"claude-sonnet-5-5","permissionMode":"default","tools":["Bash","Read"],"claude_code_version":"2.1.285"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Listing the directory."},{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"ls","description":"List files"}}]},"session_id":"s-1"}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"a.go\nb.go","is_error":false}]},"session_id":"s-1"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Two files."}]},"session_id":"s-1"}
+{"type":"result","subtype":"success","is_error":false,"result":"Two files.","structured_output":{"files":2},"total_cost_usd":0.0123,"usage":{"input_tokens":120,"output_tokens":34},"permission_denials":[],"session_id":"s-1"}

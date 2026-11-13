@@ -1,0 +1,2 @@
+{"type":"system","subtype":"init","session_id":"s-4","permissionMode":"bypassPermissions","claude_code_version":"2.1.285"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Should never be read."}]},"session_id":"s-4"}
