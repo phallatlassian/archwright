@@ -73,7 +73,7 @@ func TestShippedDefinitionsLoad(t *testing.T) {
 	if errs := r.Reload(); len(errs) != 0 {
 		t.Fatalf("shipped definitions invalid: %v", errs)
 	}
-	for _, g := range []string{"chancery", "engineering", "research", "review"} {
+	for _, g := range []string{"chancery", "masonry", "survey", "hallmark"} {
 		if _, ok := r.Guild(g); !ok {
 			t.Errorf("guild %q not shipped", g)
 		}
@@ -83,9 +83,9 @@ func TestShippedDefinitionsLoad(t *testing.T) {
 			t.Errorf("jig %q not shipped", j)
 		}
 	}
-	rg, _ := r.Guild("research")
+	rg, _ := r.Guild("survey")
 	if rg.Access != ReadOnly || rg.Wrights["docs"] == "" || rg.Wrights["code-trace"] == "" {
-		t.Errorf("research guild: %+v", rg)
+		t.Errorf("survey guild: %+v", rg)
 	}
 }
 

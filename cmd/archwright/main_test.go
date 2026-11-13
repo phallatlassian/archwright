@@ -67,7 +67,7 @@ func TestCreateJobAndPlanReadBackThroughCLI(t *testing.T) {
 	if err := json.Unmarshal([]byte(s.run("job", "create", "--title", "Fix login", "--description", "broken")), &job); err != nil {
 		t.Fatal(err)
 	}
-	plan := `{"steps":[{"id":"a","guild":"build","title":"fix"},{"id":"b","guild":"review","title":"check","blocked_by":["a"],"checkpoint":true}]}`
+	plan := `{"steps":[{"id":"a","guild":"build","title":"fix"},{"id":"b","guild":"hallmark","title":"check","blocked_by":["a"],"checkpoint":true}]}`
 	if out, err := s.cmd(plan, "plan", "set", job.ID); err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
@@ -309,7 +309,7 @@ func TestAsksReachTheDeveloperThroughLavishOrPlainText(t *testing.T) {
 	s := newSandbox(t)
 	var job struct{ ID string }
 	json.Unmarshal([]byte(s.run("job", "create", "--title", "Add login")), &job)
-	warden := s.startRunFor("warden", job.ID, "engineering")
+	warden := s.startRunFor("warden", job.ID, "masonry")
 	arch := s.startRun("archwright")
 
 	// A stand-in lavish-axi that logs how it was called.

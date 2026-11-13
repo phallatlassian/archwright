@@ -30,7 +30,7 @@ func TestJobAndPlanRoundTrip(t *testing.T) {
 	}
 	steps := []Step{
 		{ID: "a", Guild: "build", Title: "do it"},
-		{ID: "b", Guild: "review", Title: "check", BlockedBy: []string{"a"}, Checkpoint: true},
+		{ID: "b", Guild: "hallmark", Title: "check", BlockedBy: []string{"a"}, Checkpoint: true},
 	}
 	if _, err := s.SetPlan(j.ID, steps); err != nil {
 		t.Fatal(err)
@@ -252,7 +252,7 @@ func TestInterruptedGateRunsAreNotReportedAsPassing(t *testing.T) {
 func TestAdHocPlanNeedsApprovalJigPlanDoesNot(t *testing.T) {
 	s, _ := open(t)
 	j, _ := s.CreateJob("x", "")
-	steps := []Step{{ID: "a", Guild: "engineering", Title: "do"}}
+	steps := []Step{{ID: "a", Guild: "masonry", Title: "do"}}
 	p, err := s.SetPlan(j.ID, steps)
 	if err != nil || p.Approval != ApprovalPending || p.Cleared() || p.Jig != "" {
 		t.Fatalf("ad hoc plan: %+v %v", p, err)
@@ -285,7 +285,7 @@ func TestAdHocPlanNeedsApprovalJigPlanDoesNot(t *testing.T) {
 func TestApprovalBoundToReviewedPlan(t *testing.T) {
 	s, _ := open(t)
 	j, _ := s.CreateJob("x", "")
-	steps := []Step{{ID: "a", Guild: "engineering", Title: "do"}}
+	steps := []Step{{ID: "a", Guild: "masonry", Title: "do"}}
 	seen, _ := s.SetPlan(j.ID, steps)
 	time.Sleep(2 * time.Millisecond)
 	if _, err := s.SetPlan(j.ID, steps); err != nil {
@@ -304,9 +304,9 @@ func TestInterruptDispatchesRequeuesRunningFromStoredBrief(t *testing.T) {
 	st, _ := open(t)
 	job, _ := st.CreateJob("J", "")
 	brief := json.RawMessage(`{"goal":"g"}`)
-	run, _ := st.NewPiece(job.ID, "engineering", "a", brief, "rendered a")
-	queued, _ := st.NewPiece(job.ID, "engineering", "b", brief, "rendered b")
-	reported, _ := st.NewPiece(job.ID, "engineering", "c", brief, "rendered c")
+	run, _ := st.NewPiece(job.ID, "masonry", "a", brief, "rendered a")
+	queued, _ := st.NewPiece(job.ID, "masonry", "b", brief, "rendered b")
+	reported, _ := st.NewPiece(job.ID, "masonry", "c", brief, "rendered c")
 	for _, id := range []string{run.ID, reported.ID} {
 		if err := st.StartDispatch(id); err != nil {
 			t.Fatal(err)

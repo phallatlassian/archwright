@@ -12,7 +12,7 @@ import (
 	"github.com/phallatlassian/archwright/internal/store"
 )
 
-var onePieceSteps = []store.Step{{ID: "a", Guild: "engineering", Title: "do it"}}
+var onePieceSteps = []store.Step{{ID: "a", Guild: "masonry", Title: "do it"}}
 
 func TestAdHocPlanGatesDispatchJigPlanDoesNot(t *testing.T) {
 	g := newRig(t, map[string][]WrightResult{"p": {doneResult}, "q": {doneResult}})
@@ -64,7 +64,7 @@ func TestGuildsFromRegistryBindsAndFailsOnUnmetCapability(t *testing.T) {
 	cfg := t.TempDir()
 	reg := defs.New(defs.Shipped(), cfg)
 	reg.Reload()
-	g, err := GuildsFromRegistry(reg, DefaultProfiles())("research")
+	g, err := GuildsFromRegistry(reg, DefaultProfiles())("survey")
 	if err != nil || g.Binding.Access != defs.ReadOnly || !g.Binding.DetachedWorktree || g.Standards == "" {
 		t.Fatalf("%+v %v", g, err)
 	}
@@ -72,12 +72,12 @@ func TestGuildsFromRegistryBindsAndFailsOnUnmetCapability(t *testing.T) {
 		t.Errorf("unknown guild: %v", err)
 	}
 	weak := map[string]defs.Profile{"claude": {}, "codex": {}}
-	if _, err := GuildsFromRegistry(reg, weak)("research"); !errors.Is(err, errInvalidInput) {
+	if _, err := GuildsFromRegistry(reg, weak)("survey"); !errors.Is(err, errInvalidInput) {
 		t.Errorf("read-only guild bound to a runner that cannot enforce it: %v", err)
 	}
 	// A developer override that widens nothing the runner lacks still loads;
 	// an override of an invalid shape does not replace the shipped Guild.
-	path := filepath.Join(cfg, "guilds", "research", "GUILD.md")
+	path := filepath.Join(cfg, "guilds", "survey", "GUILD.md")
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +85,7 @@ func TestGuildsFromRegistryBindsAndFailsOnUnmetCapability(t *testing.T) {
 	if errs := reg.Reload(); len(errs) != 1 {
 		t.Fatalf("errors: %v", errs)
 	}
-	if g, _ := GuildsFromRegistry(reg, DefaultProfiles())("research"); g.Standards == "x" {
+	if g, _ := GuildsFromRegistry(reg, DefaultProfiles())("survey"); g.Standards == "x" {
 		t.Error("invalid override took effect")
 	}
 }

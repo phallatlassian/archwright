@@ -6,6 +6,6 @@ parameters:
     required: true
 steps:
   - id: investigate
-    guild: research
+    guild: survey
     task: "Investigate, with evidence for every claim: {{question}}"
     outputs: [findings]

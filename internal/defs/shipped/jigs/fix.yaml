@@ -6,11 +6,11 @@ parameters:
     required: true
 steps:
   - id: fix
-    guild: engineering
+    guild: masonry
     task: "Diagnose and fix this defect, adding a failing test first: {{problem}}"
     outputs: [diff]
   - id: review
-    guild: review
+    guild: hallmark
     task: "Review the fix for this defect: {{problem}}"
     inputs: [fix.diff]
     blocked_by: [fix]

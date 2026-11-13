@@ -64,12 +64,12 @@ type Review struct {
 	RunID      string `json:"run_id,omitempty"`
 	Status     string `json:"status"`
 	SpecBasis  string `json:"spec_basis"` // which spec the Spec axis used
-	Brief      string `json:"brief"`      // what the Warden was given; none of Engineering's context
+	Brief      string `json:"brief"`      // what the Warden was given; none of Masonry's context
 	Overall    string `json:"overall,omitempty"`
 	Standards  *Axis  `json:"standards,omitempty"`
 	Spec       *Axis  `json:"spec,omitempty"`
 	Reason     string `json:"reason,omitempty"` // why an errored review errored
-	// ReworkConstraints are the findings handed to Engineering as constraints,
+	// ReworkConstraints are the findings handed to Masonry as constraints,
 	// once this review's one automatic rework has been issued.
 	ReworkConstraints []string   `json:"rework_constraints,omitempty"`
 	ReworkedAt        *time.Time `json:"reworked_at,omitempty"`
@@ -259,7 +259,7 @@ func (s *Store) ReworkRounds(jobID string) (int, error) {
 }
 
 // IssueRework records a Job's one automatic rework round, which answers the
-// latest review's fail with constraints for Engineering. floor is the latest
+// latest review's fail with constraints for Masonry. floor is the latest
 // handback now: the re-review needs a handback after it.
 func (s *Store) IssueRework(jobID string, constraints []string, floor int64) (Review, error) {
 	cons, _ := json.Marshal(constraints)

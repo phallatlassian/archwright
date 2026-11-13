@@ -7,9 +7,9 @@ access: read-only
 rework_rounds: 0
 skills: [code-review]
 ---
-# Review
+# Hallmark
 
-Read finished work cold and say whether it is good, and whether it is what was asked for. Review is a separate, read-only task run by a fresh Warden that shares no context with the builder (ADR 0012).
+Read finished work cold and say whether it is good, and whether it is what was asked for. Hallmark is a separate, read-only task run by a fresh Warden that shares no context with the builder (ADR 0012).
 
 ## Standards
 

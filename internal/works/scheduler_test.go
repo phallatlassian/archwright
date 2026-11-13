@@ -141,7 +141,7 @@ func TestOverallAndSiteCapsAcrossJobs(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		w, err := g.r.StartFor(RoleWarden, t.TempDir(), RunContext{Job: j.ID, Guild: "engineering"})
+		w, err := g.r.StartFor(RoleWarden, t.TempDir(), RunContext{Job: j.ID, Guild: "masonry"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -184,7 +184,7 @@ func TestSitesOwnCapReplacesTheDefault(t *testing.T) {
 		t.Fatal(err)
 	}
 	j, _ := g.st.CreateJobOn("solo", "J", "")
-	w, _ := g.r.StartFor(RoleWarden, t.TempDir(), RunContext{Job: j.ID, Guild: "engineering"})
+	w, _ := g.r.StartFor(RoleWarden, t.TempDir(), RunContext{Job: j.ID, Guild: "masonry"})
 	var a, b DispatchInfo
 	g.ok(w, "dispatch_wright", `{"piece":"a","brief":`+goodBrief+`}`, &a)
 	g.ok(w, "dispatch_wright", `{"piece":"b","brief":`+goodBrief+`}`, &b)
@@ -268,7 +268,7 @@ func TestOverlappingScopesWarnInNeedsYouWithoutBlocking(t *testing.T) {
 	}
 	mk := func() (store.Job, RunEnv) {
 		j, _ := g.st.CreateJobOn("shop", "J", "")
-		w, _ := g.r.StartFor(RoleWarden, t.TempDir(), RunContext{Job: j.ID, Guild: "engineering"})
+		w, _ := g.r.StartFor(RoleWarden, t.TempDir(), RunContext{Job: j.ID, Guild: "masonry"})
 		return j, w
 	}
 	j1, w1 := mk()

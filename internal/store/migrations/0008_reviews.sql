@@ -1,4 +1,4 @@
--- Review is a separate read-only task after Engineering's handback (ADR 0012).
+-- Review is a separate read-only task after Masonry's handback (ADR 0012).
 -- A Job may link a writ, the ticket that authorised its work; the Archwright's
 -- PR go-ahead is recorded once a review passes.
 ALTER TABLE jobs ADD COLUMN writ TEXT;

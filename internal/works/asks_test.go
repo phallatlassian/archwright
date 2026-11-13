@@ -209,14 +209,14 @@ func TestCancelDiscardsTheJobAndEndsEveryOpenAsk(t *testing.T) {
 
 func TestNonBlockingAskDoesNotParkTheRun(t *testing.T) {
 	g := newRig(t, nil)
-	d, err := g.st.NewPiece(g.job.ID, "engineering", "p", json.RawMessage(goodBrief), "rendered")
+	d, err := g.st.NewPiece(g.job.ID, "masonry", "p", json.RawMessage(goodBrief), "rendered")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := g.st.StartDispatch(d.ID); err != nil {
 		t.Fatal(err)
 	}
-	wr, err := g.r.StartFor(RoleWright, t.TempDir(), RunContext{Job: g.job.ID, Guild: "engineering", DispatchID: d.ID})
+	wr, err := g.r.StartFor(RoleWright, t.TempDir(), RunContext{Job: g.job.ID, Guild: "masonry", DispatchID: d.ID})
 	if err != nil {
 		t.Fatal(err)
 	}
