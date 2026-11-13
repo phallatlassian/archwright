@@ -246,6 +246,7 @@ func TestBackoffGrowsAndHonoursRetryAfter(t *testing.T) {
 	e := s.queue[0]
 	s.running[e.d.ID], s.queue = e, nil // simulate the retry having started
 	s.mu.Unlock()
+	now = now.Add(2 * time.Hour) // the first pause is over
 	g.st.StartDispatch(e.d.ID)
 	s.rateLimited(e.d.ID, &RateLimitError{RetryAfter: 10 * time.Hour})
 	if p := g.queue().Paused; p.Failures != 2 || p.Until.Sub(now) != 10*time.Hour {
@@ -322,5 +323,30 @@ func TestScopesOverlap(t *testing.T) {
 		if got := scopesOverlap(c.a, c.b); got != c.want {
 			t.Errorf("%q ~ %q = %v, want %v", c.a, c.b, got, c.want)
 		}
+	}
+}
+
+func TestResumeRequeuesDispatchesLeftQueued(t *testing.T) {
+	g, h := newHeldRig(t, Limits{PerWarden: 1})
+	g.send("a")
+	g.send("b")
+	g.r.sched.mu.Lock()
+	g.r.sched.queue = nil // as if the Works had restarted: b is queued in the database only
+	g.r.sched.mu.Unlock()
+	if err := g.r.Resume(); err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(pieces(g.queue().Queued)) != "[b]" {
+		t.Fatalf("%+v", g.queue())
+	}
+	h.release("a")
+	h.release("b")
+	g.waitReported("b")
+}
+
+func TestLimitsFromEnv(t *testing.T) {
+	env := map[string]string{"ARCHWRIGHT_MAX_RUNS": "6", "ARCHWRIGHT_MAX_WRIGHTS_PER_WARDEN": "junk"}
+	if got := LimitsFromEnv(func(k string) string { return env[k] }); got != (Limits{Total: 6, PerSite: 3, PerWarden: 3}) {
+		t.Fatalf("%+v", got)
 	}
 }

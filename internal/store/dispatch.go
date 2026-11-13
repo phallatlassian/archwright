@@ -261,7 +261,8 @@ func (s *Store) AttachRun(dispatchID, runID string) error {
 	return err
 }
 
-// RecordResult stores a Wright's result once; a dispatch that is not running refuses it.
+// RecordResult stores a result once; a dispatch that has already reported refuses it.
+// A queued dispatch can only be failed by the Works, which has no run to ask.
 func (s *Store) RecordResult(dispatchID string, result json.RawMessage) error {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -276,7 +277,7 @@ func (s *Store) RecordResult(dispatchID string, result json.RawMessage) error {
 	if err != nil {
 		return err
 	}
-	res, err := tx.Exec("UPDATE dispatches SET status = ?, result = ? WHERE id = ? AND status = ?", DispatchReported, string(result), dispatchID, DispatchRunning)
+	res, err := tx.Exec("UPDATE dispatches SET status = ?, result = ? WHERE id = ? AND status IN (?, ?)", DispatchReported, string(result), dispatchID, DispatchRunning, DispatchQueued)
 	if err != nil {
 		return err
 	}

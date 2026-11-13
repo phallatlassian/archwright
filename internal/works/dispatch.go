@@ -463,7 +463,7 @@ func (r *Runs) start(d store.Dispatch) error {
 			}
 			r.failDispatch(d.ID, msg)
 		}
-		r.sched.finished(d.ID)
+		r.sched.finished(d.ID, runErr == nil)
 	}()
 	return nil
 }

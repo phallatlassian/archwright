@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 
@@ -113,6 +114,30 @@ func newScheduler(r *Runs) *scheduler {
 	return &scheduler{r: r, limits: DefaultLimits, backoffBase: defaultBackoffBase, backoffMax: defaultBackoffMax, now: time.Now, running: map[string]entry{}}
 }
 
+// LimitsFromEnv reads the caps from ARCHWRIGHT_MAX_RUNS, ARCHWRIGHT_MAX_RUNS_PER_SITE
+// and ARCHWRIGHT_MAX_WRIGHTS_PER_WARDEN; unset or invalid ones keep their defaults.
+func LimitsFromEnv(getenv func(string) string) Limits {
+	n := func(k string) int {
+		v, _ := strconv.Atoi(getenv(k))
+		return max(v, 0)
+	}
+	return Limits{Total: n("ARCHWRIGHT_MAX_RUNS"), PerSite: n("ARCHWRIGHT_MAX_RUNS_PER_SITE"), PerWarden: n("ARCHWRIGHT_MAX_WRIGHTS_PER_WARDEN")}.withDefaults()
+}
+
+// Resume re-submits the dispatches left queued by a previous Works, oldest first.
+func (r *Runs) Resume() error {
+	queued, err := r.st.QueuedDispatches()
+	if err != nil {
+		return err
+	}
+	for _, d := range queued {
+		if _, err := r.sched.submit(d); err != nil {
+			log.Printf("dispatch %s: resuming: %v", d.ID, err)
+		}
+	}
+	return nil
+}
+
 // SetLimits replaces the caps; a zero field keeps its default.
 func (r *Runs) SetLimits(l Limits) {
 	r.sched.mu.Lock()
@@ -146,6 +171,7 @@ func (s *scheduler) entryFor(d store.Dispatch) (entry, error) {
 func (s *scheduler) submit(d store.Dispatch) (int, error) {
 	e, err := s.entryFor(d)
 	if err != nil {
+		s.r.failDispatch(d.ID, "the run could not be scheduled: "+err.Error())
 		return 0, err
 	}
 	s.mu.Lock()
@@ -247,10 +273,12 @@ func (s *scheduler) startLocked(e entry) error {
 }
 
 // finished releases a dispatch's slot once its run is over and starts what now fits.
-func (s *scheduler) finished(id string) {
+func (s *scheduler) finished(id string, runnerAnswered bool) {
 	s.mu.Lock()
 	delete(s.running, id)
-	s.failures = 0 // the Runner is answering again
+	if runnerAnswered {
+		s.failures = 0
+	}
 	errs := s.pumpLocked()
 	s.mu.Unlock()
 	s.report(errs)
@@ -267,10 +295,13 @@ func (s *scheduler) rateLimited(id string, rl *RateLimitError) {
 		return
 	}
 	if err := s.r.st.RequeueDispatch(id); err != nil {
-		log.Printf("dispatch %s: requeue after rate limit: %v", id, err)
+		s.r.failDispatch(id, "the run was rate limited and could not be requeued: "+err.Error())
+		s.report(s.pumpLocked())
 		return
 	}
-	s.failures++
+	if !s.now().Before(s.pausedUntil) { // runs already in flight when the pause began are the same event
+		s.failures++
+	}
 	wait := s.backoffBase
 	for i := 1; i < s.failures && wait < s.backoffMax; i++ {
 		wait *= 2
