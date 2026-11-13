@@ -170,3 +170,79 @@ func TestMigratesForwardAfterBackup(t *testing.T) {
 		t.Errorf("backup lacks job: %v", err)
 	}
 }
+
+func TestGateChangesApplyOnlyOnApproval(t *testing.T) {
+	st, _ := open(t)
+	if _, err := st.AddSite(Site{Name: "s", URL: "https://git.example.com/o/s.git", ClonePath: "/s", BaseBranch: "main", ConcurrencyCap: 1, Gates: Gates{Test: "a"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.ProposeGates("s", Gates{Test: "a"}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("no-op proposal: %v", err)
+	}
+	if _, err := st.ProposeGates("nope", Gates{}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unknown site: %v", err)
+	}
+	c, err := st.ProposeGates("s", Gates{Test: "b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := st.GetSite("s"); got.Gates.Test != "a" {
+		t.Fatal("proposal applied")
+	}
+	got, err := st.ApproveGateChange(c.ID)
+	if err != nil || got.Gates.Test != "b" {
+		t.Fatalf("%+v %v", got, err)
+	}
+	if _, err := st.ApproveGateChange(c.ID); !errors.Is(err, ErrConflict) {
+		t.Fatalf("approved twice: %v", err)
+	}
+	r, _ := st.ProposeGates("s", Gates{Test: "c"})
+	if err := st.RejectGateChange(r.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.ApproveGateChange(r.ID); !errors.Is(err, ErrConflict) {
+		t.Fatalf("approved a rejected change: %v", err)
+	}
+	if got, _ := st.GetSite("s"); got.Gates.Test != "b" {
+		t.Fatalf("%+v", got.Gates)
+	}
+}
+
+func TestApprovingGateChangeRejectsStalePendingChanges(t *testing.T) {
+	st, _ := open(t)
+	if _, err := st.AddSite(Site{Name: "s", URL: "https://git.example.com/o/s.git", ClonePath: "/s", BaseBranch: "main", ConcurrencyCap: 1, Gates: Gates{Test: "a"}}); err != nil {
+		t.Fatal(err)
+	}
+	c1, _ := st.ProposeGates("s", Gates{Lint: "x", Test: "a"})
+	c2, _ := st.ProposeGates("s", Gates{Lint: "", Test: "y"})
+	if _, err := st.ApproveGateChange(c1.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.ApproveGateChange(c2.ID); !errors.Is(err, ErrConflict) {
+		t.Fatalf("approved a stale change: %v", err)
+	}
+	if got, _ := st.GetSite("s"); got.Gates.Lint != "x" || got.Gates.Test != "a" {
+		t.Fatalf("%+v", got.Gates)
+	}
+}
+
+func TestInterruptedGateRunsAreNotReportedAsPassing(t *testing.T) {
+	st, _ := open(t)
+	job, _ := st.CreateJob("J", "")
+	h, err := st.SaveHandback(job.ID, "done", []byte(`{}`), nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g, _ := st.GateRunFor(h.ID); g.Status != GateRunRunning {
+		t.Fatalf("%+v", g)
+	}
+	if err := st.InterruptGateRuns(); err != nil {
+		t.Fatal(err)
+	}
+	if g, _ := st.GateRunFor(h.ID); g.Status != GateRunNotRun || g.Reason == "" {
+		t.Fatalf("%+v", g)
+	}
+	if err := st.FinishGateRun(GateRun{HandbackID: h.ID, JobID: job.ID, Status: GateRunPassed}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("finished twice: %v", err)
+	}
+}

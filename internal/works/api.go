@@ -44,7 +44,7 @@ func newHandler(st *store.Store, runs *Runs, sm *sites.Manager, token string, pi
 		switch {
 		case errors.Is(err, store.ErrNotFound):
 			code = http.StatusNotFound
-		case errors.Is(err, store.ErrExists):
+		case errors.Is(err, store.ErrExists), errors.Is(err, store.ErrConflict):
 			code = http.StatusConflict
 		case errors.Is(err, sites.ErrUnregistered):
 			code = http.StatusForbidden
@@ -144,6 +144,54 @@ func newHandler(st *store.Store, runs *Runs, sm *sites.Manager, token string, pi
 			return
 		}
 		reply(w, 200, list)
+	})
+	// A Site's gates change only through a proposal the developer approves (ADR 0010).
+	mux.HandleFunc("POST /sites/{name}/gates", func(w http.ResponseWriter, r *http.Request) {
+		var in struct{ Typecheck, Lint, Test *string } // unset keeps the current command
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			fail(w, err)
+			return
+		}
+		site, err := st.GetSite(r.PathValue("name"))
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		g := site.Gates
+		for dst, src := range map[*string]*string{&g.Typecheck: in.Typecheck, &g.Lint: in.Lint, &g.Test: in.Test} {
+			if src != nil {
+				*dst = *src
+			}
+		}
+		c, err := st.ProposeGates(site.Name, g)
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		reply(w, 201, c)
+	})
+	mux.HandleFunc("GET /gate-changes", func(w http.ResponseWriter, r *http.Request) {
+		list, err := st.GateChanges(r.URL.Query().Get("status"))
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		reply(w, 200, list)
+	})
+	mux.HandleFunc("POST /gate-changes/{id}/approve", func(w http.ResponseWriter, r *http.Request) {
+		site, err := st.ApproveGateChange(r.PathValue("id"))
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		reply(w, 200, site)
+	})
+	mux.HandleFunc("POST /gate-changes/{id}/reject", func(w http.ResponseWriter, r *http.Request) {
+		if err := st.RejectGateChange(r.PathValue("id")); err != nil {
+			fail(w, err)
+			return
+		}
+		reply(w, 200, map[string]bool{"ok": true})
 	})
 	mux.HandleFunc("GET /sites/detect", func(w http.ResponseWriter, r *http.Request) {
 		p, err := sm.Detect(r.URL.Query().Get("url"))

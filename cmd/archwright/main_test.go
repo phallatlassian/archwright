@@ -222,3 +222,45 @@ func TestToolCommandTimeoutExitsWithDistinctCode(t *testing.T) {
 		t.Fatalf("outside a run: exit %d", code)
 	}
 }
+
+func TestGateChangesNeedApprovalAtATerminal(t *testing.T) {
+	s := newSandbox(t)
+	// A git host stands in for the remote: insteadOf maps this URL onto a bare repository.
+	hostDir, _ := filepath.EvalSymlinks(t.TempDir())
+	s.env = append(s.env, "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=url."+hostDir+"/.insteadOf", "GIT_CONFIG_VALUE_0=https://git.example.com/")
+	bare := filepath.Join(hostDir, "o", "r.git")
+	work, _ := filepath.EvalSymlinks(t.TempDir())
+	for _, args := range [][]string{
+		{"init", "--bare", "-b", "main", bare},
+		{"-C", work, "init", "-b", "main"},
+		{"-C", work, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "--allow-empty", "-m", "init"},
+		{"-C", work, "push", bare, "main"},
+	} {
+		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			t.Fatalf("%v\n%s", err, out)
+		}
+	}
+	s.run("site", "register", "--url", "https://git.example.com/o/r.git", "--base-branch", "main", "--name", "demo", "--test", "go test ./...")
+
+	var ch struct{ ID, Status string }
+	if err := json.Unmarshal([]byte(s.run("site", "gates", "demo", "--test", "true")), &ch); err != nil || ch.Status != "pending" {
+		t.Fatalf("%+v %v", ch, err)
+	}
+	if out, err := s.cmd("", "site", "gates", "demo"); err == nil {
+		t.Fatalf("proposed nothing: %s", out)
+	}
+	// no terminal on stdin: even "y" is refused, and nothing changes
+	if out, err := s.cmd("y\n", "site", "gate-approve", ch.ID); err == nil || !strings.Contains(out, "terminal") {
+		t.Fatalf("approved without a terminal: %v\n%s", err, out)
+	}
+	if out := s.run("site", "list"); !strings.Contains(out, "go test ./...") || strings.Contains(out, `"test": "true"`) {
+		t.Fatalf("gates changed:\n%s", out)
+	}
+	if out := s.run("site", "gate-changes", "--status", "pending"); !strings.Contains(out, ch.ID) {
+		t.Fatalf("%s", out)
+	}
+	s.run("site", "gate-reject", ch.ID)
+	if out := s.run("site", "gate-changes", "--status", "pending"); strings.Contains(out, ch.ID) {
+		t.Fatalf("%s", out)
+	}
+}

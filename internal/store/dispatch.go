@@ -316,7 +316,8 @@ func (s *Store) AcceptPiece(jobID, piece string, doneResult func(json.RawMessage
 // NewFlag is a flag as a handback supplies it.
 type NewFlag struct{ Kind, Description, Evidence string }
 
-// SaveHandback stores a Warden's handback and its flags. A partial handback
+// SaveHandback stores a Warden's handback and its flags, and opens the
+// handback's gate run, which stays running until FinishGateRun. A partial handback
 // parks the Job with parkReason, keeping the accepted pieces as they are.
 func (s *Store) SaveHandback(jobID, status string, body json.RawMessage, flags []NewFlag, parkReason string) (Handback, error) {
 	tx, err := s.db.Begin()
@@ -334,6 +335,9 @@ func (s *Store) SaveHandback(jobID, status string, body json.RawMessage, flags [
 		if _, err := tx.Exec("INSERT INTO flags (job_id, handback_id, kind, description, evidence, created_at) VALUES (?,?,?,?,?,?)", jobID, id, f.Kind, f.Description, f.Evidence, at); err != nil {
 			return Handback{}, err
 		}
+	}
+	if _, err := tx.Exec("INSERT INTO gate_runs (handback_id, job_id, status, started_at) VALUES (?,?,?,?)", id, jobID, GateRunRunning, at); err != nil {
+		return Handback{}, err
 	}
 	if parkReason != "" {
 		if _, err := tx.Exec("UPDATE jobs SET parked_reason = ? WHERE id = ?", parkReason, jobID); err != nil {

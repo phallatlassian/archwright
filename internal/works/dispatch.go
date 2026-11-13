@@ -295,8 +295,9 @@ func handback(c *callCtx, in json.RawMessage) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	c.runs.startGates(c.run.ctx.Job, h.ID)
 	// The Warden is told how many flags were taken, not shown them back.
-	return map[string]any{"handback_id": h.ID, "status": h.Status, "flags_recorded": len(flags), "parked": park != ""}, nil
+	return map[string]any{"handback_id": h.ID, "status": h.Status, "flags_recorded": len(flags), "parked": park != "", "gates": store.GateRunRunning}, nil
 }
 
 func reportResult(c *callCtx, in json.RawMessage) (any, error) {
@@ -351,10 +352,17 @@ func showHandback(c *callCtx, in json.RawMessage) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	var gates *store.GateRun // absent for a handback saved before gates were recorded
+	if g, err := c.st.GateRunFor(h.ID); err == nil {
+		gates = &g
+	} else if !errors.Is(err, store.ErrNotFound) {
+		return nil, err
+	}
 	return struct {
 		store.Handback
-		Flags []store.Flag `json:"flags"`
-	}{h, flags}, nil
+		Flags []store.Flag   `json:"flags"`
+		Gates *store.GateRun `json:"gates,omitempty"` // the Works' own re-run, trusted over any Warden claim
+	}{h, flags, gates}, nil
 }
 
 func listFlags(c *callCtx, in json.RawMessage) (any, error) {
