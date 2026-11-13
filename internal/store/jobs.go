@@ -54,9 +54,9 @@ func (s *Store) CreateJob(title, description string) (Job, error) {
 	if title == "" {
 		return Job{}, errors.New("job title is required")
 	}
-	at := s.stamp()
-	j := Job{ID: newID("job-"), Title: title, Description: description}
-	j.CreatedAt, _ = time.Parse(time.RFC3339Nano, at)
+	now := s.now().UTC()
+	at := now.Format(time.RFC3339Nano)
+	j := Job{ID: newID("job-"), Title: title, Description: description, CreatedAt: now}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return Job{}, err
