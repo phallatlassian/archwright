@@ -133,12 +133,104 @@ func TestDetect(t *testing.T) {
 	repo := newRepo(t)
 	os.WriteFile(filepath.Join(repo, "go.mod"), []byte("module x\n"), 0o644)
 	e := setup(t)
+	e.m.lookPath = func(string) (string, error) { return "", errors.New("none") }
 	p, err := e.m.Detect(repo)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if p.Name != "repo" || p.BaseBranch != "main" || p.Gates.Test != "go test ./..." || p.ConcurrencyCap != 3 {
 		t.Fatalf("%+v", p)
+	}
+}
+
+func TestDetectGoLintOnlyWhenGolangciLintIsOnPath(t *testing.T) {
+	repo := newRepo(t)
+	os.WriteFile(filepath.Join(repo, "go.mod"), []byte("module x\n"), 0o644)
+	e := setup(t)
+	e.m.lookPath = func(string) (string, error) { return "/bin/golangci-lint", nil }
+	p, _ := e.m.Detect(repo)
+	if p.Gates != (store.Gates{Typecheck: "go vet ./...", Lint: "golangci-lint run", Test: "go test ./..."}) {
+		t.Fatalf("with linter: %+v", p.Gates)
+	}
+	e.m.lookPath = func(string) (string, error) { return "", errors.New("none") }
+	if p, _ = e.m.Detect(repo); p.Gates.Lint != "" {
+		t.Fatalf("without linter: %+v", p.Gates)
+	}
+}
+
+func TestDetectReadsMakefileTargets(t *testing.T) {
+	const mk = ".PHONY: test lint vet\nCC := gcc\nTEST_FLAGS=-v\ntest:\n\tgo test\nlint: deps\n\ttrue\nvet:\n\ttrue\n\ttestx:\n"
+	e := setup(t)
+	e.m.lookPath = func(string) (string, error) { return "", errors.New("none") }
+
+	// No marker file: the Makefile is the only source.
+	repo := newRepo(t)
+	os.WriteFile(filepath.Join(repo, "Makefile"), []byte(mk), 0o644)
+	p, _ := e.m.Detect(repo)
+	if p.Gates != (store.Gates{Typecheck: "make vet", Lint: "make lint", Test: "make test"}) {
+		t.Fatalf("makefile only: %+v", p.Gates)
+	}
+
+	// typecheck is preferred over vet.
+	os.WriteFile(filepath.Join(repo, "Makefile"), []byte("typecheck:\nvet:\n"), 0o644)
+	if p, _ = e.m.Detect(repo); p.Gates.Typecheck != "make typecheck" {
+		t.Fatalf("%+v", p.Gates)
+	}
+
+	// Variables, .PHONY, indented lines and missing targets propose nothing.
+	os.WriteFile(filepath.Join(repo, "Makefile"), []byte(".PHONY: test\ntest := x\n\ttest:\n"), 0o644)
+	if p, _ = e.m.Detect(repo); p.Gates != (store.Gates{}) {
+		t.Fatalf("%+v", p.Gates)
+	}
+
+	// With a marker file, its defaults win and the Makefile fills the gaps.
+	repo = newRepo(t)
+	os.WriteFile(filepath.Join(repo, "go.mod"), []byte("module x\n"), 0o644)
+	os.WriteFile(filepath.Join(repo, "Makefile"), []byte(mk), 0o644)
+	p, _ = e.m.Detect(repo)
+	if p.Gates != (store.Gates{Typecheck: "go vet ./...", Lint: "make lint", Test: "go test ./..."}) {
+		t.Fatalf("marker + makefile: %+v", p.Gates)
+	}
+}
+
+func TestRegisterFillsBlanksFromDetection(t *testing.T) {
+	e := setup(t)
+	repo := newRepo(t)
+	run(t, repo, "remote", "add", "origin", "https://example.com/r.git")
+	site, err := e.m.Register(RegisterInput{Path: repo, Gates: &store.Gates{Test: "t"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if site.Name != "repo" || site.BaseBranch != "main" || site.Remote != "origin" || site.Gates.Test != "t" {
+		t.Fatalf("%+v", site)
+	}
+}
+
+func TestRegisterExplicitValuesWinOverDetected(t *testing.T) {
+	e := setup(t)
+	repo := newRepo(t)
+	run(t, repo, "remote", "add", "origin", "https://example.com/r.git")
+	run(t, repo, "remote", "add", "up", "https://example.com/u.git")
+	run(t, repo, "branch", "dev")
+	site, err := e.m.Register(RegisterInput{Name: "mine", Path: repo, BaseBranch: "dev", Remote: "up", Gates: &store.Gates{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if site.Name != "mine" || site.BaseBranch != "dev" || site.Remote != "up" || site.Gates != (store.Gates{}) {
+		t.Fatalf("%+v", site)
+	}
+}
+
+func TestRegisterStillRequiresGatesAndShowsTheProposal(t *testing.T) {
+	e := setup(t)
+	repo := newRepo(t)
+	os.WriteFile(filepath.Join(repo, "go.mod"), []byte("module x\n"), 0o644)
+	_, err := e.m.Register(RegisterInput{Path: repo})
+	if err == nil || !strings.Contains(err.Error(), "go vet ./...") || !strings.Contains(err.Error(), "go test ./...") {
+		t.Fatalf("want error carrying the detected gates, got %v", err)
+	}
+	if _, err := e.st.SiteForPath(repo); err == nil {
+		t.Fatal("registered without confirmed gates")
 	}
 }
 
