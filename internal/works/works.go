@@ -115,7 +115,9 @@ func Serve(ctx context.Context, d paths.Dirs, ready chan<- struct{}) error {
 	}
 	ctx, stop := context.WithCancel(ctx)
 	defer stop()
-	srv := &http.Server{Handler: newHandler(st, runs, sm, token, os.Getpid(), stop)}
+	done := make(chan struct{})
+	srv := &http.Server{Handler: newHandler(st, runs, sm, token, os.Getpid(), stop, done)}
+	srv.RegisterOnShutdown(func() { close(done) }) // ends the event streams, which Shutdown would otherwise wait on
 	info := Info{PID: os.Getpid(), Port: ln.Addr().(*net.TCPAddr).Port, Token: token}
 	if err := writeInfo(d, info); err != nil {
 		return err
