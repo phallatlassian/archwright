@@ -76,6 +76,9 @@ func Serve(ctx context.Context, d paths.Dirs, ready chan<- struct{}) error {
 		return err
 	}
 	defer st.Close()
+	if err := st.InterruptReviews(); err != nil {
+		return err
+	}
 	if err := st.InterruptGateRuns(); err != nil {
 		return err
 	}

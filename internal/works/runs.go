@@ -39,6 +39,7 @@ type Runs struct {
 	// from, the Runner Wrights run on, and where their spools live.
 	guilds    GuildSource
 	runner    Runner
+	reviewer  ReviewRunner // runs Reviews (ADR 0012)
 	spoolRoot string
 	bg        context.Context
 	cancelBg  context.CancelFunc
@@ -81,6 +82,7 @@ type RunContext struct {
 	Job        string // the Job a Warden or Wright works for
 	Guild      string // the Guild a Warden leads, or the Wright's Warden's
 	DispatchID string // the dispatch a Wright carries out
+	Review     string // the review a fresh Warden carries out
 }
 
 // Configure sets where Guild definitions come from and which Runner carries

@@ -128,6 +128,35 @@ func newHandler(st *store.Store, runs *Runs, sm *sites.Manager, token string, pi
 		reply(w, 200, p)
 	})
 
+	// Reviews (ADR 0012): the Archwright links the writ and requests, reworks and
+	// green-lights through its tools; the dashboard reads the same state.
+	mux.HandleFunc("PUT /jobs/{id}/writ", func(w http.ResponseWriter, r *http.Request) {
+		var in struct{ Writ string }
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			fail(w, err)
+			return
+		}
+		j, err := st.SetWrit(r.PathValue("id"), in.Writ)
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		reply(w, 200, j)
+	})
+	mux.HandleFunc("GET /jobs/{id}/reviews", func(w http.ResponseWriter, r *http.Request) {
+		j, err := st.GetJob(r.PathValue("id"))
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		reviews, err := st.Reviews(j.ID)
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		reply(w, 200, ReviewState{Reviews: reviews, Next: runs.reviewNext(j, reviews)})
+	})
+
 	// The dispatch scheduler's running and queued Wrights, and the Needs-you inbox.
 	mux.HandleFunc("GET /queue", func(w http.ResponseWriter, r *http.Request) {
 		reply(w, 200, runs.Queue())
