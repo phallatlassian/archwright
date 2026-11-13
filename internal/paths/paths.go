@@ -69,3 +69,6 @@ func (d Dirs) Log() string { return filepath.Join(d.State, "works.log") }
 
 // Worktrees is the directory holding Works-managed git worktrees, outside every Site (ADR 0008).
 func (d Dirs) Worktrees() string { return filepath.Join(d.State, "worktrees") }
+
+// Clones is the directory holding the Works' own bare clone of each Site, outside every developer checkout (ADR 0019).
+func (d Dirs) Clones() string { return filepath.Join(d.State, "clones") }

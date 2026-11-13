@@ -26,16 +26,18 @@ import (
 
 const usage = `usage: archwright <command>
 
-  site detect PATH                         propose Site values and gate commands for a repository
-  site register --path P --base-branch B --typecheck C --lint C --test C [--name N] [--remote R] [--cap N]
-                                           register a repository as a Site (the trust act); gates must be given
+  site detect URL                          propose Site values and gate commands from a remote's base branch
+  site register --url U --typecheck C --lint C --test C [--name N] [--base-branch B] [--cap N]
+                                           register a remote repository as a Site (the trust act); the Works
+                                           keeps its own clone; gates must be given. Local paths are refused
   site list                                list Sites
-  site resolve PATH                        show the Site a path belongs to; refused if unregistered
+  site remove NAME                         unregister a Site and delete its clone (Job history is kept)
+  site resolve DIR                         show the Site whose remote is DIR's git origin; refused if unregistered
   job create --title T [--description D] [--site NAME | --path DIR]
-                                           create a Job (on a registered Site)
+                                           create a Job (on a registered Site; --path matches DIR's git origin)
   job close ID accepted|discarded          end a Job and remove its remaining worktrees
   worktree create ID integration|wright|readonly [--base-ref REF]
-                                           create a Job's worktree outside the Site
+                                           create a Job's worktree from the Works' clone, after a fetch
   worktree list ID                         list a Job's worktrees
   worktree cleanup ID                      remove worktrees of Wrights merged into the integration branch
   job list                                 list Jobs
@@ -127,23 +129,28 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 		if err != nil {
 			return err
 		}
-		return call("GET", "/sites/detect?path="+url.QueryEscape(absPath(p)), nil)
+		return call("GET", "/sites/detect?url="+url.QueryEscape(p), nil)
 	case "site resolve":
 		p, err := arg(args, 2)
 		if err != nil {
 			return err
 		}
 		return call("GET", "/sites/resolve?path="+url.QueryEscape(absPath(p)), nil)
+	case "site remove":
+		name, err := arg(args, 2)
+		if err != nil {
+			return err
+		}
+		return call("DELETE", "/sites/"+url.PathEscape(name), nil)
 	case "site list":
 		return call("GET", "/sites", nil)
 	case "site register":
 		fs := flag.NewFlagSet("site register", flag.ContinueOnError)
 		var gates store.Gates
 		in := sites.RegisterInput{}
-		fs.StringVar(&in.Name, "name", "", "Site name (default: detected)")
-		fs.StringVar(&in.Path, "path", "", "repository root")
-		fs.StringVar(&in.BaseBranch, "base-branch", "", "default branch the factory never commits to (default: detected)")
-		fs.StringVar(&in.Remote, "remote", "", "git remote name (default: detected)")
+		fs.StringVar(&in.Name, "name", "", "Site name (default: the repository name)")
+		fs.StringVar(&in.URL, "url", "", "remote URL of the repository (https, ssh or user@host:path; not a local path)")
+		fs.StringVar(&in.BaseBranch, "base-branch", "", "default branch the factory never commits to (default: the remote's default branch)")
 		fs.IntVar(&in.ConcurrencyCap, "cap", 0, "concurrent runs (default 3)")
 		fs.StringVar(&gates.Typecheck, "typecheck", "", "type-check gate command")
 		fs.StringVar(&gates.Lint, "lint", "", "lint gate command")
@@ -151,10 +158,9 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 		if err := fs.Parse(args[2:]); err != nil {
 			return err
 		}
-		if in.Path == "" {
-			return errors.New("--path is required")
+		if in.URL == "" {
+			return errors.New("--url is required")
 		}
-		in.Path = absPath(in.Path)
 		// Gates are the developer's confirmation: only sent when a gate flag
 		// was given (an empty value means none); otherwise the Works refuses
 		// and shows what it detected.

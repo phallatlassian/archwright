@@ -146,12 +146,20 @@ func newHandler(st *store.Store, runs *Runs, sm *sites.Manager, token string, pi
 		reply(w, 200, list)
 	})
 	mux.HandleFunc("GET /sites/detect", func(w http.ResponseWriter, r *http.Request) {
-		p, err := sm.Detect(r.URL.Query().Get("path"))
+		p, err := sm.Detect(r.URL.Query().Get("url"))
 		if err != nil {
 			fail(w, err)
 			return
 		}
 		reply(w, 200, p)
+	})
+	mux.HandleFunc("DELETE /sites/{name}", func(w http.ResponseWriter, r *http.Request) {
+		site, err := sm.Remove(r.PathValue("name"))
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		reply(w, 200, site)
 	})
 	mux.HandleFunc("GET /sites/resolve", func(w http.ResponseWriter, r *http.Request) {
 		site, err := sm.Resolve(r.URL.Query().Get("path"))

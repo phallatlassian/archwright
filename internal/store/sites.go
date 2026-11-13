@@ -6,17 +6,22 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
-	"strings"
 	"time"
+
+	"github.com/phallatlassian/archwright/internal/remote"
 )
 
-// ErrExists means a Site with that name or path is already registered.
+// ErrExists means a Site with that name or URL is already registered.
 var ErrExists = errors.New("already registered")
 
 // DefaultConcurrencyCap is the per-Site run cap when none is given (ADR 0008).
 const DefaultConcurrencyCap = 3
 
 var siteName = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
+
+// ValidSiteName reports whether name can be a Site name (it also names the
+// Site's clone directory, so it must not be able to escape it).
+func ValidSiteName(name string) bool { return siteName.MatchString(name) }
 
 // Gates are a Site's check commands. The Works re-runs them on handback; they
 // live in the registry so a Wright's branch cannot weaken them (ADR 0010).
@@ -26,24 +31,31 @@ type Gates struct {
 	Test      string `json:"test"`
 }
 
-// Site is a git repository registered with the Works.
+// Site is a git repository registered with the Works by remote URL; the
+// Works works only in its own clone of it (ADR 0019).
 type Site struct {
 	Name           string    `json:"name"`
-	Path           string    `json:"path"`
+	URL            string    `json:"url"`
+	ClonePath      string    `json:"clone_path"`
 	BaseBranch     string    `json:"base_branch"`
-	Remote         string    `json:"remote"`
 	ConcurrencyCap int       `json:"concurrency_cap"`
 	Gates          Gates     `json:"gates"`
 	CreatedAt      time.Time `json:"created_at"`
 }
 
-// AddSite records a Site. The caller has already checked the repository itself.
+// AddSite records a Site. The caller has already cloned the repository. A Site
+// is unique by normalised URL; a name left behind by a removed or path-era
+// Site is reused, so its Jobs' history stays attached to it.
 func (s *Store) AddSite(site Site) (Site, error) {
 	if !siteName.MatchString(site.Name) {
 		return Site{}, fmt.Errorf("site name %q must be lowercase letters, digits, '.', '_' or '-'", site.Name)
 	}
-	if site.Path == "" || site.BaseBranch == "" {
-		return Site{}, errors.New("site path and base branch are required")
+	if site.URL == "" || site.ClonePath == "" || site.BaseBranch == "" {
+		return Site{}, errors.New("site url, clone path and base branch are required")
+	}
+	key, err := remote.Normalize(site.URL)
+	if err != nil {
+		return Site{}, err
 	}
 	if site.ConcurrencyCap < 1 {
 		return Site{}, errors.New("concurrency cap must be at least 1")
@@ -61,31 +73,75 @@ func (s *Store) AddSite(site Site) (Site, error) {
 	}
 	defer tx.Rollback()
 	var clash string
-	err = tx.QueryRow("SELECT name FROM sites WHERE name = ? OR path = ?", site.Name, site.Path).Scan(&clash)
+	err = tx.QueryRow("SELECT name FROM sites WHERE unregistered_at IS NULL AND (name = ? OR url_key = ?)", site.Name, key).Scan(&clash)
 	if err == nil {
-		return Site{}, fmt.Errorf("site %q (%s): %w", clash, site.Path, ErrExists)
+		return Site{}, fmt.Errorf("site %q (%s): %w", clash, site.URL, ErrExists)
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return Site{}, err
 	}
-	if _, err := tx.Exec(`INSERT INTO sites (name, path, base_branch, remote, concurrency_cap, gates, created_at)
-		VALUES (?,?,?,?,?,?,?)`, site.Name, site.Path, site.BaseBranch, site.Remote, site.ConcurrencyCap, string(raw), at); err != nil {
+	var old string
+	err = tx.QueryRow("SELECT name FROM sites WHERE name = ?", site.Name).Scan(&old)
+	switch {
+	case err == nil: // an unregistered row: register it again under the same name
+		_, err = tx.Exec(`UPDATE sites SET url = ?, url_key = ?, clone_path = ?, base_branch = ?, concurrency_cap = ?, gates = ?,
+			created_at = ?, unregistered_at = NULL WHERE name = ?`,
+			site.URL, key, site.ClonePath, site.BaseBranch, site.ConcurrencyCap, string(raw), at, site.Name)
+	case errors.Is(err, sql.ErrNoRows):
+		_, err = tx.Exec(`INSERT INTO sites (name, url, url_key, clone_path, base_branch, concurrency_cap, gates, created_at)
+			VALUES (?,?,?,?,?,?,?,?)`, site.Name, site.URL, key, site.ClonePath, site.BaseBranch, site.ConcurrencyCap, string(raw), at)
+	}
+	if err != nil {
 		return Site{}, err
 	}
-	if err := appendEvent(tx, at, "", "site.registered", map[string]string{"name": site.Name, "path": site.Path}); err != nil {
+	if err := appendEvent(tx, at, "", "site.registered", map[string]string{"name": site.Name, "url": site.URL}); err != nil {
 		return Site{}, err
 	}
 	return site, tx.Commit()
 }
 
-const siteCols = "name, path, base_branch, remote, concurrency_cap, gates, created_at"
+// RemoveSite unregisters a Site and returns what it was. Its Jobs, worktree
+// records and events stay (ADR 0017): the row is kept, marked unregistered,
+// and no longer resolves. The caller deletes the clone. A Site whose Jobs
+// still have worktrees is refused.
+func (s *Store) RemoveSite(name string) (Site, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return Site{}, err
+	}
+	defer tx.Rollback()
+	site, err := scanSite(tx.QueryRow("SELECT "+siteCols+" FROM sites WHERE name = ? AND unregistered_at IS NULL", name))
+	if errors.Is(err, sql.ErrNoRows) {
+		return Site{}, fmt.Errorf("site %q: %w", name, ErrNotFound)
+	}
+	if err != nil {
+		return Site{}, err
+	}
+	var live int
+	if err := tx.QueryRow("SELECT COUNT(*) FROM worktrees WHERE site = ? AND removed_at IS NULL", name).Scan(&live); err != nil {
+		return Site{}, err
+	}
+	if live > 0 {
+		return Site{}, fmt.Errorf("site %q still has %d worktrees in use; close its Jobs first", name, live)
+	}
+	at := s.stamp()
+	if _, err := tx.Exec("UPDATE sites SET url_key = NULL, clone_path = ?, unregistered_at = ? WHERE name = ?", "unregistered:"+name, at, name); err != nil {
+		return Site{}, err
+	}
+	if err := appendEvent(tx, at, "", "site.removed", map[string]string{"name": name, "url": site.URL}); err != nil {
+		return Site{}, err
+	}
+	return site, tx.Commit()
+}
+
+const siteCols = "name, url, clone_path, base_branch, concurrency_cap, gates, created_at"
 
 type scanner interface{ Scan(...any) error }
 
 func scanSite(r scanner) (Site, error) {
 	var st Site
 	var gates, at string
-	if err := r.Scan(&st.Name, &st.Path, &st.BaseBranch, &st.Remote, &st.ConcurrencyCap, &gates, &at); err != nil {
+	if err := r.Scan(&st.Name, &st.URL, &st.ClonePath, &st.BaseBranch, &st.ConcurrencyCap, &gates, &at); err != nil {
 		return Site{}, err
 	}
 	if err := json.Unmarshal([]byte(gates), &st.Gates); err != nil {
@@ -95,18 +151,23 @@ func scanSite(r scanner) (Site, error) {
 	return st, nil
 }
 
-// GetSite reads one Site by name.
+// GetSite reads one registered Site by name. A Site that was removed, or was
+// registered by path before ADR 0019, is refused as not registered.
 func (s *Store) GetSite(name string) (Site, error) {
-	st, err := scanSite(s.db.QueryRow("SELECT "+siteCols+" FROM sites WHERE name = ?", name))
+	st, err := scanSite(s.db.QueryRow("SELECT "+siteCols+" FROM sites WHERE name = ? AND unregistered_at IS NULL", name))
 	if errors.Is(err, sql.ErrNoRows) {
+		var n int
+		if s.db.QueryRow("SELECT COUNT(*) FROM sites WHERE name = ?", name).Scan(&n) == nil && n > 0 {
+			return Site{}, fmt.Errorf("site %q is no longer registered (removed, or registered by path before Sites were registered by URL); re-register it with `archwright site register --url`: %w", name, ErrNotFound)
+		}
 		return Site{}, fmt.Errorf("site %q: %w", name, ErrNotFound)
 	}
 	return st, err
 }
 
-// ListSites returns all Sites by name.
+// ListSites returns all registered Sites by name.
 func (s *Store) ListSites() ([]Site, error) {
-	rows, err := s.db.Query("SELECT " + siteCols + " FROM sites ORDER BY name")
+	rows, err := s.db.Query("SELECT " + siteCols + " FROM sites WHERE unregistered_at IS NULL ORDER BY name")
 	if err != nil {
 		return nil, err
 	}
@@ -122,23 +183,18 @@ func (s *Store) ListSites() ([]Site, error) {
 	return sites, rows.Err()
 }
 
-// SiteForPath returns the Site whose registered path is dir or contains it.
-// dir must already be absolute with symlinks resolved.
-func (s *Store) SiteForPath(dir string) (Site, error) {
-	sites, err := s.ListSites()
+// SiteForURL returns the registered Site whose remote is the same repository
+// as rawURL, however it is spelled.
+func (s *Store) SiteForURL(rawURL string) (Site, error) {
+	key, err := remote.Normalize(rawURL)
 	if err != nil {
-		return Site{}, err
+		return Site{}, fmt.Errorf("%s: %w", rawURL, ErrNotFound)
 	}
-	var best *Site // the longest match wins, so a Site nested in another resolves to itself
-	for i, st := range sites {
-		if (dir == st.Path || strings.HasPrefix(dir, strings.TrimSuffix(st.Path, "/")+"/")) && (best == nil || len(st.Path) > len(best.Path)) {
-			best = &sites[i]
-		}
+	st, err := scanSite(s.db.QueryRow("SELECT "+siteCols+" FROM sites WHERE url_key = ?", key))
+	if errors.Is(err, sql.ErrNoRows) {
+		return Site{}, fmt.Errorf("no Site is registered for %s: %w", rawURL, ErrNotFound)
 	}
-	if best != nil {
-		return *best, nil
-	}
-	return Site{}, fmt.Errorf("%s is not inside a registered Site: %w", dir, ErrNotFound)
+	return st, err
 }
 
 // Worktree is a Works-managed git worktree belonging to a Job.
