@@ -78,7 +78,7 @@ func (m *Manager) Detect(path string) (Proposal, error) {
 	if err != nil {
 		return Proposal{}, err
 	}
-	p := Proposal{Name: sanitizeName(filepath.Base(root)), Path: root, ConcurrencyCap: store.DefaultConcurrencyCap}
+	p := Proposal{Name: SanitizeName(filepath.Base(root)), Path: root, ConcurrencyCap: store.DefaultConcurrencyCap}
 	if gitOK(root, "remote", "get-url", "origin") {
 		p.Remote = "origin"
 		if ref, err := git(root, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"); err == nil {
@@ -92,7 +92,8 @@ func (m *Manager) Detect(path string) (Proposal, error) {
 	return p, nil
 }
 
-func sanitizeName(s string) string {
+// SanitizeName turns a directory name into a valid Site name.
+func SanitizeName(s string) string {
 	s = strings.ToLower(s)
 	var b strings.Builder
 	for _, r := range s {
@@ -128,8 +129,12 @@ func (m *Manager) Register(in RegisterInput) (store.Site, error) {
 	if err != nil {
 		return store.Site{}, err
 	}
-	if inside(root, m.root) || inside(m.root, root) {
-		return store.Site{}, fmt.Errorf("%s overlaps the Works' worktree directory %s", root, m.root)
+	wtRoot, err := m.realRoot()
+	if err != nil {
+		return store.Site{}, err
+	}
+	if inside(root, wtRoot) || inside(wtRoot, root) {
+		return store.Site{}, fmt.Errorf("%s overlaps the Works' worktree directory %s", root, wtRoot)
 	}
 	if in.BaseBranch == "" {
 		return store.Site{}, errors.New("base branch is required")
@@ -147,6 +152,15 @@ func (m *Manager) Register(in RegisterInput) (store.Site, error) {
 		Name: in.Name, Path: root, BaseBranch: in.BaseBranch, Remote: in.Remote,
 		ConcurrencyCap: in.ConcurrencyCap, Gates: *in.Gates,
 	})
+}
+
+// realRoot is the worktree directory with symlinks resolved, created if needed,
+// so containment checks compare real paths.
+func (m *Manager) realRoot() (string, error) {
+	if err := os.MkdirAll(m.root, 0o700); err != nil {
+		return "", err
+	}
+	return filepath.EvalSymlinks(m.root)
 }
 
 func inside(path, dir string) bool {

@@ -274,9 +274,13 @@ func TestCleanupRemovesOnlyMergedWrights(t *testing.T) {
 func TestMergedWorktreeWithUncommittedChangesIsKept(t *testing.T) {
 	e := setup(t)
 	j := e.job(t)
-	e.m.CreateWorktree(j.ID, store.KindIntegration, "")
+	integ, _ := e.m.CreateWorktree(j.ID, store.KindIntegration, "")
 	w, _ := e.m.CreateWorktree(j.ID, store.KindWright, "")
-	os.WriteFile(filepath.Join(w.Path, "a.txt"), []byte("dirty"), 0o644) // tracked file modified
+	os.WriteFile(filepath.Join(w.Path, "w.txt"), []byte("w"), 0o644)
+	run(t, w.Path, "add", ".")
+	run(t, w.Path, "commit", "-m", "work")
+	run(t, integ.Path, "merge", "--no-ff", "-m", "merge", w.Branch)
+	os.WriteFile(filepath.Join(w.Path, "a.txt"), []byte("dirty"), 0o644) // tracked file modified after merge
 	removed, err := e.m.CleanupMerged(j.ID)
 	if err == nil || len(removed) != 0 {
 		t.Fatalf("removed %v err %v", removed, err)
@@ -294,7 +298,6 @@ func TestCloseAcceptKeepsBranchesDiscardDeletesThem(t *testing.T) {
 			integ, _ := e.m.CreateWorktree(j.ID, store.KindIntegration, "")
 			w, _ := e.m.CreateWorktree(j.ID, store.KindWright, "")
 			ro, _ := e.m.CreateWorktree(j.ID, store.KindReadOnly, "")
-			os.WriteFile(filepath.Join(w.Path, "dirty.txt"), []byte("x"), 0o644)
 
 			removed, err := e.m.Close(j.ID, outcome)
 			if err != nil || len(removed) != 3 {
@@ -319,6 +322,52 @@ func TestCloseAcceptKeepsBranchesDiscardDeletesThem(t *testing.T) {
 				t.Error("closed twice")
 			}
 		})
+	}
+}
+
+func TestAcceptRefusesToDropUncommittedWorkDiscardDoesNot(t *testing.T) {
+	e := setup(t)
+	j := e.job(t)
+	w, _ := e.m.CreateWorktree(j.ID, store.KindWright, "")
+	os.WriteFile(filepath.Join(w.Path, "dirty.txt"), []byte("x"), 0o644)
+	if _, err := e.m.Close(j.ID, "accepted"); err == nil {
+		t.Fatal("accepted with uncommitted work")
+	}
+	if _, err := os.Stat(w.Path); err != nil {
+		t.Error("dirty worktree removed on accept")
+	}
+	if job, _ := e.st.GetJob(j.ID); job.Outcome != "" {
+		t.Errorf("job closed: %q", job.Outcome)
+	}
+	if _, err := e.m.Close(j.ID, "discarded"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(w.Path); !os.IsNotExist(err) {
+		t.Error("worktree kept after discard")
+	}
+}
+
+func TestFreshWrightIsNotMergedAndNestedSiteResolvesToItself(t *testing.T) {
+	e := setup(t)
+	j := e.job(t)
+	e.m.CreateWorktree(j.ID, store.KindIntegration, "")
+	fresh, _ := e.m.CreateWorktree(j.ID, store.KindWright, "")
+	if removed, err := e.m.CleanupMerged(j.ID); err != nil || len(removed) != 0 {
+		t.Fatalf("%v %v", removed, err)
+	}
+	if _, err := os.Stat(fresh.Path); err != nil {
+		t.Error("commit-less Wright removed as merged")
+	}
+
+	nested := filepath.Join(e.repo, "inner")
+	os.Mkdir(nested, 0o755)
+	run(t, nested, "init", "-b", "main")
+	run(t, nested, "commit", "--allow-empty", "-m", "i")
+	if _, err := e.m.Register(RegisterInput{Name: "inner", Path: nested, BaseBranch: "main", Gates: &store.Gates{}}); err != nil {
+		t.Fatal(err)
+	}
+	if s, err := e.m.Resolve(nested); err != nil || s.Name != "inner" {
+		t.Fatalf("%+v %v", s, err)
 	}
 }
 

@@ -190,11 +190,12 @@ func TestSitesAndWorktreesOverAPI(t *testing.T) {
 	if err := c.Do("POST", "/jobs", map[string]string{"title": "T", "path": repo}, &job); err != nil || job.Site != "r" {
 		t.Fatalf("%+v %v", job, err)
 	}
+	realWorktrees, _ := filepath.EvalSymlinks(d.Worktrees())
 	var wt store.Worktree
 	if err := c.Do("POST", "/jobs/"+job.ID+"/worktrees", map[string]string{"kind": "wright"}, &wt); err != nil {
 		t.Fatal(err)
 	}
-	if strings.HasPrefix(wt.Path, repo+"/") || !strings.HasPrefix(wt.Path, d.Worktrees()) {
+	if strings.HasPrefix(wt.Path, repo+"/") || !strings.HasPrefix(wt.Path, realWorktrees) {
 		t.Fatalf("worktree at %s", wt.Path)
 	}
 	var wts []store.Worktree

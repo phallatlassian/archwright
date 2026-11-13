@@ -19,6 +19,7 @@ CREATE TABLE worktrees (
     path       TEXT NOT NULL,
     branch     TEXT NOT NULL DEFAULT '',
     base_ref   TEXT NOT NULL,
+    base_sha   TEXT NOT NULL,
     created_at TEXT NOT NULL,
     removed_at TEXT
 );

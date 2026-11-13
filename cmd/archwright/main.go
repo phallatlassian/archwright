@@ -155,7 +155,7 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 		}
 		in.Path = absPath(in.Path)
 		if in.Name == "" {
-			in.Name = filepath.Base(in.Path)
+			in.Name = sites.SanitizeName(filepath.Base(in.Path))
 		}
 		return call("POST", "/sites", in)
 	case "worktree create":

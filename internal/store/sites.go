@@ -129,10 +129,14 @@ func (s *Store) SiteForPath(dir string) (Site, error) {
 	if err != nil {
 		return Site{}, err
 	}
-	for _, st := range sites {
-		if dir == st.Path || strings.HasPrefix(dir, strings.TrimSuffix(st.Path, "/")+"/") {
-			return st, nil
+	var best *Site // the longest match wins, so a Site nested in another resolves to itself
+	for i, st := range sites {
+		if (dir == st.Path || strings.HasPrefix(dir, strings.TrimSuffix(st.Path, "/")+"/")) && (best == nil || len(st.Path) > len(best.Path)) {
+			best = &sites[i]
 		}
+	}
+	if best != nil {
+		return *best, nil
 	}
 	return Site{}, fmt.Errorf("%s is not inside a registered Site: %w", dir, ErrNotFound)
 }
@@ -146,6 +150,7 @@ type Worktree struct {
 	Path      string     `json:"path"`
 	Branch    string     `json:"branch,omitempty"`
 	BaseRef   string     `json:"base_ref"`
+	BaseSHA   string     `json:"base_sha"` // commit the worktree started from
 	CreatedAt time.Time  `json:"created_at"`
 	RemovedAt *time.Time `json:"removed_at,omitempty"`
 }
@@ -170,8 +175,8 @@ func (s *Store) AddWorktree(w Worktree) (Worktree, error) {
 		return Worktree{}, err
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec(`INSERT INTO worktrees (id, job_id, site, kind, path, branch, base_ref, created_at)
-		VALUES (?,?,?,?,?,?,?,?)`, w.ID, w.JobID, w.Site, w.Kind, w.Path, w.Branch, w.BaseRef, at); err != nil {
+	if _, err := tx.Exec(`INSERT INTO worktrees (id, job_id, site, kind, path, branch, base_ref, base_sha, created_at)
+		VALUES (?,?,?,?,?,?,?,?,?)`, w.ID, w.JobID, w.Site, w.Kind, w.Path, w.Branch, w.BaseRef, w.BaseSHA, at); err != nil {
 		return Worktree{}, err
 	}
 	if err := appendEvent(tx, at, w.JobID, "worktree.created", map[string]string{"id": w.ID, "kind": w.Kind, "branch": w.Branch}); err != nil {
@@ -199,7 +204,7 @@ func (s *Store) MarkWorktreeRemoved(w Worktree, reason string) error {
 
 // Worktrees lists a Job's worktrees, including removed ones, oldest first.
 func (s *Store) Worktrees(jobID string) ([]Worktree, error) {
-	rows, err := s.db.Query(`SELECT id, job_id, site, kind, path, branch, base_ref, created_at, removed_at
+	rows, err := s.db.Query(`SELECT id, job_id, site, kind, path, branch, base_ref, base_sha, created_at, removed_at
 		FROM worktrees WHERE job_id = ? ORDER BY created_at, id`, jobID)
 	if err != nil {
 		return nil, err
@@ -210,7 +215,7 @@ func (s *Store) Worktrees(jobID string) ([]Worktree, error) {
 		var w Worktree
 		var at string
 		var removed sql.NullString
-		if err := rows.Scan(&w.ID, &w.JobID, &w.Site, &w.Kind, &w.Path, &w.Branch, &w.BaseRef, &at, &removed); err != nil {
+		if err := rows.Scan(&w.ID, &w.JobID, &w.Site, &w.Kind, &w.Path, &w.Branch, &w.BaseRef, &w.BaseSHA, &at, &removed); err != nil {
 			return nil, err
 		}
 		w.CreatedAt, _ = time.Parse(time.RFC3339Nano, at)

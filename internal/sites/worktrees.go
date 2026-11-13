@@ -74,14 +74,18 @@ func (m *Manager) CreateWorktree(jobID, kind, baseRef string) (store.Worktree, e
 	}
 
 	id := store.NewWorktreeID()
-	dir := filepath.Join(m.root, site.Name, id)
+	wtRoot, err := m.realRoot()
+	if err != nil {
+		return store.Worktree{}, err
+	}
+	dir := filepath.Join(wtRoot, site.Name, id)
 	if inside(dir, site.Path) {
 		return store.Worktree{}, fmt.Errorf("worktree directory %s would be inside site %s", dir, site.Name)
 	}
 	if err := os.MkdirAll(filepath.Dir(dir), 0o700); err != nil {
 		return store.Worktree{}, err
 	}
-	w := store.Worktree{ID: id, JobID: job.ID, Site: site.Name, Kind: kind, Path: dir, BaseRef: baseRef}
+	w := store.Worktree{ID: id, JobID: job.ID, Site: site.Name, Kind: kind, Path: dir, BaseRef: baseRef, BaseSHA: sha}
 	switch kind {
 	case store.KindReadOnly:
 		_, err = git(site.Path, "worktree", "add", "--detach", dir, sha)
@@ -151,7 +155,7 @@ func (m *Manager) CleanupMerged(jobID string) ([]store.Worktree, error) {
 	}
 	var errs []error
 	for _, w := range activeOf(wts, store.KindWright) {
-		if !gitOK(site.Path, "merge-base", "--is-ancestor", w.Branch, integration[0].Branch) {
+		if !merged(site, w, integration[0]) {
 			continue
 		}
 		if err := m.remove(site, w, false, true); err != nil {
@@ -167,8 +171,21 @@ func (m *Manager) CleanupMerged(jobID string) ([]store.Worktree, error) {
 	return removed, errors.Join(errs...)
 }
 
+// merged reports whether a Wright has handed back work that is now in the
+// integration branch. A branch with no commits of its own has nothing merged
+// (it is trivially an ancestor of the branch it was cut from).
+func merged(site store.Site, w, integration store.Worktree) bool {
+	own, err := git(site.Path, "rev-list", "--count", w.Branch, "--not", w.BaseSHA)
+	if err != nil || own == "0" {
+		return false
+	}
+	return gitOK(site.Path, "merge-base", "--is-ancestor", w.Branch, integration.Branch)
+}
+
 // Close ends a Job as accepted or discarded and removes every remaining
-// worktree. Discarding also deletes the Job's branches; accepting keeps them.
+// worktree. Discarding forces removal and deletes the Job's branches;
+// accepting keeps the branches and refuses to throw away uncommitted work,
+// leaving the Job open so it can be committed or the Job discarded.
 func (m *Manager) Close(jobID, outcome string) ([]store.Worktree, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -186,7 +203,7 @@ func (m *Manager) Close(jobID, outcome string) ([]store.Worktree, error) {
 	removed := []store.Worktree{}
 	var errs []error
 	for _, w := range activeOf(wts, "") {
-		if err := m.remove(site, w, true, outcome == "discarded"); err != nil {
+		if err := m.remove(site, w, outcome == "discarded", outcome == "discarded"); err != nil {
 			errs = append(errs, err)
 			continue
 		}
