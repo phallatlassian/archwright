@@ -23,6 +23,30 @@ func git(t *testing.T, dir string, args ...string) string {
 	return strings.TrimSpace(string(out))
 }
 
+// fakeHost stands in for a git host: git's insteadOf maps the returned URL
+// onto a bare repository holding one commit with files, so the Works sees a
+// real remote URL and never a local path.
+func fakeHost(t *testing.T, files map[string]string) string {
+	t.Helper()
+	hostDir, _ := filepath.EvalSymlinks(t.TempDir())
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_KEY_0", "url."+hostDir+"/.insteadOf")
+	t.Setenv("GIT_CONFIG_VALUE_0", "https://git.example.com/")
+	bare := filepath.Join(hostDir, "o", "r.git")
+	work, _ := filepath.EvalSymlinks(t.TempDir())
+	for name, content := range files {
+		os.WriteFile(filepath.Join(work, name), []byte(content), 0o644)
+	}
+	if out, err := exec.Command("git", "init", "--bare", "-b", "main", bare).CombinedOutput(); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	git(t, work, "init", "-b", "main")
+	git(t, work, "add", ".")
+	git(t, work, "commit", "-m", "init")
+	git(t, work, "push", bare, "main")
+	return "https://git.example.com/o/r.git"
+}
+
 // gateRig is a rig whose Job belongs to a registered Site with an
 // integration branch the Wardens' handbacks are about.
 type gateRig struct {
@@ -34,19 +58,14 @@ type gateRig struct {
 
 func newGateRig(t *testing.T, gates store.Gates) *gateRig {
 	g := newRig(t, nil)
-	repo, _ := filepath.EvalSymlinks(t.TempDir())
-	repo = filepath.Join(repo, "repo")
-	os.Mkdir(repo, 0o755)
-	git(t, repo, "init", "-b", "main")
-	os.WriteFile(filepath.Join(repo, "verdict.txt"), []byte("good\n"), 0o644)
-	git(t, repo, "add", ".")
-	git(t, repo, "commit", "-m", "init")
-
+	url := fakeHost(t, map[string]string{"verdict.txt": "good\n"})
 	root, _ := filepath.EvalSymlinks(t.TempDir())
-	sm := sites.New(g.st, filepath.Join(root, "worktrees"))
-	if _, err := sm.Register(sites.RegisterInput{Name: "demo", Path: repo, BaseBranch: "main", Gates: &gates}); err != nil {
+	sm := sites.New(g.st, filepath.Join(root, "worktrees"), filepath.Join(root, "clones"))
+	site, err := sm.Register(sites.RegisterInput{Name: "demo", URL: url, BaseBranch: "main", Gates: &gates})
+	if err != nil {
 		t.Fatal(err)
 	}
+	repo := site.ClonePath
 	g.r.UseSites(sm)
 	job, err := g.st.CreateJobOn("demo", "J", "")
 	if err != nil {
@@ -195,10 +214,8 @@ func TestGateChangesOverAPIRequireApproval(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	repo, _ := filepath.EvalSymlinks(t.TempDir())
-	git(t, repo, "init", "-b", "main")
-	git(t, repo, "commit", "--allow-empty", "-m", "init")
-	in := sites.RegisterInput{Name: "r", Path: repo, BaseBranch: "main", Gates: &store.Gates{Typecheck: "tc", Lint: "lint", Test: "t"}}
+	url := fakeHost(t, map[string]string{"a.txt": "a"})
+	in := sites.RegisterInput{Name: "r", URL: url, BaseBranch: "main", Gates: &store.Gates{Typecheck: "tc", Lint: "lint", Test: "t"}}
 	if err := c.Do("POST", "/sites", in, nil); err != nil {
 		t.Fatal(err)
 	}

@@ -173,7 +173,7 @@ func TestMigratesForwardAfterBackup(t *testing.T) {
 
 func TestGateChangesApplyOnlyOnApproval(t *testing.T) {
 	st, _ := open(t)
-	if _, err := st.AddSite(Site{Name: "s", Path: "/s", BaseBranch: "main", ConcurrencyCap: 1, Gates: Gates{Test: "a"}}); err != nil {
+	if _, err := st.AddSite(Site{Name: "s", URL: "https://git.example.com/o/s.git", ClonePath: "/s", BaseBranch: "main", ConcurrencyCap: 1, Gates: Gates{Test: "a"}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.ProposeGates("s", Gates{Test: "a"}); !errors.Is(err, ErrConflict) {
@@ -210,7 +210,7 @@ func TestGateChangesApplyOnlyOnApproval(t *testing.T) {
 
 func TestApprovingGateChangeRejectsStalePendingChanges(t *testing.T) {
 	st, _ := open(t)
-	if _, err := st.AddSite(Site{Name: "s", Path: "/s", BaseBranch: "main", ConcurrencyCap: 1, Gates: Gates{Test: "a"}}); err != nil {
+	if _, err := st.AddSite(Site{Name: "s", URL: "https://git.example.com/o/s.git", ClonePath: "/s", BaseBranch: "main", ConcurrencyCap: 1, Gates: Gates{Test: "a"}}); err != nil {
 		t.Fatal(err)
 	}
 	c1, _ := st.ProposeGates("s", Gates{Lint: "x", Test: "a"})
