@@ -820,3 +820,30 @@ func TestCloseToleratesWorktreeDirectoryAlreadyGone(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestConcurrentRegistrationsOfOneRepoLeaveOneWorkingSite(t *testing.T) {
+	e := setup(t)
+	r := e.hosts.create(t, "o/race", map[string]string{"a": "a"})
+	errs := make(chan error, 4)
+	for i := 0; i < 4; i++ {
+		go func() {
+			_, err := e.m.Register(RegisterInput{Name: "race", URL: r.url, BaseBranch: "main", Gates: &store.Gates{}})
+			errs <- err
+		}()
+	}
+	won := 0
+	for i := 0; i < 4; i++ {
+		if err := <-errs; err == nil {
+			won++
+		} else if !errors.Is(err, store.ErrExists) {
+			t.Errorf("unexpected error: %v", err)
+		}
+	}
+	if won != 1 {
+		t.Fatalf("%d registrations succeeded", won)
+	}
+	site, err := e.st.GetSite("race")
+	if err != nil || run(t, site.ClonePath, "rev-parse", "refs/remotes/origin/main") == "" {
+		t.Fatalf("the registered Site has no working clone: %+v %v", site, err)
+	}
+}

@@ -20,7 +20,7 @@ import (
 )
 
 // ErrUnregistered means a directory's origin is not a registered Site.
-var ErrUnregistered = errors.New("not a registered Site; register it with `archwright site register`")
+var ErrUnregistered = errors.New("not a registered Site (a Site is matched by its git origin URL); register it by URL with `archwright site register --url`")
 
 // Manager registers Sites and manages their clones and worktrees. Git
 // operations on clones are serialised: they share each clone's metadata.
@@ -247,12 +247,15 @@ func (m *Manager) Register(in RegisterInput) (store.Site, error) {
 	if in.ConcurrencyCap == 0 {
 		in.ConcurrencyCap = store.DefaultConcurrencyCap
 	}
-	if err := m.refuseDuplicate(in.Name, in.URL); err != nil {
+	if err := m.refuseDuplicate(in.Name, in.URL); err != nil { // early, before any network work
 		return store.Site{}, err
 	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if err := m.refuseDuplicate(in.Name, in.URL); err != nil { // again under the lock: a concurrent Register may have won
+		return store.Site{}, err
+	}
 	if err := os.MkdirAll(m.clones, 0o700); err != nil {
 		return store.Site{}, err
 	}
@@ -260,7 +263,7 @@ func (m *Manager) Register(in RegisterInput) (store.Site, error) {
 	if err := os.RemoveAll(clone); err != nil { // debris of a crashed registration: ours, and no Site claims it
 		return store.Site{}, err
 	}
-	site, err := m.clone(in, clone)
+	site, err := m.cloneAndRecord(in, clone)
 	if err != nil {
 		os.RemoveAll(clone)
 		return store.Site{}, err
@@ -268,7 +271,7 @@ func (m *Manager) Register(in RegisterInput) (store.Site, error) {
 	return site, nil
 }
 
-func (m *Manager) clone(in RegisterInput, clone string) (store.Site, error) {
+func (m *Manager) cloneAndRecord(in RegisterInput, clone string) (store.Site, error) {
 	if err := fetchBare(clone, in.URL, nil); err != nil {
 		return store.Site{}, err
 	}
@@ -281,7 +284,7 @@ func (m *Manager) clone(in RegisterInput, clone string) (store.Site, error) {
 	})
 }
 
-// refuseDuplicate fails early, before any network work, when the name or the
+// refuseDuplicate fails when the name or the
 // normalised URL is taken.
 func (m *Manager) refuseDuplicate(name, rawURL string) error {
 	if s, err := m.st.SiteForURL(rawURL); err == nil {

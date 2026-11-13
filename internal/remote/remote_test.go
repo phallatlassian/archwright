@@ -35,7 +35,7 @@ func TestNormalizeRefusesLocalAndMalformedURLs(t *testing.T) {
 	for _, u := range []string{
 		"", " ", "/srv/git/r.git", "./r", "../r", "r", "~/r", "file:///srv/git/r.git", "FILE://host/r",
 		"-oProxyCommand=x", "--upload-pack=x", "https://", "https://host", "https://host/", "ext::sh -c x",
-		"https://host/o/r with space", "ftp://host/o/r", "C:\\r",
+		"https://host/o/../r", "https://host/o/r with space", "ftp://host/o/r", "C:\\r",
 	} {
 		if got, err := Normalize(u); err == nil {
 			t.Errorf("%q accepted as %q", u, got)
@@ -52,5 +52,11 @@ func TestName(t *testing.T) {
 		if got := Name(in); got != want {
 			t.Errorf("%s: %q want %q", in, got, want)
 		}
+	}
+}
+
+func TestNormalizeAllowsDotsInNames(t *testing.T) {
+	if got, err := Normalize("https://host/o/foo..bar.git"); err != nil || got != "host/o/foo..bar" {
+		t.Fatalf("%q %v", got, err)
 	}
 }

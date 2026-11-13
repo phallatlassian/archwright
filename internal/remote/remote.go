@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -52,8 +53,7 @@ func Normalize(raw string) (string, error) {
 		host, path = strings.ToLower(m[1]), m[2]
 	}
 	path = strings.TrimSuffix(strings.Trim(path, "/"), ".git")
-	path = strings.TrimRight(path, "/")
-	if path == "" || strings.Contains(path, "..") {
+	if path == "" || slices.Contains(strings.Split(path, "/"), "..") {
 		return "", fmt.Errorf("remote URL %q names no repository", raw)
 	}
 	if port != "" {
