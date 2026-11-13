@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/phallatlassian/archwright/internal/sites"
 	"github.com/phallatlassian/archwright/internal/spool"
 	"github.com/phallatlassian/archwright/internal/store"
 )
@@ -42,6 +43,10 @@ type Runs struct {
 	bg        context.Context
 	cancelBg  context.CancelFunc
 	wg        sync.WaitGroup
+
+	// Gates (ADR 0010): where a handback branch is checked out, and each command's limit.
+	sites       *sites.Manager
+	gateTimeout time.Duration
 
 	mu   sync.Mutex
 	runs map[string]*run

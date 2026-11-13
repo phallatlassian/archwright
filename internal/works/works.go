@@ -76,8 +76,13 @@ func Serve(ctx context.Context, d paths.Dirs, ready chan<- struct{}) error {
 		return err
 	}
 	defer st.Close()
+	if err := st.InterruptGateRuns(); err != nil {
+		return err
+	}
+	sm := sites.New(st, d.Worktrees())
 	runs := NewRuns(st)
 	defer runs.Close()
+	runs.UseSites(sm)
 	// Until the vendor adapters land, dispatched Wrights run on the fake runner.
 	runs.Configure(GuildsFromDir(filepath.Join(d.Config, "guilds")), NewFakeRunner(nil))
 
@@ -91,7 +96,7 @@ func Serve(ctx context.Context, d paths.Dirs, ready chan<- struct{}) error {
 	}
 	ctx, stop := context.WithCancel(ctx)
 	defer stop()
-	srv := &http.Server{Handler: newHandler(st, runs, sites.New(st, d.Worktrees()), token, os.Getpid(), stop)}
+	srv := &http.Server{Handler: newHandler(st, runs, sm, token, os.Getpid(), stop)}
 	info := Info{PID: os.Getpid(), Port: ln.Addr().(*net.TCPAddr).Port, Token: token}
 	if err := writeInfo(d, info); err != nil {
 		return err
