@@ -155,27 +155,51 @@ func TestSitesAndWorktreesOverAPI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	repo, _ := filepath.EvalSymlinks(t.TempDir())
-	for _, args := range [][]string{{"init", "-b", "main"}, {"-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "--allow-empty", "-m", "init"}} {
-		if out, err := exec.Command("git", append([]string{"-C", repo}, args...)...).CombinedOutput(); err != nil {
+	// A git host stands in for the remote: git's insteadOf maps this URL onto
+	// a bare repository, so the Works sees a real remote URL and no local path.
+	hostDir, _ := filepath.EvalSymlinks(t.TempDir())
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_KEY_0", "url."+hostDir+"/.insteadOf")
+	t.Setenv("GIT_CONFIG_VALUE_0", "https://git.example.com/")
+	const remoteURL = "https://git.example.com/o/r.git"
+	work, _ := filepath.EvalSymlinks(t.TempDir())
+	for _, args := range [][]string{
+		{"-C", work, "init", "-b", "main"},
+		{"-C", work, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "--allow-empty", "-m", "init"},
+		{"init", "--bare", "-b", "main", filepath.Join(hostDir, "o", "r.git")},
+		{"-C", work, "push", filepath.Join(hostDir, "o", "r.git"), "main"},
+	} {
+		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
 			t.Fatalf("%v\n%s", err, out)
 		}
 	}
+	// The developer's checkout of it, which the Works only reads the origin of.
+	repo, _ := filepath.EvalSymlinks(t.TempDir())
+	if out, err := exec.Command("git", "clone", "--quiet", remoteURL, repo).CombinedOutput(); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
 
-	// Unregistered paths are refused, for lookups and for Jobs.
+	// Unregistered directories are refused, for lookups and for Jobs.
 	if err := c.Do("GET", "/sites/resolve?path="+url.QueryEscape(repo), nil, nil); err == nil {
 		t.Fatal("unregistered path resolved")
 	}
 	if err := c.Do("POST", "/jobs", map[string]string{"title": "T", "path": repo}, nil); err == nil {
 		t.Fatal("job created on unregistered path")
 	}
-	if err := c.Do("POST", "/sites", sites.RegisterInput{Name: "r", Path: repo, BaseBranch: "main"}, nil); err == nil {
+	if err := c.Do("POST", "/sites", sites.RegisterInput{Name: "r", URL: repo, BaseBranch: "main", Gates: &store.Gates{}}, nil); err == nil {
+		t.Fatal("registered a local path")
+	}
+	if err := c.Do("POST", "/sites", sites.RegisterInput{Name: "r", URL: remoteURL, BaseBranch: "main"}, nil); err == nil {
 		t.Fatal("registered without confirmed gates")
 	}
+	var prop sites.Proposal
+	if err := c.Do("GET", "/sites/detect?url="+url.QueryEscape(remoteURL), nil, &prop); err != nil || prop.Name != "r" || prop.BaseBranch != "main" {
+		t.Fatalf("%+v %v", prop, err)
+	}
 
-	in := sites.RegisterInput{Name: "r", Path: repo, BaseBranch: "main", Gates: &store.Gates{Test: "go test ./..."}}
+	in := sites.RegisterInput{Name: "r", URL: remoteURL, BaseBranch: "main", Gates: &store.Gates{Test: "go test ./..."}}
 	var site store.Site
-	if err := c.Do("POST", "/sites", in, &site); err != nil || site.ConcurrencyCap != 3 {
+	if err := c.Do("POST", "/sites", in, &site); err != nil || site.ConcurrencyCap != 3 || site.ClonePath == "" {
 		t.Fatalf("%+v %v", site, err)
 	}
 	if err := c.Do("POST", "/sites", in, nil); err == nil {
@@ -207,5 +231,14 @@ func TestSitesAndWorktreesOverAPI(t *testing.T) {
 	}
 	if _, err := os.Stat(wt.Path); !os.IsNotExist(err) {
 		t.Fatal("worktree kept after discard")
+	}
+	if err := c.Do("DELETE", "/sites/r", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(site.ClonePath); !os.IsNotExist(err) {
+		t.Fatal("clone kept after the Site was removed")
+	}
+	if err := c.Do("GET", "/sites/resolve?path="+url.QueryEscape(repo), nil, nil); err == nil {
+		t.Fatal("removed Site resolves")
 	}
 }

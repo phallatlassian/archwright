@@ -91,7 +91,7 @@ func Serve(ctx context.Context, d paths.Dirs, ready chan<- struct{}) error {
 	}
 	ctx, stop := context.WithCancel(ctx)
 	defer stop()
-	srv := &http.Server{Handler: newHandler(st, runs, sites.New(st, d.Worktrees()), token, os.Getpid(), stop)}
+	srv := &http.Server{Handler: newHandler(st, runs, sites.New(st, d.Worktrees(), d.Clones()), token, os.Getpid(), stop)}
 	info := Info{PID: os.Getpid(), Port: ln.Addr().(*net.TCPAddr).Port, Token: token}
 	if err := writeInfo(d, info); err != nil {
 		return err

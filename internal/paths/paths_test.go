@@ -49,3 +49,10 @@ func TestEnsureIsPrivate(t *testing.T) {
 		}
 	}
 }
+
+func TestClonesLiveUnderStateOutsideWorktrees(t *testing.T) {
+	d := Dirs{Config: "/c", State: "/s"}
+	if d.Clones() != "/s/clones" || d.Worktrees() != "/s/worktrees" {
+		t.Fatalf("%s %s", d.Clones(), d.Worktrees())
+	}
+}

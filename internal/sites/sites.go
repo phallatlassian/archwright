@@ -1,5 +1,7 @@
-// Package sites registers git repositories as Sites and manages the
-// worktrees Wrights work in (ADR 0008, 0010).
+// Package sites registers git repositories as Sites by remote URL, keeps the
+// Works' own clone of each, and manages the worktrees Wrights work in, all
+// created from that clone and never from a developer's checkout (ADR 0008,
+// 0010, 0019).
 package sites
 
 import (
@@ -13,35 +15,36 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/phallatlassian/archwright/internal/remote"
 	"github.com/phallatlassian/archwright/internal/store"
 )
 
-// ErrUnregistered means a path is not inside any registered Site.
+// ErrUnregistered means a directory's origin is not a registered Site.
 var ErrUnregistered = errors.New("not a registered Site; register it with `archwright site register`")
 
-// Manager registers Sites and manages their worktrees. Git operations on
-// worktrees are serialised: they share each repository's metadata.
+// Manager registers Sites and manages their clones and worktrees. Git
+// operations on clones are serialised: they share each clone's metadata.
 type Manager struct {
-	st   *store.Store
-	root string // where worktrees live: outside every Site
-	mu   sync.Mutex
+	st     *store.Store
+	root   string // where worktrees live: outside every Site
+	clones string // where the Works' bare clones live
+	mu     sync.Mutex
 
 	// lookPath finds an executable on PATH; injectable so detection does not
 	// depend on the machine's installed tools.
 	lookPath func(string) (string, error)
 }
 
-// New returns a Manager keeping worktrees under root.
-func New(st *store.Store, root string) *Manager {
-	return &Manager{st: st, root: root, lookPath: exec.LookPath}
+// New returns a Manager keeping worktrees under root and clones under clones.
+func New(st *store.Store, root, clones string) *Manager {
+	return &Manager{st: st, root: root, clones: clones, lookPath: exec.LookPath}
 }
 
-// Proposal is what Detect infers for a repository; the developer confirms it.
+// Proposal is what Detect infers for a remote; the developer confirms it.
 type Proposal struct {
 	Name           string      `json:"name"`
-	Path           string      `json:"path"`
+	URL            string      `json:"url"`
 	BaseBranch     string      `json:"base_branch"`
-	Remote         string      `json:"remote"`
 	ConcurrencyCap int         `json:"concurrency_cap"`
 	Gates          store.Gates `json:"gates"`
 }
@@ -50,52 +53,88 @@ type Proposal struct {
 // empty commands) so defaults are never stored unconfirmed.
 type RegisterInput struct {
 	Name           string       `json:"name"`
-	Path           string       `json:"path"`
+	URL            string       `json:"url"`
 	BaseBranch     string       `json:"base_branch"`
-	Remote         string       `json:"remote"`
 	ConcurrencyCap int          `json:"concurrency_cap"`
 	Gates          *store.Gates `json:"gates"`
 }
 
-// repoRoot resolves path to the canonical top level of the git repository it is.
-func repoRoot(path string) (string, error) {
-	if !filepath.IsAbs(path) {
-		return "", fmt.Errorf("site path %q must be absolute", path)
-	}
-	real, err := filepath.EvalSymlinks(path)
-	if err != nil {
+// remoteDefaultBranch asks the remote which branch its HEAD names. It also
+// proves the remote is reachable with the developer's existing credentials.
+func (m *Manager) remoteDefaultBranch(rawURL string) (string, error) {
+	if err := os.MkdirAll(m.clones, 0o700); err != nil {
 		return "", err
 	}
-	top, err := git(real, "rev-parse", "--show-toplevel")
+	out, err := git(m.clones, "ls-remote", "--symref", "--", rawURL, "HEAD")
 	if err != nil {
-		return "", fmt.Errorf("%s is not a git repository", real)
+		return "", fmt.Errorf("cannot reach %s: %w", rawURL, err)
 	}
-	if top, err = filepath.EvalSymlinks(top); err != nil {
-		return "", err
+	for _, line := range strings.Split(out, "\n") {
+		if ref, ok := strings.CutPrefix(line, "ref: refs/heads/"); ok {
+			if name, _, ok := strings.Cut(ref, "\t"); ok {
+				return name, nil
+			}
+		}
 	}
-	if top != real {
-		return "", fmt.Errorf("%s is inside a repository; register its root %s", real, top)
-	}
-	return real, nil
+	return "", fmt.Errorf("%s has no default branch; give the base branch explicitly", rawURL)
 }
 
-// Detect proposes registration values for the repository at path.
-func (m *Manager) Detect(path string) (Proposal, error) {
-	root, err := repoRoot(path)
+// fetchBare makes dir a bare repository whose origin is rawURL and fetches
+// into it with the given extra options (default: every branch into
+// refs/remotes/origin/*, which `remote add` configures).
+func fetchBare(dir, rawURL string, opts []string, refspecs ...string) error {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	if _, err := git(dir, "init", "--bare", "--quiet"); err != nil {
+		return err
+	}
+	if _, err := git(dir, "remote", "add", "origin", rawURL); err != nil {
+		return err
+	}
+	if _, err := git(dir, append(append(append([]string{"fetch", "--quiet", "--no-tags"}, opts...), "origin"), refspecs...)...); err != nil {
+		return fmt.Errorf("cannot fetch %s: %w", rawURL, err)
+	}
+	return nil
+}
+
+// Detect proposes registration values for the remote at rawURL. It clones
+// into a temporary directory to read the base branch's tree, and deletes the
+// clone before returning (ADR 0019).
+func (m *Manager) Detect(rawURL string) (Proposal, error) {
+	return m.detect(rawURL, "")
+}
+
+func (m *Manager) detect(rawURL, base string) (Proposal, error) {
+	if _, err := remote.Normalize(rawURL); err != nil {
+		return Proposal{}, err
+	}
+	if base == "" {
+		var err error
+		if base, err = m.remoteDefaultBranch(rawURL); err != nil {
+			return Proposal{}, err
+		}
+	}
+	p := Proposal{Name: SanitizeName(remote.Name(rawURL)), URL: rawURL, BaseBranch: base, ConcurrencyCap: store.DefaultConcurrencyCap}
+	if err := os.MkdirAll(m.clones, 0o700); err != nil {
+		return Proposal{}, err
+	}
+	tmp, err := os.MkdirTemp(m.clones, ".detect-")
 	if err != nil {
 		return Proposal{}, err
 	}
-	p := Proposal{Name: SanitizeName(filepath.Base(root)), Path: root, ConcurrencyCap: store.DefaultConcurrencyCap}
-	if gitOK(root, "remote", "get-url", "origin") {
-		p.Remote = "origin"
-		if ref, err := git(root, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"); err == nil {
-			p.BaseBranch = strings.TrimPrefix(ref, "origin/")
-		}
+	defer os.RemoveAll(tmp)
+	if err := fetchBare(tmp, rawURL, []string{"--depth=1"}, "+refs/heads/"+base+":refs/remotes/origin/"+base); err != nil {
+		return Proposal{}, err
 	}
-	if p.BaseBranch == "" {
-		p.BaseBranch, _ = git(root, "symbolic-ref", "--short", "HEAD")
+	tree := "refs/remotes/origin/" + base
+	if !gitOK(tmp, "rev-parse", "--verify", "--quiet", tree+"^{commit}") {
+		return Proposal{}, fmt.Errorf("base branch %q does not exist on %s", base, rawURL)
 	}
-	p.Gates = m.detectGates(root)
+	p.Gates = m.detectGates(func(name string) (string, bool) {
+		out, err := git(tmp, "show", tree+":"+name)
+		return out, err == nil
+	})
 	return p, nil
 }
 
@@ -114,9 +153,10 @@ func SanitizeName(s string) string {
 }
 
 // detectGates proposes gate commands: a marker file's defaults first, then the
-// project's own Makefile targets for any gate the markers leave empty.
-func (m *Manager) detectGates(root string) store.Gates {
-	exists := func(name string) bool { _, err := os.Stat(filepath.Join(root, name)); return err == nil }
+// project's own Makefile targets for any gate the markers leave empty. read
+// returns a file's content from the base branch's tree.
+func (m *Manager) detectGates(read func(name string) (string, bool)) store.Gates {
+	exists := func(name string) bool { _, ok := read(name); return ok }
 	var g store.Gates
 	switch {
 	case exists("go.mod"):
@@ -129,7 +169,8 @@ func (m *Manager) detectGates(root string) store.Gates {
 	case exists("Cargo.toml"):
 		g = store.Gates{Typecheck: "cargo check", Lint: "cargo clippy", Test: "cargo test"}
 	}
-	targets := makeTargets(filepath.Join(root, "Makefile"))
+	mk, _ := read("Makefile")
+	targets := makeTargets(mk)
 	fill := func(dst *string, names ...string) {
 		if *dst != "" {
 			return
@@ -149,14 +190,9 @@ func (m *Manager) detectGates(root string) store.Gates {
 
 // makeTargets conservatively lists the targets a Makefile defines: lines
 // starting with a plain name and a colon. Make is never executed.
-func makeTargets(path string) map[string]bool {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil
-	}
-	defer f.Close()
+func makeTargets(makefile string) map[string]bool {
 	targets := map[string]bool{}
-	sc := bufio.NewScanner(f)
+	sc := bufio.NewScanner(strings.NewReader(makefile))
 	for sc.Scan() {
 		name, rest, ok := strings.Cut(sc.Text(), ":")
 		if !ok || name == "" || strings.HasPrefix(rest, "=") { // `X := y` is a variable
@@ -176,55 +212,112 @@ func makeTargets(path string) map[string]bool {
 	return targets
 }
 
-// Register records the repository at in.Path as a Site. Doing so is the
-// trust act for the repository's hooks and MCP config (ADR 0010).
+// Register clones the repository at in.URL into the Works' own directory and
+// records it as a Site. Doing so is the trust act for the repository's hooks
+// and MCP config (ADR 0010). Nothing is left behind if it fails.
 func (m *Manager) Register(in RegisterInput) (store.Site, error) {
-	root, err := repoRoot(in.Path)
-	if err != nil {
+	if _, err := remote.Normalize(in.URL); err != nil {
 		return store.Site{}, err
 	}
-	// Fill anything left blank from detection; explicit values always win.
+	// Fill anything left blank from the remote; explicit values always win.
 	// Detected gate commands are never accepted silently (ADR 0010).
-	prop, err := m.Detect(root)
-	if err != nil {
-		return store.Site{}, err
-	}
 	if in.Name == "" {
-		in.Name = prop.Name
+		in.Name = SanitizeName(remote.Name(in.URL))
+	}
+	if !store.ValidSiteName(in.Name) {
+		return store.Site{}, fmt.Errorf("site name %q must be lowercase letters, digits, '.', '_' or '-'", in.Name)
 	}
 	if in.BaseBranch == "" {
-		in.BaseBranch = prop.BaseBranch
+		var err error
+		if in.BaseBranch, err = m.remoteDefaultBranch(in.URL); err != nil {
+			return store.Site{}, err
+		}
 	}
-	if in.Remote == "" {
-		in.Remote = prop.Remote
+	if err := validBranch(in.BaseBranch); err != nil {
+		return store.Site{}, err
 	}
 	if in.Gates == nil {
+		prop, err := m.detect(in.URL, in.BaseBranch)
+		if err != nil {
+			return store.Site{}, err
+		}
 		g, _ := json.Marshal(prop.Gates)
 		return store.Site{}, fmt.Errorf("gates must be confirmed: detected %s; resubmit them explicitly (empty strings for none)", g)
-	}
-	wtRoot, err := m.realRoot()
-	if err != nil {
-		return store.Site{}, err
-	}
-	if inside(root, wtRoot) || inside(wtRoot, root) {
-		return store.Site{}, fmt.Errorf("%s overlaps the Works' worktree directory %s", root, wtRoot)
-	}
-	if in.BaseBranch == "" {
-		return store.Site{}, errors.New("base branch is required")
-	}
-	if !gitOK(root, "rev-parse", "--verify", "--quiet", "refs/heads/"+in.BaseBranch) {
-		return store.Site{}, fmt.Errorf("base branch %q does not exist in %s", in.BaseBranch, root)
-	}
-	if in.Remote != "" && !gitOK(root, "remote", "get-url", in.Remote) {
-		return store.Site{}, fmt.Errorf("remote %q does not exist in %s", in.Remote, root)
 	}
 	if in.ConcurrencyCap == 0 {
 		in.ConcurrencyCap = store.DefaultConcurrencyCap
 	}
+	if err := m.refuseDuplicate(in.Name, in.URL); err != nil {
+		return store.Site{}, err
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := os.MkdirAll(m.clones, 0o700); err != nil {
+		return store.Site{}, err
+	}
+	clone := filepath.Join(m.clones, in.Name+".git")
+	if err := os.RemoveAll(clone); err != nil { // debris of a crashed registration: ours, and no Site claims it
+		return store.Site{}, err
+	}
+	site, err := m.clone(in, clone)
+	if err != nil {
+		os.RemoveAll(clone)
+		return store.Site{}, err
+	}
+	return site, nil
+}
+
+func (m *Manager) clone(in RegisterInput, clone string) (store.Site, error) {
+	if err := fetchBare(clone, in.URL, nil); err != nil {
+		return store.Site{}, err
+	}
+	if !gitOK(clone, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+in.BaseBranch+"^{commit}") {
+		return store.Site{}, fmt.Errorf("base branch %q does not exist on %s", in.BaseBranch, in.URL)
+	}
 	return m.st.AddSite(store.Site{
-		Name: in.Name, Path: root, BaseBranch: in.BaseBranch, Remote: in.Remote,
+		Name: in.Name, URL: in.URL, ClonePath: clone, BaseBranch: in.BaseBranch,
 		ConcurrencyCap: in.ConcurrencyCap, Gates: *in.Gates,
 	})
+}
+
+// refuseDuplicate fails early, before any network work, when the name or the
+// normalised URL is taken.
+func (m *Manager) refuseDuplicate(name, rawURL string) error {
+	if s, err := m.st.SiteForURL(rawURL); err == nil {
+		return fmt.Errorf("site %q (%s) is already registered for %s: %w", s.Name, s.URL, rawURL, store.ErrExists)
+	}
+	if s, err := m.st.GetSite(name); err == nil {
+		return fmt.Errorf("site %q (%s): %w", s.Name, s.URL, store.ErrExists)
+	}
+	return nil
+}
+
+// validBranch refuses base branch names git would treat as options.
+func validBranch(b string) error {
+	if b == "" || strings.HasPrefix(b, "-") || strings.ContainsAny(b, " \t\n:^~?*[\\") || strings.Contains(b, "..") {
+		return fmt.Errorf("invalid base branch %q", b)
+	}
+	return nil
+}
+
+// Remove unregisters a Site and deletes the Works' clone of it. The Site's
+// Jobs and their history are kept (ADR 0017). It is refused while a Job still
+// has worktrees from the clone.
+func (m *Manager) Remove(name string) (store.Site, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	site, err := m.st.RemoveSite(name)
+	if err != nil {
+		return store.Site{}, err
+	}
+	if !inside(site.ClonePath, m.clones) || site.ClonePath == m.clones {
+		return site, fmt.Errorf("site %q unregistered, but its clone %s is outside %s and was left alone", name, site.ClonePath, m.clones)
+	}
+	if err := os.RemoveAll(site.ClonePath); err != nil {
+		return site, fmt.Errorf("site %q unregistered, but deleting its clone failed: %w", name, err)
+	}
+	return site, nil
 }
 
 // realRoot is the worktree directory with symlinks resolved, created if needed,
@@ -241,7 +334,10 @@ func inside(path, dir string) bool {
 	return err == nil && (rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))))
 }
 
-// Resolve returns the Site that path belongs to, refusing unregistered paths.
+// Resolve returns the Site a directory belongs to: the one whose remote is
+// the directory's own `origin`, however either is spelled. A directory with no
+// origin, or whose origin is not registered, is refused (ADR 0019). This reads
+// the developer's git config; it never writes to it.
 func (m *Manager) Resolve(path string) (store.Site, error) {
 	if !filepath.IsAbs(path) {
 		return store.Site{}, fmt.Errorf("path %q must be absolute", path)
@@ -250,9 +346,13 @@ func (m *Manager) Resolve(path string) (store.Site, error) {
 	if err != nil {
 		return store.Site{}, fmt.Errorf("%s: %w", path, ErrUnregistered)
 	}
-	site, err := m.st.SiteForPath(real)
+	origin, err := git(real, "config", "--local", "--get", "remote.origin.url")
+	if err != nil || origin == "" {
+		return store.Site{}, fmt.Errorf("%s has no git origin: %w", real, ErrUnregistered)
+	}
+	site, err := m.st.SiteForURL(origin)
 	if errors.Is(err, store.ErrNotFound) {
-		return store.Site{}, fmt.Errorf("%s: %w", real, ErrUnregistered)
+		return store.Site{}, fmt.Errorf("%s (origin %s): %w", real, origin, ErrUnregistered)
 	}
 	return site, err
 }

@@ -37,10 +37,13 @@ func activeOf(wts []store.Worktree, kind string) []store.Worktree {
 }
 
 // CreateWorktree makes a worktree for a Job under the Works' own directory,
-// never in the developer's checkout (ADR 0008). Kinds: integration (the
-// Job's integration branch), wright (own branch) and readonly (detached).
-// baseRef defaults to the Job's integration branch, else the Site's base branch.
-// Every branch is new and namespaced by Job, so none can be the default branch.
+// from the Works' own clone of the Site, never from the developer's checkout
+// (ADR 0008, 0019). Kinds: integration (the Job's integration branch), wright
+// (own branch) and readonly (detached). baseRef defaults to the Job's
+// integration branch, else the Site's base branch. The clone is fetched first
+// and a branch name is resolved against the remote's branches, so a Job starts
+// from what the remote has, not from anything local. Every branch is new and
+// namespaced by Job, so none can be the default branch.
 func (m *Manager) CreateWorktree(jobID, kind, baseRef string) (store.Worktree, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -59,18 +62,24 @@ func (m *Manager) CreateWorktree(jobID, kind, baseRef string) (store.Worktree, e
 	if kind == store.KindIntegration && len(integration) > 0 {
 		return store.Worktree{}, fmt.Errorf("job %s already has an integration worktree", jobID)
 	}
+	fetch := true // the Job's own integration branch lives in the clone; everything else comes from the remote
 	if baseRef == "" {
 		baseRef = site.BaseBranch
 		if kind != store.KindIntegration && len(integration) > 0 {
-			baseRef = integration[0].Branch
+			baseRef, fetch = integration[0].Branch, false
 		}
 	}
 	if strings.HasPrefix(baseRef, "-") {
 		return store.Worktree{}, fmt.Errorf("invalid base ref %q", baseRef)
 	}
-	sha, err := git(site.Path, "rev-parse", "--verify", "--quiet", baseRef+"^{commit}")
+	if fetch {
+		if _, err := git(site.ClonePath, "fetch", "--quiet", "--no-tags", "--prune", "origin"); err != nil {
+			return store.Worktree{}, fmt.Errorf("fetching site %s: %w", site.Name, err)
+		}
+	}
+	sha, err := resolveBase(site, baseRef)
 	if err != nil {
-		return store.Worktree{}, fmt.Errorf("base ref %q does not resolve to a commit in site %s", baseRef, site.Name)
+		return store.Worktree{}, err
 	}
 
 	id := store.NewWorktreeID()
@@ -79,8 +88,8 @@ func (m *Manager) CreateWorktree(jobID, kind, baseRef string) (store.Worktree, e
 		return store.Worktree{}, err
 	}
 	dir := filepath.Join(wtRoot, site.Name, id)
-	if inside(dir, site.Path) {
-		return store.Worktree{}, fmt.Errorf("worktree directory %s would be inside site %s", dir, site.Name)
+	if inside(dir, site.ClonePath) {
+		return store.Worktree{}, fmt.Errorf("worktree directory %s would be inside the clone of site %s", dir, site.Name)
 	}
 	if err := os.MkdirAll(filepath.Dir(dir), 0o700); err != nil {
 		return store.Worktree{}, err
@@ -88,7 +97,7 @@ func (m *Manager) CreateWorktree(jobID, kind, baseRef string) (store.Worktree, e
 	w := store.Worktree{ID: id, JobID: job.ID, Site: site.Name, Kind: kind, Path: dir, BaseRef: baseRef, BaseSHA: sha}
 	switch kind {
 	case store.KindReadOnly:
-		_, err = git(site.Path, "worktree", "add", "--detach", dir, sha)
+		_, err = git(site.ClonePath, "worktree", "add", "--detach", dir, sha)
 	default:
 		w.Branch = "archwright/" + job.ID + "/" + id
 		if kind == store.KindIntegration {
@@ -97,7 +106,7 @@ func (m *Manager) CreateWorktree(jobID, kind, baseRef string) (store.Worktree, e
 		if w.Branch == site.BaseBranch {
 			return store.Worktree{}, fmt.Errorf("refusing to use the default branch %q for a factory worktree", w.Branch)
 		}
-		_, err = git(site.Path, "worktree", "add", "--no-track", "-b", w.Branch, dir, sha)
+		_, err = git(site.ClonePath, "worktree", "add", "--no-track", "-b", w.Branch, dir, sha)
 	}
 	if err != nil {
 		return store.Worktree{}, err
@@ -110,6 +119,19 @@ func (m *Manager) CreateWorktree(jobID, kind, baseRef string) (store.Worktree, e
 	return rec, nil
 }
 
+// resolveBase resolves a base ref to a commit in the Site's clone. A branch
+// name means the remote's branch (refs/remotes/origin/<name>); anything else
+// (the Job's own factory branches, a SHA or tag) is resolved as given. The
+// clone has no local branches of its own, so no local branch can answer.
+func resolveBase(site store.Site, ref string) (string, error) {
+	for _, candidate := range []string{"refs/remotes/origin/" + ref, ref} {
+		if sha, err := git(site.ClonePath, "rev-parse", "--verify", "--quiet", candidate+"^{commit}"); err == nil {
+			return sha, nil
+		}
+	}
+	return "", fmt.Errorf("base ref %q does not resolve to a commit on the remote of site %s", ref, site.Name)
+}
+
 // remove deletes a worktree directory, optionally force and with its branch,
 // and marks it removed. A directory already gone is just pruned.
 func (m *Manager) remove(site store.Site, w store.Worktree, force, deleteBranch bool) error {
@@ -118,15 +140,15 @@ func (m *Manager) remove(site store.Site, w store.Worktree, force, deleteBranch 
 		if force {
 			args = append(args, "--force")
 		}
-		if _, err := git(site.Path, append(args, w.Path)...); err != nil {
+		if _, err := git(site.ClonePath, append(args, w.Path)...); err != nil {
 			return err
 		}
-	} else if _, err := git(site.Path, "worktree", "prune"); err != nil {
+	} else if _, err := git(site.ClonePath, "worktree", "prune"); err != nil {
 		return err
 	}
 	if deleteBranch && w.Branch != "" && w.Branch != site.BaseBranch {
-		if gitOK(site.Path, "rev-parse", "--verify", "--quiet", "refs/heads/"+w.Branch) {
-			if _, err := git(site.Path, "branch", "-D", w.Branch); err != nil {
+		if gitOK(site.ClonePath, "rev-parse", "--verify", "--quiet", "refs/heads/"+w.Branch) {
+			if _, err := git(site.ClonePath, "branch", "-D", w.Branch); err != nil {
 				return err
 			}
 		}
@@ -175,11 +197,11 @@ func (m *Manager) CleanupMerged(jobID string) ([]store.Worktree, error) {
 // integration branch. A branch with no commits of its own has nothing merged
 // (it is trivially an ancestor of the branch it was cut from).
 func merged(site store.Site, w, integration store.Worktree) bool {
-	own, err := git(site.Path, "rev-list", "--count", w.Branch, "--not", w.BaseSHA)
+	own, err := git(site.ClonePath, "rev-list", "--count", w.Branch, "--not", w.BaseSHA)
 	if err != nil || own == "0" {
 		return false
 	}
-	return gitOK(site.Path, "merge-base", "--is-ancestor", w.Branch, integration.Branch)
+	return gitOK(site.ClonePath, "merge-base", "--is-ancestor", w.Branch, integration.Branch)
 }
 
 // Close ends a Job as accepted or discarded and removes every remaining
