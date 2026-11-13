@@ -208,6 +208,24 @@ func TestGateChangesApplyOnlyOnApproval(t *testing.T) {
 	}
 }
 
+func TestApprovingGateChangeRejectsStalePendingChanges(t *testing.T) {
+	st, _ := open(t)
+	if _, err := st.AddSite(Site{Name: "s", Path: "/s", BaseBranch: "main", ConcurrencyCap: 1, Gates: Gates{Test: "a"}}); err != nil {
+		t.Fatal(err)
+	}
+	c1, _ := st.ProposeGates("s", Gates{Lint: "x", Test: "a"})
+	c2, _ := st.ProposeGates("s", Gates{Lint: "", Test: "y"})
+	if _, err := st.ApproveGateChange(c1.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.ApproveGateChange(c2.ID); !errors.Is(err, ErrConflict) {
+		t.Fatalf("approved a stale change: %v", err)
+	}
+	if got, _ := st.GetSite("s"); got.Gates.Lint != "x" || got.Gates.Test != "a" {
+		t.Fatalf("%+v", got.Gates)
+	}
+}
+
 func TestInterruptedGateRunsAreNotReportedAsPassing(t *testing.T) {
 	st, _ := open(t)
 	job, _ := st.CreateJob("J", "")
