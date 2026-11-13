@@ -1,6 +1,9 @@
 package remote
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestNormalizeTreatsSpellingsOfOneRepoAsEqual(t *testing.T) {
 	same := []string{
@@ -9,7 +12,7 @@ func TestNormalizeTreatsSpellingsOfOneRepoAsEqual(t *testing.T) {
 		"https://github.com/o/r",
 		"https://github.com/o/r.git",
 		"https://github.com/o/r.git/",
-		"https://user:tok@GitHub.com/o/r.git",
+		"https://GitHub.com/o/r.git",
 		"ssh://git@github.com/o/r.git",
 		"ssh://git@github.com:22/o/r.git",
 		"github.com:o/r",
@@ -58,5 +61,29 @@ func TestName(t *testing.T) {
 func TestNormalizeAllowsDotsInNames(t *testing.T) {
 	if got, err := Normalize("https://host/o/foo..bar.git"); err != nil || got != "host/o/foo..bar" {
 		t.Fatalf("%q %v", got, err)
+	}
+}
+
+func TestNormalizeRefusesEmbeddedCredentialsWithoutEchoingThem(t *testing.T) {
+	for _, u := range []string{
+		"https://user:s3cret@host/o/r", "https://s3cret@host/o/r", "http://s3cret@host/o/r",
+		"git://s3cret@host/o/r", "ssh://git:s3cret@host/o/r", "git:s3cret@host:o/r",
+	} {
+		got, err := Normalize(u)
+		if err == nil {
+			t.Errorf("%q accepted as %q", u, got)
+			continue
+		}
+		if strings.Contains(err.Error(), "s3cret") || !strings.Contains(err.Error(), "credentials") {
+			t.Errorf("%q: unhelpful or leaking error %q", u, err)
+		}
+	}
+}
+
+func TestNormalizeKeepsPlainSSHUsernames(t *testing.T) {
+	for _, u := range []string{"git@host:o/r.git", "ssh://git@host/o/r.git", "https://host/o/r.git"} {
+		if got, err := Normalize(u); err != nil || got != "host/o/r" {
+			t.Errorf("%s: %q %v", u, got, err)
+		}
 	}
 }

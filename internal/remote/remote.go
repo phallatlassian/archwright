@@ -26,20 +26,25 @@ func Normalize(raw string) (string, error) {
 		return "", errors.New("remote URL is empty or has surrounding whitespace")
 	}
 	if strings.ContainsAny(raw, " \t\r\n\x00") || strings.HasPrefix(raw, "-") {
-		return "", fmt.Errorf("remote URL %q is malformed", raw)
+		return "", errors.New("remote URL is malformed")
 	}
 	var host, port, path string
 	if i := strings.Index(raw, "://"); i >= 0 {
 		scheme := strings.ToLower(raw[:i])
 		if scheme == "file" {
-			return "", fmt.Errorf("%q is a file:// URL; Sites are registered by their remote URL, not a local clone (ADR 0019)", raw)
+			return "", errors.New("a file:// URL is refused; Sites are registered by their remote URL, not a local clone (ADR 0019)")
 		}
 		if _, ok := defaultPorts[scheme]; !ok {
-			return "", fmt.Errorf("remote URL %q must be https, http, ssh, git or user@host:path", raw)
+			return "", errors.New("remote URL must be https, http, ssh, git or user@host:path")
 		}
 		u, err := url.Parse(raw)
 		if err != nil || u.Hostname() == "" {
-			return "", fmt.Errorf("remote URL %q is malformed", raw)
+			return "", errors.New("remote URL is malformed")
+		}
+		if u.User != nil {
+			if _, hasPassword := u.User.Password(); hasPassword || scheme != "ssh" {
+				return "", errCredentials(u.Hostname())
+			}
 		}
 		host, port, path = strings.ToLower(u.Hostname()), u.Port(), u.Path
 		if port == defaultPorts[scheme] {
@@ -48,18 +53,25 @@ func Normalize(raw string) (string, error) {
 	} else {
 		m := scpLike.FindStringSubmatch(raw)
 		if m == nil || strings.HasPrefix(raw, ".") || strings.HasPrefix(raw, "~") || strings.HasPrefix(m[2], ":") || strings.Contains(raw, `\`) {
-			return "", fmt.Errorf("%q is not a remote URL; local paths are refused because Sites are registered by remote URL (ADR 0019)", raw)
+			return "", errors.New("not a remote URL; local paths are refused because Sites are registered by remote URL (ADR 0019)")
+		}
+		if strings.Contains(strings.SplitN(m[2], "/", 2)[0], "@") {
+			return "", errors.New("remote URL may not carry credentials; rely on your configured git credentials (ssh keys, credential helper)")
 		}
 		host, path = strings.ToLower(m[1]), m[2]
 	}
 	path = strings.TrimSuffix(strings.Trim(path, "/"), ".git")
 	if path == "" || slices.Contains(strings.Split(path, "/"), "..") {
-		return "", fmt.Errorf("remote URL %q names no repository", raw)
+		return "", errors.New("remote URL names no repository")
 	}
 	if port != "" {
 		host += ":" + port
 	}
 	return host + "/" + path, nil
+}
+
+func errCredentials(host string) error {
+	return fmt.Errorf("remote URL for %s may not carry credentials; rely on your configured git credentials (ssh keys, credential helper)", host)
 }
 
 // Name is the repository name a Site defaults to, lowercased: the last path

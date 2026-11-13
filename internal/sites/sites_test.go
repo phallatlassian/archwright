@@ -215,6 +215,29 @@ func TestRegisterRefusals(t *testing.T) {
 	}
 }
 
+func TestRegisterAndDetectRefuseCredentialURLsAndPersistNothing(t *testing.T) {
+	e := setup(t)
+	for _, u := range []string{"https://user:s3cret@git.example.com/o/two.git", "https://s3cret@git.example.com/o/two.git", "ssh://git:s3cret@git.example.com/o/two.git"} {
+		e.hosts.create(t, "o/two", map[string]string{"x": "x"})
+		_, err := e.m.Register(RegisterInput{Name: "x", URL: u, BaseBranch: "main", Gates: &store.Gates{}})
+		if err == nil || strings.Contains(err.Error(), "s3cret") || !strings.Contains(err.Error(), "credentials") {
+			t.Errorf("%s: %v", u, err)
+		}
+		if _, err := e.m.Detect(u); err == nil || strings.Contains(err.Error(), "s3cret") {
+			t.Errorf("detect %s: %v", u, err)
+		}
+		e.assertNoClonesOrSites(t, u)
+	}
+}
+
+func TestRegisterAcceptsPlainUsernameURLs(t *testing.T) {
+	e := setup(t)
+	e.hosts.create(t, "o/two", map[string]string{"x": "x"})
+	if _, err := e.m.Register(RegisterInput{Name: "x", URL: host + "o/two.git", BaseBranch: "main", Gates: &store.Gates{}}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRegisterLocalPathsExplainWhy(t *testing.T) {
 	e := setup(t)
 	_, err := e.m.Register(RegisterInput{URL: e.dev, Gates: &store.Gates{}})
