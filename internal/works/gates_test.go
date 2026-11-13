@@ -72,7 +72,7 @@ func newGateRig(t *testing.T, gates store.Gates) *gateRig {
 		t.Fatal(err)
 	}
 	g.job = job
-	if g.warden, err = g.r.StartFor(RoleWarden, t.TempDir(), RunContext{Job: job.ID, Guild: "engineering"}); err != nil {
+	if g.warden, err = g.r.StartFor(RoleWarden, t.TempDir(), RunContext{Job: job.ID, Guild: "masonry"}); err != nil {
 		t.Fatal(err)
 	}
 	wt, err := sm.CreateWorktree(job.ID, store.KindIntegration, "")

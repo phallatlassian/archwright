@@ -26,7 +26,7 @@ func newReviewRigGates(t *testing.T, gates store.Gates, script ...*ReviewReport)
 	rv := NewFakeReviewer(script...)
 	g.r.Configure(func(name string) (Guild, error) {
 		switch name {
-		case "engineering", ReviewGuild:
+		case "masonry", ReviewGuild:
 			return Guild{Name: name, Standards: name + " standards."}, nil
 		}
 		return Guild{}, errInvalidInput
@@ -88,7 +88,7 @@ func TestPassOnBothAxesAllowsGoAhead(t *testing.T) {
 	var st struct{ Granted bool }
 	g.ok(g.warden, "pr_go_ahead_status", `{}`, &st)
 	if !st.Granted {
-		t.Fatal("engineering Warden cannot see the go-ahead")
+		t.Fatal("masonry Warden cannot see the go-ahead")
 	}
 }
 
@@ -126,7 +126,7 @@ func TestSpecFallsBackAndWithNothingIsNotEvaluated(t *testing.T) {
 	}
 
 	// the Plan step's brief and the original request stand in for a missing writ
-	g.ok(g.arch, "set_plan", `{"job_id":"`+g.job.ID+`","steps":[{"id":"a","guild":"engineering","title":"notes","brief":"Add a notes file"},{"id":"b","guild":"review","title":"review","brief":"ignored","blocked_by":["a"]}]}`, nil)
+	g.ok(g.arch, "set_plan", `{"job_id":"`+g.job.ID+`","steps":[{"id":"a","guild":"masonry","title":"notes","brief":"Add a notes file"},{"id":"b","guild":"hallmark","title":"review","brief":"ignored","blocked_by":["a"]}]}`, nil)
 	r = g.review().Reviews[1]
 	if r.SpecBasis != store.SpecPlanAndRequest || r.Overall != store.VerdictPass || !strings.Contains(r.Brief, "Add a notes file") || strings.Contains(r.Brief, "ignored") {
 		t.Fatalf("%+v", r)
@@ -195,7 +195,7 @@ func TestOneAutomaticReworkThenPark(t *testing.T) {
 		t.Fatalf("%+v", rw)
 	}
 	g.fails(g.arch, "issue_review_rework", g.jobArgs(), spool.CodeConflict) // only once
-	g.fails(g.arch, "request_review", g.jobArgs(), spool.CodeConflict)      // Engineering has not handed back
+	g.fails(g.arch, "request_review", g.jobArgs(), spool.CodeConflict)      // Masonry has not handed back
 	var st ReviewState
 	g.ok(g.arch, "show_review", g.jobArgs(), &st)
 	if st.Next != "await_rework_handback" || len(st.Reviews[0].ReworkConstraints) != 2 {
@@ -266,20 +266,20 @@ func TestReviewWardenIsFreshAndReadOnly(t *testing.T) {
 	g.commit("a.go", "x")
 	g.handBack("p")
 	g.review()
-	g.ok(g.warden, "handback", handbackJSON("done", `"SECRET-ENGINEERING-HANDBACK"`, ""), nil)
+	g.ok(g.warden, "handback", handbackJSON("done", `"SECRET-MASONRY-HANDBACK"`, ""), nil)
 	g.review()
 	reqs := g.rv.Requests()
 	if len(reqs) != 2 || reqs[0].Env.Run == reqs[1].Env.Run || reqs[0].Env.Run == g.warden.Run {
 		t.Fatalf("review runs are not fresh: %+v", reqs)
 	}
-	// nothing of Engineering's reaches it: not its brief, its standards, its results or handback
+	// nothing of Masonry's reaches it: not its brief, its standards, its results or handback
 	for _, req := range reqs {
-		for _, leak := range []string{"Add login", "engineering standards", "fake://", "SECRET-ENGINEERING", "fake runner"} {
+		for _, leak := range []string{"Add login", "masonry standards", "fake://", "SECRET-MASONRY", "fake runner"} {
 			if strings.Contains(req.Brief, leak) {
-				t.Errorf("review brief leaks Engineering's %q", leak)
+				t.Errorf("review brief leaks Masonry's %q", leak)
 			}
 		}
-		if !strings.Contains(req.Brief, "review standards.") || !strings.Contains(req.Brief, "do not re-run") && !strings.Contains(req.Brief, "Do not re-run") {
+		if !strings.Contains(req.Brief, "hallmark standards.") || !strings.Contains(req.Brief, "do not re-run") && !strings.Contains(req.Brief, "Do not re-run") {
 			t.Errorf("brief: %s", req.Brief)
 		}
 	}
@@ -307,7 +307,7 @@ func TestReviewWardenIsFreshAndReadOnly(t *testing.T) {
 	g.fails(env, "handback", handbackJSON("done", `"x"`, ""), spool.CodeInvalidInput)
 	g.fails(env, "pr_go_ahead", g.jobArgs(), spool.CodeForbidden)
 	g.fails(env, "request_review", g.jobArgs(), spool.CodeForbidden)
-	// and an Engineering Warden cannot report a verdict
+	// and an Masonry Warden cannot report a verdict
 	g.fails(g.warden, "report_review", `{"standards":{"verdict":"pass"},"spec":{"verdict":"pass"}}`, spool.CodeInvalidInput)
 }
 

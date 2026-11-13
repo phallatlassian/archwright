@@ -6,6 +6,6 @@ parameters:
     required: true
 steps:
   - id: review
-    guild: review
+    guild: hallmark
     task: "Review this work on the Standards and Spec axes: {{subject}}"
     outputs: [verdict]

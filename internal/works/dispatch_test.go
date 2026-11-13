@@ -29,7 +29,7 @@ func newRig(t *testing.T, script map[string][]WrightResult) *rig {
 	r, st := newRuns(t)
 	runner := NewFakeRunner(script)
 	r.Configure(func(name string) (Guild, error) {
-		if name != "engineering" {
+		if name != "masonry" {
 			return Guild{}, errInvalidInput
 		}
 		return Guild{Name: name, Standards: "Write tests first."}, nil
@@ -38,7 +38,7 @@ func newRig(t *testing.T, script map[string][]WrightResult) *rig {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w, err := r.StartFor(RoleWarden, t.TempDir(), RunContext{Job: job.ID, Guild: "engineering"})
+	w, err := r.StartFor(RoleWarden, t.TempDir(), RunContext{Job: job.ID, Guild: "masonry"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +158,7 @@ func TestDispatchStoresBriefRenderedWithGuildStandards(t *testing.T) {
 func TestWrightResultIsSchemaChecked(t *testing.T) {
 	g := newRig(t, nil)
 	// a Wright that holds the run's credentials but sends a bad shape is refused
-	w, err := g.r.StartFor(RoleWright, t.TempDir(), RunContext{Job: g.job.ID, Guild: "engineering", DispatchID: "none"})
+	w, err := g.r.StartFor(RoleWright, t.TempDir(), RunContext{Job: g.job.ID, Guild: "masonry", DispatchID: "none"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,9 +188,9 @@ func TestWrightResultIsSchemaChecked(t *testing.T) {
 
 func TestRunnerFailureFailsTheDispatch(t *testing.T) {
 	r, st := newRuns(t)
-	r.Configure(func(string) (Guild, error) { return Guild{Name: "engineering"}, nil }, silentRunner{})
+	r.Configure(func(string) (Guild, error) { return Guild{Name: "masonry"}, nil }, silentRunner{})
 	job, _ := st.CreateJob("J", "")
-	w, _ := r.StartFor(RoleWarden, t.TempDir(), RunContext{Job: job.ID, Guild: "engineering"})
+	w, _ := r.StartFor(RoleWarden, t.TempDir(), RunContext{Job: job.ID, Guild: "masonry"})
 	if resp := call(t, w, "x", "dispatch_wright", `{"piece":"p","brief":`+goodBrief+`}`); !resp.OK {
 		t.Fatalf("%+v", resp)
 	}
@@ -254,11 +254,11 @@ func TestReworkIsCountedPerPieceThenFails(t *testing.T) {
 
 func TestReworkLimitIsPerGuild(t *testing.T) {
 	r, st := newRuns(t)
-	r.Configure(func(string) (Guild, error) { return Guild{Name: "engineering", ReworkRounds: 1}, nil },
+	r.Configure(func(string) (Guild, error) { return Guild{Name: "masonry", ReworkRounds: 1}, nil },
 		NewFakeRunner(map[string][]WrightResult{"p": {failedResult, failedResult, failedResult}}))
 	job, _ := st.CreateJob("J", "")
 	g := &rig{t: t, r: r, st: st, job: job}
-	g.warden, _ = r.StartFor(RoleWarden, t.TempDir(), RunContext{Job: job.ID, Guild: "engineering"})
+	g.warden, _ = r.StartFor(RoleWarden, t.TempDir(), RunContext{Job: job.ID, Guild: "masonry"})
 	g.dispatch("p")
 	if d := g.rework("p"); d.Round != 1 {
 		t.Fatalf("%+v", d)
@@ -397,7 +397,7 @@ func TestWardenIsScopedToItsJobAndGuild(t *testing.T) {
 	g.fails(loose, "dispatch_wright", `{"piece":"x","brief":`+goodBrief+`}`, spool.CodeInvalidInput)
 	// another Job's Warden cannot see this Job's piece
 	other, _ := g.st.CreateJob("other", "")
-	ow, _ := g.r.StartFor(RoleWarden, t.TempDir(), RunContext{Job: other.ID, Guild: "engineering"})
+	ow, _ := g.r.StartFor(RoleWarden, t.TempDir(), RunContext{Job: other.ID, Guild: "masonry"})
 	g.fails(ow, "inspect_wright", `{"piece":"p"}`, spool.CodeNotFound)
 	g.fails(ow, "accept_piece", `{"piece":"p"}`, spool.CodeNotFound)
 	// an unknown Guild cannot dispatch
@@ -407,9 +407,9 @@ func TestWardenIsScopedToItsJobAndGuild(t *testing.T) {
 
 func TestDispatchFailsClosedWithoutRunner(t *testing.T) {
 	r, st := newRuns(t)
-	r.Configure(func(string) (Guild, error) { return Guild{Name: "engineering"}, nil }, nil)
+	r.Configure(func(string) (Guild, error) { return Guild{Name: "masonry"}, nil }, nil)
 	job, _ := st.CreateJob("J", "")
-	w, _ := r.StartFor(RoleWarden, t.TempDir(), RunContext{Job: job.ID, Guild: "engineering"})
+	w, _ := r.StartFor(RoleWarden, t.TempDir(), RunContext{Job: job.ID, Guild: "masonry"})
 	if resp := call(t, w, "x", "dispatch_wright", `{"piece":"p","brief":`+goodBrief+`}`); resp.OK || resp.Error.Code != spool.CodeInvalidInput {
 		t.Fatalf("%+v", resp)
 	}

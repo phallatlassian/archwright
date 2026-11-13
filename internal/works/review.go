@@ -12,15 +12,15 @@ import (
 )
 
 // ReviewGuild is the Guild whose Warden carries out reviews (ADR 0012).
-const ReviewGuild = "review"
+const ReviewGuild = "hallmark"
 
 // MaxReviewReworks is how many times a failed review sends the Job back to
-// Engineering automatically; the next fail parks the Job (ADR 0012).
+// Masonry automatically; the next fail parks the Job (ADR 0012).
 const MaxReviewReworks = 1
 
 // ReviewRequest is what a ReviewRunner is given to carry out one review: a
 // fresh Warden run that reports through the spool in Env. Nothing of
-// Engineering's context is in it, only the code and the spec to judge it by.
+// Masonry's context is in it, only the code and the spec to judge it by.
 type ReviewRequest struct {
 	Env      RunEnv
 	Job      string
@@ -159,7 +159,7 @@ func requestReview(c *callCtx, in json.RawMessage) (any, error) {
 	return ReviewInfo{ReviewID: rev.ID, Seq: rev.Seq, Status: rev.Status, SHA: rev.SHA, SpecBasis: rev.SpecBasis}, nil
 }
 
-// startReview issues Review for a Job as a separate task after Engineering's
+// startReview issues Review for a Job as a separate task after Masonry's
 // handback: a fresh Warden run in a detached read-only worktree (ADR 0012).
 func (r *Runs) startReview(jobID string) (store.Review, error) {
 	job, err := r.st.GetJob(jobID)
@@ -192,7 +192,7 @@ func (r *Runs) startReview(jobID string) (store.Review, error) {
 
 	hb, err := r.st.LatestHandback(jobID)
 	if errors.Is(err, store.ErrNotFound) {
-		return store.Review{}, fmt.Errorf("nothing to review: Engineering has not handed back: %w", store.ErrConflict)
+		return store.Review{}, fmt.Errorf("nothing to review: Masonry has not handed back: %w", store.ErrConflict)
 	}
 	if err != nil {
 		return store.Review{}, err
@@ -201,7 +201,7 @@ func (r *Runs) startReview(jobID string) (store.Review, error) {
 		return store.Review{}, fmt.Errorf("the latest handback is %s; Review follows a done handback: %w", hb.Status, store.ErrConflict)
 	}
 	if gr, err := r.st.GateRunFor(hb.ID); err == nil && gr.Status == store.GateRunFailed {
-		return store.Review{}, fmt.Errorf("the handback's gates failed; Engineering fixes those before Review: %w", store.ErrConflict)
+		return store.Review{}, fmt.Errorf("the handback's gates failed; Masonry fixes those before Review: %w", store.ErrConflict)
 	}
 	reviews, err := r.st.Reviews(jobID)
 	if err != nil {
@@ -213,7 +213,7 @@ func (r *Runs) startReview(jobID string) (store.Review, error) {
 			return store.Review{}, fmt.Errorf("job %q already has a review running: %w", jobID, store.ErrConflict)
 		}
 		if last.ReworkedAt != nil && hb.ID <= last.ReworkFloor() {
-			return store.Review{}, fmt.Errorf("the rework is issued but Engineering has not handed back since: %w", store.ErrConflict)
+			return store.Review{}, fmt.Errorf("the rework is issued but Masonry has not handed back since: %w", store.ErrConflict)
 		}
 	}
 	if _, _, err := sm.IntegrationTip(jobID); err != nil {
@@ -396,7 +396,7 @@ func (r *Runs) afterReview(rev store.Review) (string, error) {
 	}
 }
 
-// reworkConstraints turns a failed review's findings into constraints for Engineering.
+// reworkConstraints turns a failed review's findings into constraints for Masonry.
 func reworkConstraints(rev store.Review) []string {
 	var out []string
 	for _, ax := range []struct {
@@ -501,7 +501,7 @@ func showReview(c *callCtx, in json.RawMessage) (any, error) {
 // ReworkInfo is the answer to issue_review_rework.
 type ReworkInfo struct {
 	ReviewID    string   `json:"review_id"`
-	Constraints []string `json:"constraints"` // the findings, as constraints for Engineering's briefs
+	Constraints []string `json:"constraints"` // the findings, as constraints for Masonry's briefs
 	Next        string   `json:"next"`
 }
 
@@ -529,7 +529,7 @@ func issueReviewRework(c *callCtx, in json.RawMessage) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return ReworkInfo{ReviewID: last.ID, Constraints: last.ReworkConstraints, Next: "Dispatch Engineering with these constraints in its briefs; when it hands back, request_review again."}, nil
+	return ReworkInfo{ReviewID: last.ID, Constraints: last.ReworkConstraints, Next: "Dispatch Masonry with these constraints in its briefs; when it hands back, request_review again."}, nil
 }
 
 func prGoAhead(c *callCtx, in json.RawMessage) (any, error) {

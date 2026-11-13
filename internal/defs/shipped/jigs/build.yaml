@@ -6,11 +6,11 @@ parameters:
     required: true
 steps:
   - id: build
-    guild: engineering
+    guild: masonry
     task: "Implement: {{ticket}}"
     outputs: [diff]
   - id: review
-    guild: review
+    guild: hallmark
     task: "Review the implementation of: {{ticket}}"
     inputs: [build.diff]
     blocked_by: [build]

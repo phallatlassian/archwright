@@ -13,7 +13,7 @@ import (
 
 var job = store.Job{ID: "job-1", Title: "Add <login>"}
 
-var decision = store.Ask{ID: "ask-1", JobID: "job-1", Asker: "wright", Guild: "engineering", Kind: store.AskDecision, Blocking: true, Why: "two schemes fit",
+var decision = store.Ask{ID: "ask-1", JobID: "job-1", Asker: "wright", Guild: "masonry", Kind: store.AskDecision, Blocking: true, Why: "two schemes fit",
 	Questions: []store.Question{
 		{ID: "scheme", Text: "Which scheme?", Options: []string{"jwt", "session"}, Default: "session"},
 		{ID: "tags", Text: "Which extras?", Options: []string{"a", "b"}, Multiple: true},
