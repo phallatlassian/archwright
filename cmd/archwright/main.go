@@ -30,6 +30,12 @@ const usage = `usage: archwright <command>
   site register --url U --typecheck C --lint C --test C [--name N] [--base-branch B] [--cap N]
                                            register a remote repository as a Site (the trust act); the Works
                                            keeps its own clone; gates must be given. Local paths are refused
+  site gates NAME [--typecheck C] [--lint C] [--test C]
+                                           propose new gate commands (unset ones stay); takes effect only once approved
+  site gate-changes [--status pending|approved|rejected]
+                                           list proposed gate changes
+  site gate-approve ID                     approve a proposed change (asks you to confirm at a terminal)
+  site gate-reject ID                      reject a proposed change
   site list                                list Sites
   site remove NAME                         unregister a Site and delete its clone (Job history is kept)
   site resolve DIR                         show the Site whose remote is DIR's git origin; refused if unregistered
@@ -171,6 +177,69 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 			}
 		})
 		return call("POST", "/sites", in)
+	case "site gates":
+		name, err := arg(args, 2)
+		if err != nil {
+			return err
+		}
+		fs := flag.NewFlagSet("site gates", flag.ContinueOnError)
+		in := map[string]string{}
+		for _, g := range []string{"typecheck", "lint", "test"} {
+			fs.Func(g, g+" gate command (\"\" for none)", func(v string) error { in[g] = v; return nil })
+		}
+		if err := fs.Parse(args[3:]); err != nil {
+			return err
+		}
+		if len(in) == 0 {
+			return errors.New("give at least one of --typecheck, --lint, --test")
+		}
+		return call("POST", "/sites/"+url.PathEscape(name)+"/gates", in)
+	case "site gate-changes":
+		fs := flag.NewFlagSet("site gate-changes", flag.ContinueOnError)
+		status := fs.String("status", "", "only changes with this status")
+		if err := fs.Parse(args[2:]); err != nil {
+			return err
+		}
+		return call("GET", "/gate-changes?status="+url.QueryEscape(*status), nil)
+	case "site gate-reject":
+		id, err := arg(args, 2)
+		if err != nil {
+			return err
+		}
+		return call("POST", "/gate-changes/"+url.PathEscape(id)+"/reject", nil)
+	case "site gate-approve":
+		id, err := arg(args, 2)
+		if err != nil {
+			return err
+		}
+		if !isTerminal(stdin) {
+			return errors.New("approving gate commands needs a developer at a terminal; run this yourself, not from a script or agent")
+		}
+		c, err := connect()
+		if err != nil {
+			return err
+		}
+		var pending []store.GateChange
+		if err := c.Do("GET", "/gate-changes?status=pending", nil, &pending); err != nil {
+			return err
+		}
+		for _, ch := range pending {
+			if ch.ID != id {
+				continue
+			}
+			fmt.Fprintf(stdout, "Site %s will run these commands on every handback:\n  typecheck: %s\n  lint:      %s\n  test:      %s\nApprove? [y/N] ", ch.Site, ch.Gates.Typecheck, ch.Gates.Lint, ch.Gates.Test)
+			var answer string
+			fmt.Fscanln(stdin, &answer)
+			if answer != "y" && answer != "Y" && answer != "yes" {
+				return errors.New("not approved")
+			}
+			var site json.RawMessage
+			if err := c.Do("POST", "/gate-changes/"+url.PathEscape(id)+"/approve", nil, &site); err != nil {
+				return err
+			}
+			return emit(site)
+		}
+		return fmt.Errorf("no pending gate change %q", id)
 	case "worktree create":
 		id, err := arg(args, 2)
 		if err != nil {
@@ -253,6 +322,16 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 		return emit(map[string]bool{"stopped": true})
 	}
 	return errors.New(usage)
+}
+
+// isTerminal reports whether r is an interactive terminal.
+func isTerminal(r io.Reader) bool {
+	f, ok := r.(*os.File)
+	if !ok {
+		return false
+	}
+	fi, err := f.Stat()
+	return err == nil && fi.Mode()&os.ModeCharDevice != 0 && fi.Mode()&os.ModeDevice != 0
 }
 
 // absPath makes a CLI path absolute against the working directory; "" stays "".
