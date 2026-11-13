@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 
@@ -61,7 +62,7 @@ func Serve(ctx context.Context, d paths.Dirs, ready chan<- struct{}) error {
 	if err != nil {
 		return err
 	}
-	defer lock.Close() // releases the flock
+	defer lock.Close()
 	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		if errors.Is(err, syscall.EWOULDBLOCK) {
 			return ErrAlreadyRunning
@@ -90,7 +91,19 @@ func Serve(ctx context.Context, d paths.Dirs, ready chan<- struct{}) error {
 	if err := writeInfo(d, info); err != nil {
 		return err
 	}
-	defer os.Remove(d.PidFile())
+	// release drops the pid file and flock. It runs before the listener closes
+	// so a stopped Works is never observed as down while still holding the lock.
+	var once sync.Once
+	release := func() {
+		once.Do(func() {
+			lock.Close() // releases the flock
+			// A successor may already have replaced the pid file.
+			if cur, err := ReadInfo(d); err == nil && cur.PID == info.PID {
+				os.Remove(d.PidFile())
+			}
+		})
+	}
+	defer release()
 	if ready != nil {
 		close(ready)
 	}
@@ -102,6 +115,7 @@ func Serve(ctx context.Context, d paths.Dirs, ready chan<- struct{}) error {
 		return err
 	case <-ctx.Done():
 	}
+	release()
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	return srv.Shutdown(shutdownCtx)
