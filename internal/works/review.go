@@ -179,7 +179,7 @@ func (r *Runs) startReview(jobID string) (store.Review, error) {
 	case closed:
 		return store.Review{}, fmt.Errorf("%w: the Works is shutting down", errInvalidInput)
 	case reviewer == nil:
-		return store.Review{}, fmt.Errorf("%w: no review runner is configured", errInvalidInput)
+		return store.Review{}, fmt.Errorf("%w: review runners arrive with the runner adapter, which is not yet available", errInvalidInput)
 	case sm == nil:
 		return store.Review{}, fmt.Errorf("%w: no Site manager is configured to check out the code", errInvalidInput)
 	case src == nil:
@@ -434,11 +434,11 @@ func (r *Runs) reviewNext(job store.Job, reviews []store.Review) string {
 	case last.Status == store.ReviewErrored:
 		return "request_review"
 	case last.Overall == store.VerdictPass:
-		if job.PRGoAhead != "" {
-			return "go_ahead_granted"
-		}
 		if r.reviewStale(last) != nil {
 			return "request_review"
+		}
+		if job.PRGoAhead != "" {
+			return "go_ahead_granted"
 		}
 		return "pr_go_ahead"
 	case last.Overall == store.VerdictFail:
@@ -566,5 +566,9 @@ func prGoAheadStatus(c *callCtx, in json.RawMessage) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"granted": job.PRGoAhead != ""}, nil
+	granted := false
+	if last, err := c.st.LatestReview(job.ID); job.PRGoAhead != "" && err == nil && last.Status == store.ReviewReported && last.Overall == store.VerdictPass {
+		granted = c.runs.reviewStale(last) == nil
+	}
+	return map[string]any{"granted": granted}, nil
 }

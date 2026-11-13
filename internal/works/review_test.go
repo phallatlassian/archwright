@@ -398,3 +398,42 @@ func TestRunningReviewIsErroredWhenTheWorksRestarts(t *testing.T) {
 		t.Fatalf("%+v", got)
 	}
 }
+
+func TestGoAheadDoesNotOutliveTheReviewedCode(t *testing.T) {
+	g := newReviewRig(t)
+	g.writ()
+	g.commit("notes.md", "x")
+	g.handBack("p")
+	g.review()
+	g.ok(g.arch, "pr_go_ahead", g.jobArgs(), nil)
+
+	g.commit("more.md", "y")
+	g.ok(g.warden, "handback", handbackJSON("done", `"again"`, ""), nil)
+	var st struct{ Granted bool }
+	g.ok(g.warden, "pr_go_ahead_status", `{}`, &st)
+	var rs ReviewState
+	g.ok(g.arch, "show_review", g.jobArgs(), &rs)
+	if st.Granted || rs.Next != "request_review" {
+		t.Fatalf("stale go-ahead honoured: granted=%v next=%s", st.Granted, rs.Next)
+	}
+	g.fails(g.arch, "pr_go_ahead", g.jobArgs(), spool.CodeConflict)
+
+	rs = g.review()
+	if rs.Next != "pr_go_ahead" || g.job2().PRGoAhead != "" {
+		t.Fatalf("a new review inherited the old go-ahead: next=%s", rs.Next)
+	}
+	g.ok(g.warden, "pr_go_ahead_status", `{}`, &st)
+	if st.Granted {
+		t.Fatal("granted without a go-ahead for the new review")
+	}
+}
+
+func TestRequestReviewExplainsMissingRunner(t *testing.T) {
+	g := newGateRig(t, store.Gates{Test: "true"})
+	g.commit("a.go", "x")
+	g.handBack("p")
+	resp := g.call(g.arch, "request_review", `{"job_id":"`+g.job.ID+`"}`)
+	if resp.OK || resp.Error.Code != spool.CodeInvalidInput || !strings.Contains(resp.Error.Message, "runner adapter") {
+		t.Fatalf("%+v", resp)
+	}
+}

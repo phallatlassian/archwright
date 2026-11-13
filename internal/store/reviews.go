@@ -138,6 +138,9 @@ func (s *Store) NewReview(jobID string, handbackID int64, branch, sha, specBasis
 		return Review{}, err
 	}
 	at := s.stamp()
+	if _, err := tx.Exec("UPDATE jobs SET pr_go_ahead_at = NULL WHERE id = ?", jobID); err != nil {
+		return Review{}, err
+	}
 	v := Review{ID: newID("rev-"), JobID: jobID, Seq: seq, HandbackID: handbackID, Branch: branch, SHA: sha, Status: ReviewRunning, SpecBasis: specBasis}
 	v.Brief = render(v)
 	if _, err := tx.Exec("INSERT INTO reviews (id, job_id, seq, handback_id, branch, sha, status, spec_basis, brief, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
