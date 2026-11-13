@@ -1,6 +1,7 @@
 package works
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/phallatlassian/archwright/internal/store"
@@ -53,6 +54,15 @@ func (r *Runs) liveDispatches(jobID string) ([]store.Dispatch, error) {
 	return live, nil
 }
 
+// holdJob pauses an open Job so no new Wright starts; a Job already paused stays so.
+func (r *Runs) holdJob(id string) error {
+	if err := r.st.PauseJob(id); err != nil && !errors.Is(err, store.ErrConflict) {
+		return err
+	}
+	r.sched.setPaused(id, true)
+	return nil
+}
+
 // CancelJob stops a Job's Wrights, cancels its open asks and discards the Job.
 func (r *Runs) CancelJob(id string) (map[string]any, error) {
 	job, err := r.st.GetJob(id)
@@ -61,6 +71,9 @@ func (r *Runs) CancelJob(id string) (map[string]any, error) {
 	}
 	if job.Outcome != "" {
 		return nil, fmt.Errorf("job %q is already %s: %w", id, job.Outcome, store.ErrConflict)
+	}
+	if err := r.holdJob(id); err != nil { // no Warden can start another Wright while the Job is being cancelled
+		return nil, err
 	}
 	live, err := r.liveDispatches(id)
 	if err != nil {
@@ -127,6 +140,11 @@ func (r *Runs) DeleteJob(id string) (map[string]any, error) {
 	job, err := r.st.GetJob(id)
 	if err != nil {
 		return nil, err
+	}
+	if job.Outcome == "" {
+		if err := r.holdJob(id); err != nil { // closes the window for a new Wright between the check and the discard
+			return nil, err
+		}
 	}
 	live, err := r.liveDispatches(id)
 	if err != nil {

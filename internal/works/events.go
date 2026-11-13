@@ -18,11 +18,12 @@ const (
 )
 
 // cursorOf reads where a reader resumes: Last-Event-ID, as EventSource sends
-// on reconnect, or the after query parameter. Zero starts from the first event.
+// on reconnect, else the after query parameter. Zero starts from the first event.
 func cursorOf(r *http.Request) (int64, error) {
-	raw := r.URL.Query().Get("after")
+	// A reconnecting EventSource keeps its URL, so the id it last saw wins over the one it first asked for.
+	raw := r.Header.Get("Last-Event-ID")
 	if raw == "" {
-		raw = r.Header.Get("Last-Event-ID")
+		raw = r.URL.Query().Get("after")
 	}
 	if raw == "" {
 		return 0, nil
