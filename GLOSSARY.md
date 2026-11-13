@@ -13,7 +13,7 @@ The factory's long-running daemon: holds Jobs, runs Guilds, serves the dashboard
 _Avoid_: server, backend, the Archwright
 
 **Site**:
-A git repository registered with the Works, whose project-level configuration the developer has chosen to trust. A Job belongs to exactly one Site.
+A git repository, registered with the Works by remote URL, whose project-level configuration the developer has chosen to trust. The Works keeps its own clone of it and never touches the developer's checkout (ADR 0019). A Job belongs to exactly one Site.
 _Avoid_: Project, repo, workspace
 
 **Runner**:
