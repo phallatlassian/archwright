@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -91,6 +92,13 @@ func (c *callCtx) warden() (Guild, error) {
 	if c.run.ctx.Job == "" || c.run.ctx.Guild == "" {
 		return Guild{}, fmt.Errorf("%w: this run is not bound to a Job and Guild", errInvalidInput)
 	}
+	job, err := c.st.GetJob(c.run.ctx.Job)
+	if err != nil {
+		return Guild{}, err
+	}
+	if job.ParkedFor != "" {
+		return Guild{}, fmt.Errorf("job %q is parked for the Archwright: %w", job.ID, store.ErrConflict)
+	}
 	c.runs.mu.Lock()
 	src := c.runs.guilds
 	c.runs.mu.Unlock()
@@ -171,7 +179,8 @@ func reworkWright(c *callCtx, in json.RawMessage) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, err := c.pieceOf(a.Piece); err != nil {
+	piece, err := c.pieceOf(a.Piece)
+	if err != nil {
 		return nil, err
 	}
 	b, err := parseBrief(a.Brief)
@@ -179,7 +188,7 @@ func reworkWright(c *callCtx, in json.RawMessage) (any, error) {
 		return nil, err
 	}
 	raw, _ := json.Marshal(b)
-	p, d, err := c.st.Rework(c.run.ctx.Job, a.Piece, g.reworkLimit(), a.Reason, a.Diagnosis, raw, b.Render(g.Name, g.Standards, p0(c, a.Piece)+1, a.Reason))
+	p, d, err := c.st.Rework(c.run.ctx.Job, a.Piece, g.reworkLimit(), a.Reason, a.Diagnosis, raw, b.Render(g.Name, g.Standards, piece.Reworks+1, a.Reason))
 	if err != nil {
 		return nil, err
 	}
@@ -190,15 +199,6 @@ func reworkWright(c *callCtx, in json.RawMessage) (any, error) {
 		return nil, err
 	}
 	return DispatchInfo{DispatchID: d.ID, Piece: d.Piece, Round: d.Round, Status: store.DispatchRunning}, nil
-}
-
-// p0 is the piece's rework count so far, which names the round being rendered.
-func p0(c *callCtx, piece string) int {
-	p, err := c.st.GetPiece(c.run.ctx.Job, piece)
-	if err != nil {
-		return 0
-	}
-	return p.Reworks
 }
 
 // Inspection is what a Warden sees of a piece: never any flags.
@@ -269,6 +269,11 @@ func handback(c *callCtx, in json.RawMessage) (any, error) {
 	for _, p := range pieces {
 		if p.Guild == c.run.ctx.Guild {
 			mine = append(mine, p)
+		}
+	}
+	for _, p := range mine {
+		if d, err := c.st.LatestDispatch(p.JobID, p.Piece); err == nil && d.Status == store.DispatchRunning {
+			return nil, fmt.Errorf("piece %q still has a Wright running: %w", p.Piece, store.ErrConflict)
 		}
 	}
 	if err := a.Validate(mine); err != nil {
@@ -367,20 +372,28 @@ func listFlags(c *callCtx, in json.RawMessage) (any, error) {
 // run ends when the Runner returns; a dispatch that never reported then fails.
 func (r *Runs) launch(d store.Dispatch) error {
 	r.mu.Lock()
-	runner, root := r.runner, r.spoolRoot
+	runner, root, closed := r.runner, r.spoolRoot, r.bg.Err() != nil
+	if !closed {
+		r.wg.Add(1) // under mu, so Close cannot Wait between the check and the Add
+	}
 	r.mu.Unlock()
+	if closed {
+		return fmt.Errorf("%w: the Works is shutting down", errInvalidInput)
+	}
 	if runner == nil {
+		r.wg.Done()
 		return fmt.Errorf("%w: no runner is configured", errInvalidInput)
 	}
 	env, err := r.StartFor(RoleWright, root, RunContext{Job: d.JobID, Guild: d.Guild, DispatchID: d.ID})
 	if err != nil {
+		r.wg.Done()
 		return err
 	}
 	if err := r.st.AttachRun(d.ID, env.Run); err != nil {
 		r.End(env.Run)
+		r.wg.Done()
 		return err
 	}
-	r.wg.Add(1)
 	go func() {
 		defer r.wg.Done()
 		runErr := runner.Run(r.bg, RunRequest{Env: env, Job: d.JobID, Piece: d.Piece, DispatchID: d.ID, Brief: d.Rendered})
@@ -390,7 +403,9 @@ func (r *Runs) launch(d store.Dispatch) error {
 				msg = "the run failed: " + runErr.Error()
 			}
 			raw, _ := json.Marshal(WrightResult{Status: ResultFailed, Uncertainty: msg})
-			r.st.RecordResult(d.ID, raw)
+			if err := r.st.RecordResult(d.ID, raw); err != nil {
+				log.Printf("dispatch %s: recording failure: %v", d.ID, err)
+			}
 		}
 		r.End(env.Run)
 	}()

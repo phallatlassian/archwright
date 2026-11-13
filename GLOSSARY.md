@@ -47,3 +47,15 @@ _Avoid_: flow, route, playbook, recipe
 **Writ**:
 A ticket that authorises work; no Wright touches code that no writ authorised.
 _Avoid_: work order
+
+**Piece**:
+One scoped unit of a Job's work that a Warden dispatches to a Wright, and may send back for rework before accepting.
+_Avoid_: subtask, chunk
+
+**Brief**:
+The schema-checked instructions a Warden gives a Wright for one piece; the Works rejects an incomplete one and adds the Guild's standards.
+_Avoid_: prompt, ticket
+
+**Handback**:
+The one inspected result a Warden returns to the Archwright: done, partial or failed, with any flags.
+_Avoid_: report, response

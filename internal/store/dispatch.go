@@ -285,25 +285,25 @@ func (s *Store) Rework(jobID, piece string, limit int, reason, diagnosis string,
 
 // AcceptPiece accepts a piece whose latest dispatch reported done.
 func (s *Store) AcceptPiece(jobID, piece string, doneResult func(json.RawMessage) bool) error {
-	p, err := s.GetPiece(jobID, piece)
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	p, err := getPiece(tx, jobID, piece)
 	if err != nil {
 		return err
 	}
 	if p.Status != PieceOpen {
 		return fmt.Errorf("piece %q is %s: %w", piece, p.Status, ErrConflict)
 	}
-	last, err := s.LatestDispatch(jobID, piece)
+	last, err := latestDispatch(tx, jobID, piece)
 	if err != nil {
 		return err
 	}
 	if last.Status != DispatchReported || !doneResult(last.Result) {
 		return fmt.Errorf("piece %q has no done result to accept: %w", piece, ErrConflict)
 	}
-	tx, err := s.db.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
 	if _, err := tx.Exec("UPDATE pieces SET status = ? WHERE job_id = ? AND piece = ?", PieceAccepted, jobID, piece); err != nil {
 		return err
 	}

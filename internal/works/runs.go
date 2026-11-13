@@ -134,7 +134,9 @@ func (r *Runs) End(id string) error {
 
 // Close ends every run.
 func (r *Runs) Close() {
+	r.mu.Lock()
 	r.cancelBg()
+	r.mu.Unlock()
 	r.wg.Wait() // dispatched Wrights end their own runs
 	r.mu.Lock()
 	all := r.runs

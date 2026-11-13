@@ -440,3 +440,16 @@ func writeGuild(dir, name, standards string) error {
 	}
 	return os.WriteFile(filepath.Join(dir, name, "standards.md"), []byte(standards), 0o600)
 }
+
+func TestParkedJobRefusesFurtherDispatch(t *testing.T) {
+	g := newRig(t, map[string][]WrightResult{"p": {doneResult}, "q": {failedResult, failedResult, failedResult}})
+	g.dispatch("p")
+	g.dispatch("q")
+	g.ok(g.warden, "accept_piece", `{"piece":"p"}`, nil)
+	g.rework("q")
+	g.rework("q")
+	g.rework("q")
+	g.ok(g.warden, "handback", handbackJSON("partial", `"x"`, ""), nil)
+	g.fails(g.warden, "dispatch_wright", `{"piece":"r","brief":`+goodBrief+`}`, spool.CodeConflict)
+	g.fails(g.warden, "handback", handbackJSON("partial", `"x"`, ""), spool.CodeConflict)
+}
