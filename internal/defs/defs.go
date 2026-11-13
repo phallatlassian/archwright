@@ -7,6 +7,7 @@ package defs
 import (
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"regexp"
 	"sort"
@@ -211,6 +212,7 @@ func (r *Registry) Guild(name string) (Guild, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	g, ok := r.guilds[name]
+	g.Wrights = maps.Clone(g.Wrights) // callers cannot change the registry's copy
 	return g, ok
 }
 

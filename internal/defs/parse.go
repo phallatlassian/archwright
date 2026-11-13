@@ -187,9 +187,7 @@ func readJigs(fsys fs.FS, source string) map[string]attempt[Jig] {
 	for _, e := range entries {
 		stem, ok := strings.CutSuffix(e.Name(), ".yaml")
 		if !ok {
-			if stem, ok = strings.CutSuffix(e.Name(), ".yml"); !ok {
-				continue
-			}
+			continue
 		}
 		if e.IsDir() || strings.HasPrefix(e.Name(), ".") {
 			continue

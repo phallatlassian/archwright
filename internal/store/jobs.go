@@ -223,8 +223,12 @@ func (s *Store) DecidePlan(jobID string, approve bool) (Plan, error) {
 		return Plan{}, err
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec("UPDATE plans SET approval = ? WHERE job_id = ? AND approval = ?", state, jobID, ApprovalPending); err != nil {
+	res, err := tx.Exec("UPDATE plans SET approval = ? WHERE job_id = ? AND approval = ?", state, jobID, ApprovalPending)
+	if err != nil {
 		return Plan{}, err
+	}
+	if n, _ := res.RowsAffected(); n != 1 { // the Plan changed since it was read
+		return Plan{}, fmt.Errorf("the Plan of job %q changed while being decided: %w", jobID, ErrConflict)
 	}
 	if err := appendEvent(tx, at, jobID, typ, map[string]string{}); err != nil {
 		return Plan{}, err
