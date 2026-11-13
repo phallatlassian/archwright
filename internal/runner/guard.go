@@ -31,6 +31,9 @@ var forbiddenFlags = []string{
 	"--allowedtools", "--allowed-tools", "--allow-tools", "--tools",
 	"--add-dir", "--bare",
 	"-c", "--config", "--profile",
+	// Codex flags that skip or replace the developer's own hook trust, rules
+	// and config, or toggle features as -c does.
+	"--dangerously-bypass-hook-trust", "--ignore-rules", "--ignore-user-config", "--enable", "--disable",
 }
 
 // forbiddenValues are values refused wherever they appear in an argument.

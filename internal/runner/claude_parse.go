@@ -2,6 +2,7 @@ package runner
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 )
 
@@ -186,4 +187,15 @@ func contentText(c json.RawMessage) string {
 func quoted(b []byte) json.RawMessage {
 	q, _ := json.Marshal(string(b))
 	return q
+}
+
+func (p *claudeParser) final() *Result   { return p.result }
+func (p *claudeParser) denied() []Denial { return p.denials }
+
+// violation fails closed: a session in a mode wider than we asked for is killed.
+func (p *claudeParser) violation() string {
+	if p.sawInit && p.mode != "" && !permittedModes[p.mode] {
+		return fmt.Sprintf("session reported permission mode %q, which the never-list refuses", p.mode)
+	}
+	return ""
 }
