@@ -1,0 +1,16 @@
+name: build
+description: "Build a feature from a spec or ticket that is specific enough to implement, then review it."
+parameters:
+  - name: ticket
+    description: The ticket or spec to build, with its constraints
+    required: true
+steps:
+  - id: build
+    guild: engineering
+    task: "Implement: {{ticket}}"
+    outputs: [diff]
+  - id: review
+    guild: review
+    task: "Review the implementation of: {{ticket}}"
+    inputs: [build.diff]
+    blocked_by: [build]

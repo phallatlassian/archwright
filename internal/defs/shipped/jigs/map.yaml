@@ -1,0 +1,12 @@
+name: map
+description: "Map an ambition too large for one spec into decision tickets with blocking edges, and name the frontier ticket."
+parameters:
+  - name: ambition
+    description: The large or vague ambition
+    required: true
+steps:
+  - id: map
+    guild: chancery
+    task: "Map the decisions this ambition depends on as decision tickets with blocking edges, and name the frontier ticket: {{ambition}}"
+    outputs: [map, frontier]
+    checkpoint: true

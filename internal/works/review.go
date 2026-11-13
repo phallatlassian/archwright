@@ -12,7 +12,7 @@ import (
 )
 
 // ReviewGuild is the Guild whose Warden carries out reviews (ADR 0012).
-const ReviewGuild = "hallmark"
+const ReviewGuild = "review"
 
 // MaxReviewReworks is how many times a failed review sends the Job back to
 // Engineering automatically; the next fail parks the Job (ADR 0012).

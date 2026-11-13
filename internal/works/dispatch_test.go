@@ -3,8 +3,6 @@ package works
 import (
 	"context"
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -415,30 +413,6 @@ func TestDispatchFailsClosedWithoutRunner(t *testing.T) {
 	if resp := call(t, w, "x", "dispatch_wright", `{"piece":"p","brief":`+goodBrief+`}`); resp.OK || resp.Error.Code != spool.CodeInvalidInput {
 		t.Fatalf("%+v", resp)
 	}
-}
-
-func TestGuildsFromDir(t *testing.T) {
-	dir := t.TempDir()
-	if err := writeGuild(dir, "engineering", "Be kind."); err != nil {
-		t.Fatal(err)
-	}
-	src := GuildsFromDir(dir)
-	g, err := src("engineering")
-	if err != nil || g.Standards != "Be kind." {
-		t.Fatalf("%+v %v", g, err)
-	}
-	for _, name := range []string{"", "nope", "../x", ".hidden"} {
-		if _, err := src(name); err == nil {
-			t.Errorf("%q resolved", name)
-		}
-	}
-}
-
-func writeGuild(dir, name, standards string) error {
-	if err := os.MkdirAll(filepath.Join(dir, name), 0o700); err != nil {
-		return err
-	}
-	return os.WriteFile(filepath.Join(dir, name, "standards.md"), []byte(standards), 0o600)
 }
 
 func TestParkedJobRefusesFurtherDispatch(t *testing.T) {

@@ -37,11 +37,27 @@ type Step struct {
 	Brief      string   `json:"brief,omitempty"`      // what the step asks for; the Spec axis of a Review falls back to it (ADR 0012)
 }
 
+// Plan approval states. A Plan instantiated from a Jig needs none; an ad hoc
+// Plan waits for the developer's go or no-go before any work is dispatched.
+const (
+	ApprovalNotRequired = "not_required"
+	ApprovalPending     = "pending"
+	ApprovalApproved    = "approved"
+	ApprovalRejected    = "rejected"
+)
+
 // Plan is the task graph held for one Job.
 type Plan struct {
 	JobID     string    `json:"job_id"`
 	Steps     []Step    `json:"steps"`
+	Jig       string    `json:"jig,omitempty"` // the Jig it was instantiated from; empty for an ad hoc Plan
+	Approval  string    `json:"approval"`
 	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// Cleared says whether work may be dispatched for the Plan.
+func (p Plan) Cleared() bool {
+	return p.Approval == ApprovalNotRequired || p.Approval == ApprovalApproved
 }
 
 func (s *Store) stamp() string { return s.now().UTC().Format(time.RFC3339Nano) }
@@ -118,9 +134,27 @@ func (s *Store) ListJobs() ([]Job, error) {
 	return jobs, rows.Err()
 }
 
-// SetPlan validates and stores the Job's Plan, replacing any previous one.
+// SetPlan validates and stores an ad hoc Plan for the Job, replacing any
+// previous one. It awaits the developer's go or no-go.
 func (s *Store) SetPlan(jobID string, steps []Step) (Plan, error) {
-	if err := validateSteps(steps); err != nil {
+	return s.setPlan(jobID, "", steps)
+}
+
+// SetJigPlan stores a Plan instantiated from the named Jig, which starts
+// without approval.
+func (s *Store) SetJigPlan(jobID, jig string, steps []Step) (Plan, error) {
+	if jig == "" {
+		return Plan{}, errors.New("a Jig Plan needs the Jig's name")
+	}
+	return s.setPlan(jobID, jig, steps)
+}
+
+func (s *Store) setPlan(jobID, jig string, steps []Step) (Plan, error) {
+	approval := ApprovalPending
+	if jig != "" {
+		approval = ApprovalNotRequired
+	}
+	if err := ValidateSteps(steps); err != nil {
 		return Plan{}, err
 	}
 	if _, err := s.GetJob(jobID); err != nil {
@@ -136,11 +170,12 @@ func (s *Store) SetPlan(jobID string, steps []Step) (Plan, error) {
 		return Plan{}, err
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec(`INSERT INTO plans (job_id, steps, updated_at) VALUES (?,?,?)
-		ON CONFLICT(job_id) DO UPDATE SET steps = excluded.steps, updated_at = excluded.updated_at`, jobID, string(raw), at); err != nil {
+	if _, err := tx.Exec(`INSERT INTO plans (job_id, steps, jig, approval, updated_at) VALUES (?,?,?,?,?)
+		ON CONFLICT(job_id) DO UPDATE SET steps = excluded.steps, jig = excluded.jig, approval = excluded.approval, updated_at = excluded.updated_at`,
+		jobID, string(raw), jig, approval, at); err != nil {
 		return Plan{}, err
 	}
-	if err := appendEvent(tx, at, jobID, "plan.set", map[string]int{"steps": len(steps)}); err != nil {
+	if err := appendEvent(tx, at, jobID, "plan.set", map[string]any{"steps": len(steps), "jig": jig, "approval": approval}); err != nil {
 		return Plan{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -153,7 +188,7 @@ func (s *Store) SetPlan(jobID string, steps []Step) (Plan, error) {
 func (s *Store) GetPlan(jobID string) (Plan, error) {
 	p := Plan{JobID: jobID}
 	var raw, at string
-	err := s.db.QueryRow("SELECT steps, updated_at FROM plans WHERE job_id = ?", jobID).Scan(&raw, &at)
+	err := s.db.QueryRow("SELECT steps, jig, approval, updated_at FROM plans WHERE job_id = ?", jobID).Scan(&raw, &p.Jig, &p.Approval, &at)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Plan{}, fmt.Errorf("plan for job %q: %w", jobID, ErrNotFound)
 	}
@@ -167,7 +202,41 @@ func (s *Store) GetPlan(jobID string) (Plan, error) {
 	return p, nil
 }
 
-func validateSteps(steps []Step) error {
+// DecidePlan records the developer's go (approve) or no-go on a Job's ad hoc
+// Plan. Only a pending Plan can be decided; a rejected one is replaced by a
+// new Plan, and a Jig Plan never needs a decision.
+func (s *Store) DecidePlan(jobID string, approve bool) (Plan, error) {
+	p, err := s.GetPlan(jobID)
+	if err != nil {
+		return Plan{}, err
+	}
+	if p.Approval != ApprovalPending {
+		return Plan{}, fmt.Errorf("the Plan of job %q is %s, not awaiting a decision: %w", jobID, p.Approval, ErrConflict)
+	}
+	state, typ := ApprovalRejected, "plan.rejected"
+	if approve {
+		state, typ = ApprovalApproved, "plan.approved"
+	}
+	at := s.stamp()
+	tx, err := s.db.Begin()
+	if err != nil {
+		return Plan{}, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec("UPDATE plans SET approval = ? WHERE job_id = ? AND approval = ?", state, jobID, ApprovalPending); err != nil {
+		return Plan{}, err
+	}
+	if err := appendEvent(tx, at, jobID, typ, map[string]string{}); err != nil {
+		return Plan{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Plan{}, err
+	}
+	return s.GetPlan(jobID)
+}
+
+// ValidateSteps checks a Plan step list: required fields, unique ids, known blockers, no cycles.
+func ValidateSteps(steps []Step) error {
 	ids := map[string]*Step{}
 	for i := range steps {
 		st := &steps[i]

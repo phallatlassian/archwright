@@ -50,6 +50,12 @@ const usage = `usage: archwright <command>
   job show ID                              show a Job and its Plan
   plan set ID [FILE]                       set a Job's Plan from JSON ({"steps":[...]}); stdin if no FILE
   plan show ID                             show a Job's Plan
+  plan approve ID | reject ID             the developer's go or no-go on a Job's ad hoc Plan (approve asks you to confirm
+                                           at a terminal); a Jig Plan needs neither, and no work is dispatched before a go
+  jig start ID JIG [--param NAME=VALUE]    start a Job's Plan from a Jig; it starts without approval
+  catalogue show                           the loaded Guilds and Jigs, and any definitions that failed to load
+  catalogue reload                         re-read definitions from the config directory; an invalid one keeps its
+                                           previous good version and is reported
   queue show                               show running and queued Wrights, the caps and any runner pause
   ask list [--status S] [--holder H] [--job ID]
                                            list asks (an agent's structured questions; ADR 0015)
@@ -310,6 +316,70 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 			return err
 		}
 		return call("GET", "/jobs/"+id+"/plan", nil)
+	case "catalogue show":
+		return call("GET", "/catalogue", nil)
+	case "catalogue reload":
+		return call("POST", "/catalogue/reload", nil)
+	case "jig start":
+		id, err := arg(args, 2)
+		if err != nil {
+			return err
+		}
+		jig, err := arg(args, 3)
+		if err != nil {
+			return err
+		}
+		fs := flag.NewFlagSet("jig start", flag.ContinueOnError)
+		params := map[string]string{}
+		fs.Func("param", "a Jig parameter, NAME=VALUE (repeatable)", func(v string) error {
+			k, val, ok := strings.Cut(v, "=")
+			if !ok || k == "" {
+				return fmt.Errorf("--param %q is not NAME=VALUE", v)
+			}
+			params[k] = val
+			return nil
+		})
+		if err := fs.Parse(args[4:]); err != nil {
+			return err
+		}
+		return call("POST", "/jobs/"+url.PathEscape(id)+"/jig", map[string]any{"jig": jig, "params": params})
+	case "plan reject":
+		id, err := arg(args, 2)
+		if err != nil {
+			return err
+		}
+		return call("POST", "/jobs/"+url.PathEscape(id)+"/plan/reject", nil)
+	case "plan approve":
+		id, err := arg(args, 2)
+		if err != nil {
+			return err
+		}
+		if !isTerminal(stdin) {
+			return errors.New("approving a Plan needs a developer at a terminal; run this yourself, not from a script or agent")
+		}
+		c, err := connect()
+		if err != nil {
+			return err
+		}
+		var plan store.Plan
+		if err := c.Do("GET", "/jobs/"+url.PathEscape(id)+"/plan", nil, &plan); err != nil {
+			return err
+		}
+		_, _ = fmt.Fprintf(stdout, "Job %s: this Plan was made ad hoc and no work starts until you approve it:\n", id)
+		for _, st := range plan.Steps {
+			_, _ = fmt.Fprintf(stdout, "  %s [%s] %s%s\n", st.ID, st.Guild, st.Title, map[bool]string{true: " (checkpoint)", false: ""}[st.Checkpoint])
+		}
+		_, _ = fmt.Fprint(stdout, "Approve? [y/N] ")
+		var answer string
+		_, _ = fmt.Fscanln(stdin, &answer)
+		if answer != "y" && answer != "Y" && answer != "yes" {
+			return errors.New("not approved")
+		}
+		var out json.RawMessage
+		if err := c.Do("POST", "/jobs/"+url.PathEscape(id)+"/plan/approve", nil, &out); err != nil {
+			return err
+		}
+		return emit(out)
 	case "plan set":
 		id, err := arg(args, 2)
 		if err != nil {
