@@ -88,7 +88,7 @@ func TestPassOnBothAxesAllowsGoAhead(t *testing.T) {
 	var st struct{ Granted bool }
 	g.ok(g.warden, "pr_go_ahead_status", `{}`, &st)
 	if !st.Granted {
-		t.Fatal("engineering Warden cannot see the go-ahead")
+		t.Fatal("masonry Warden cannot see the go-ahead")
 	}
 }
 
