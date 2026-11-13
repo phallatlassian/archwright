@@ -15,7 +15,7 @@ folders are out of scope and deliberately not mapped here.
 
 ## The three chosen guilds
 
-### Engineering Guild — changes code
+### Masonry Guild — changes code
 
 | Skill | Layer it belongs to | Note |
 |---|---|---|
@@ -26,7 +26,7 @@ folders are out of scope and deliberately not mapped here.
 | `prototype` | Wright | Throwaway, answers a design question. Output is a finding, not a diff. |
 | `codebase-design` | Guild standard | Vocabulary for deep modules. Not a task — something the Guild holds and every Wright brief inherits. |
 
-### Research Guild — establishes what is true
+### Survey Guild — establishes what is true
 
 | Skill | Layer it belongs to | Note |
 |---|---|---|
@@ -38,7 +38,7 @@ folders are out of scope and deliberately not mapped here.
 trace the code paths, read the logs, establish the mechanism — has no skill behind it.
 Expect to write one.
 
-### Review Guild — inspects
+### Hallmark Guild — inspects
 
 | Skill | Layer it belongs to | Note |
 |---|---|---|
@@ -97,21 +97,21 @@ writing. Defer it until the factory is big enough to break itself.
 `domain-modeling`, `writing-for-agents`, `handoff`
 
 A chapter house is where a guild keeps its records. GLOSSARY.md, ADRs, and the steering
-files agents read are a distinct craft from research: Research finds out what is true, the
+files agents read are a distinct craft from research: Survey finds out what is true, the
 Chapter decides what the project *calls* things and writes it down so the next agent
 inherits it.
 
 `writing-for-agents` is load-bearing beyond its own guild — it is the skill that keeps
 every Wright brief legible, and the brief is the highest-leverage artifact in the factory.
 
-Most droppable of the three proposals; fold into Research if the roster is getting wide.
+Most droppable of the three proposals; fold into Survey if the roster is getting wide.
 
 ### Deliberately not guilds
 
 - **Assay / QA.** Types, lint and tests are deterministic. They are a gate every handback
   must pass, not a craft exercising judgment. Make them a precondition on a Warden's
   handback instead of a department.
-- **Herald / comms.** `pr` is one skill. Leave it in Review.
+- **Herald / comms.** `pr` is one skill. Leave it in Hallmark.
 - **Release / delivery.** Premature until something actually deploys.
 
 ---
@@ -154,7 +154,7 @@ Additions to the list in [archwright-layers.md](./archwright-layers.md).
   whole job, or is it a router over durable state kept somewhere else (a tracker, a repo)?
   This determines whether Wardens persist between tasks and whether a job can survive
   longer than one agent session. Decide early; it propagates everywhere.
-- **Guild roster at launch.** Engineering, Research, Review are given. Chancery looks
+- **Guild roster at launch.** Masonry, Survey, Hallmark are given. Chancery looks
   necessary rather than optional. Millwright can wait until the factory is big enough to
   break itself. Chapter is a judgment call.
 - **Skill as Warden vs. skill as brief.** `implement-spec`, `code-review` and `triage` are
@@ -164,7 +164,7 @@ Additions to the list in [archwright-layers.md](./archwright-layers.md).
 - **Where deterministic checks attach.** Types, lint and tests are a gate, not a craft.
   Confirm they sit on the Warden's handback rather than anywhere else, and decide what a
   Warden does when a check fails and its Wright cannot fix it.
-- **Research's missing skill.** Codebase investigation — trace, read, establish mechanism,
+- **Survey's missing skill.** Codebase investigation — trace, read, establish mechanism,
   cite — has no skill. Write one, or widen `research` beyond primary-source documents.
 - **How fast to let it run.** Each automated trigger added is an accelerator. Which trigger
   comes first, what throttles it, and what has to earn trust before the next one is added?

@@ -21,14 +21,14 @@ Context for spec work, not the spec.
 | Guild | Craft | Handback |
 |---|---|---|
 | **Chancery** | Intent into work orders | A spec, or a set of tickets with declared dependencies |
-| **Research** | Establishing what is true | A claim with evidence and stated uncertainty |
-| **Engineering** | Changing code | A diff that compiles, passes its tests, and matches the codebase |
-| **Review** | Inspecting work | A verdict against standards and against the spec |
+| **Survey** | Establishing what is true | A claim with evidence and stated uncertainty |
+| **Masonry** | Changing code | A diff that compiles, passes its tests, and matches the codebase |
+| **Hallmark** | Inspecting work | A verdict against standards and against the spec |
 | **Chapter** | Naming and recording | A settled term, a glossary entry, an ADR |
 | **Millwright** | Maintaining the factory | A change to the factory's own instructions and checks |
 
 Roughly the order work moves through them, though nothing forces that path: a small fix
-goes straight to Engineering, and a question goes straight to Research.
+goes straight to Masonry, and a question goes straight to Survey.
 
 ---
 
@@ -76,7 +76,7 @@ authorised.
 
 ---
 
-## Research — establishing what is true
+## Survey — establishing what is true
 
 **Charter.** Answer questions about the world, the codebase, and the documentation, with
 evidence attached.
@@ -86,13 +86,17 @@ evidence attached.
 **Draws on.** `research`, `improve-codebase-architecture`, and codebase investigation —
 which has no skill yet and will need writing.
 
-Research's tools are read-only. That is the whole of its discipline: it cannot change
+A survey establishes the lie of the land before anyone builds on it; the Domesday survey
+was the original. Measurements come back with their error stated, and a surveyor does not
+build.
+
+Survey's tools are read-only. That is the whole of its discipline: it cannot change
 anything, so it cannot be tempted to fix what it finds. Its definition of a finished job
 is not *a working change* but *a claim someone else can act on without re-deriving it*.
 
 > **A story.** The Archwright needs to know whether the payment provider's v3 API can carry
 > the idempotency guarantees the current integration relies on, before anyone commits to a
-> migration. It hands Research the question.
+> migration. It hands Survey the question.
 >
 > The Warden splits it three ways and dispatches Wrights: one reads the provider's v3
 > documentation and changelog, one traces every place the current code depends on
@@ -117,7 +121,7 @@ present a guess with the same confidence as a citation.
 
 ---
 
-## Engineering — changing code
+## Masonry — changing code
 
 **Charter.** Build the thing, to the standard, with proof that it works.
 
@@ -126,12 +130,15 @@ present a guess with the same confidence as a citation.
 **Draws on.** `implement`, `implement-spec`, `tdd`, `diagnosing-bugs`, `prototype`, with
 `codebase-design` as a standing standard every brief inherits.
 
-Engineering holds the conventions of the codebase — how modules are shaped, where seams
-go, what gets tested through the interface. A task handed to Engineering comes back having
+Masons built to a lodge's standards, course by course, each stone set on those already
+laid. Here the courses are tickets and the standards are the codebase's.
+
+Masonry holds the conventions of the codebase — how modules are shaped, where seams
+go, what gets tested through the interface. A task handed to Masonry comes back having
 met those conventions whether or not the Archwright thought to ask.
 
 > **A story.** Chancery's multi-region work has produced seven tickets with their blocking
-> edges drawn. Four are unblocked. The Archwright hands the whole set to Engineering.
+> edges drawn. Four are unblocked. The Archwright hands the whole set to Masonry.
 >
 > The Warden works it as a task graph rather than a list. It reads the frontier — the
 > tickets whose dependencies are all closed — and dispatches a Wright to each of the four
@@ -155,7 +162,7 @@ encounters, or hand back work whose checks do not pass.
 
 ---
 
-## Review — inspecting work
+## Hallmark — inspecting work
 
 **Charter.** Read finished work cold and say whether it is good, and whether it is what was
 asked for.
@@ -164,12 +171,16 @@ asked for.
 **Handback.** A verdict on two axes, with each finding tied to a line and a reason.
 **Draws on.** `code-review` (Standards and Spec as parallel sub-agents), `pr`, `triage`.
 
+Goldsmiths' Hall tested metal against a legal standard and struck its mark on what
+passed — the *hallmark*, a verdict stamped on the work itself. Work that failed got no
+mark. Here the mark is the verdict: Standards and Spec, each finding tied to its reason.
+
 The two axes are separate on purpose and are usually failed separately. **Standards** asks
 whether the code follows the codebase's documented conventions. **Spec** asks whether it
 does what the originating ticket actually asked. Work can pass either while failing the
 other, and the second failure is the one that automated checks never catch.
 
-> **A story.** A diff arrives from Engineering: an endpoint gains a cache, tests pass,
+> **A story.** A diff arrives from Masonry: an endpoint gains a cache, tests pass,
 > types check, the style is impeccable. The Standards axis finds two small things and
 > nothing more.
 >
@@ -182,7 +193,7 @@ other, and the second failure is the one that automated checks never catch.
 > Nothing here is broken. Every check passes. The work is well made and answers a question
 > nobody asked.
 >
-> Review hands back: *Standards pass with two minor notes. Spec fail — cache key does not
+> Hallmark hands back: *Standards pass with two minor notes. Spec fail — cache key does not
 > match the stated access pattern; the benchmark does not reproduce the reported
 > conditions. Reproduce with distinct users before re-reviewing.* The Archwright now has a
 > real decision to put to the developer: was the ticket wrong, or was the fix?
@@ -203,7 +214,7 @@ outliving the conversation that produced it.
 **Handback.** A settled term in the glossary, an ADR, or a sharpened steering document.
 **Draws on.** `domain-modeling`, `writing-for-agents`, `handoff`.
 
-A chapter house is where a guild keeps its records. Research finds out what is true;
+A chapter house is where a guild keeps its records. Survey finds out what is true;
 Chapter decides what the project *calls* it, so that the next brief, the next ticket and
 the next Wright all mean the same thing by the same word. `writing-for-agents` makes this
 guild load-bearing beyond its own craft: every Wright brief in the factory is a document
@@ -218,7 +229,7 @@ written for an agent, and the brief is the highest-leverage artifact in the syst
 > schema. A large customer is one billing tenant and nine provisioning tenants. Every brief
 > that said "tenant" was clear, and half of them were clear about the wrong noun.
 >
-> The Warden does not rename anything in code yet — that would be an Engineering task, and
+> The Warden does not rename anything in code yet — that would be a Masonry task, and
 > a large one. It settles the language: *account* for the contracting entity, *tenant*
 > reserved for the isolation boundary, with the glossary recording both and explicitly
 > noting the trap. It writes the ADR for why the split exists, so the next person to
@@ -253,14 +264,14 @@ chain into further automated attempts.
 > It finds it. In this job, as in two before it, a Wright spent most of its work
 > rediscovering which of four packages owns the HTTP client — information that exists
 > nowhere in the steering files and has to be re-derived by reading imports every time.
-> Separately, the Spec axis of Review failed once for a reason an automated check could
+> Separately, the Spec axis of Hallmark failed once for a reason an automated check could
 > have caught cold: a new endpoint shipped without the rate-limit annotation every other
 > endpoint carries.
 >
 > It proposes two changes, and they are deliberately different in kind. The first is a
 > navigation note in the steering file naming the owning package — cheap, and it stops
 > three Wrights a week from re-deriving it. The second is a lint rule that fails any route
-> handler lacking the annotation, which turns a judgment Review had to exercise into a gate
+> handler lacking the annotation, which turns a judgment Hallmark had to exercise into a gate
 > nothing can pass by accident.
 >
 > It files both as one change for human review, with the evidence from all three jobs
@@ -276,11 +287,11 @@ its own failures automatically.
 
 Not all six at once.
 
-- **Engineering, Research, Review** — the minimum viable factory. Build, find out, inspect.
+- **Masonry, Survey, Hallmark** — the minimum viable factory. Build, find out, inspect.
 - **Chancery** — necessary rather than optional. Without it, every ambition lands on the
   Archwright, which overloads the one component that must stay able to reason about a whole
   job. It also has the strongest existing skill coverage of the three proposals.
-- **Chapter** — a judgment call. Fold into Research if the roster is getting wide; its
+- **Chapter** — a judgment call. Fold into Survey if the roster is getting wide; its
   stories only start to bite once enough briefs exist for terminology to drift.
 - **Millwright** — defer until the factory is big enough to break itself. The role is real,
   but the available skills barely furnish it, so most of it is new work.
@@ -289,21 +300,21 @@ Not all six at once.
 
 - **Assay / QA.** Types, lint and tests are deterministic. They are a gate every handback
   must pass, not a craft exercising judgment.
-- **Herald / comms.** Writing a PR body is one skill. It lives in Review.
+- **Herald / comms.** Writing a PR body is one skill. It lives in Hallmark.
 - **Release / delivery.** Premature until something actually deploys.
 
 ## Open questions
 
-- **Who owns the frontier?** Chancery draws the dependency edges; Engineering's Warden
-  walks them. If Engineering discovers the graph is wrong mid-job, does it re-plan, or hand
+- **Who owns the frontier?** Chancery draws the dependency edges; Masonry's Warden
+  walks them. If Masonry discovers the graph is wrong mid-job, does it re-plan, or hand
   back to Chancery through the Archwright?
 - **Can a Guild commission another Guild?** Chapter's story has it filing a Chancery
   ticket, and Millwright's has it reporting a pattern to Chapter. Either those edges are
   real and guilds talk sideways, or everything routes through the Archwright and these
   stories need rewriting. The layers doc currently says vertical only.
-- **What Review reviews.** Only Engineering's diffs, or also Chancery's tickets, Research's
+- **What Hallmark inspects.** Only Masonry's diffs, or also Chancery's tickets, Survey's
   findings and Chapter's terms? Everything in the factory is work that could be inspected.
-- **Research without a skill.** Codebase investigation is this guild's commonest job and
-  has nothing written for it. Until it does, Research is one skill deep.
+- **Survey without a skill.** Codebase investigation is this guild's commonest job and
+  has nothing written for it. Until it does, Survey is one skill deep.
 - **Where throttling lives.** If a Warden can dispatch its whole frontier in parallel, what
   caps it — the Guild, the Archwright, or the runner budget?
