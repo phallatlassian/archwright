@@ -120,7 +120,26 @@ type Spawn struct {
 	DisableSandbox bool
 }
 
-// Run is one started run.
+// EffectiveMode is the permission mode the run will have.
+func (s Spawn) EffectiveMode() string {
+	if s.Mode == "" {
+		return ModeDefault
+	}
+	return s.Mode
+}
+
+// SandboxInherited is the sandbox posture of every run: the factory never changes it.
+const SandboxInherited = "inherited"
+
+func newPosture(runner, version string, spawn Spawn, flags []string) Event {
+	return Event{Kind: KindPosture, Posture: &Posture{
+		Runner: runner, Version: version, Mode: spawn.EffectiveMode(), Sandbox: SandboxInherited,
+		Flags: flags, Notices: []string{},
+	}}
+}
+
+// Run is one started run. Its event channel must be drained or abandoned
+// together with the process; a consumer that stops reading holds one goroutine.
 type Run interface {
 	// Events replays every event from the first, then follows the run, and is
 	// closed once the run has ended. It may be called more than once.

@@ -58,9 +58,9 @@ func stubHarness(t *testing.T) harness {
 		t.Fatal(err)
 	}
 	return harness{name: "claude-stub", runner: &Claude{Binary: stub, Grace: time.Second}, request: func(t *testing.T, s scenario) StartRequest {
-		env := map[string]string{"STUB_FIXTURE": stubFixtures[s]}
+		env := map[string]string{"ARCHWRIGHT_STUB_FIXTURE": stubFixtures[s]}
 		if s == scenHang {
-			env["STUB_HOLD"] = "1"
+			env["ARCHWRIGHT_STUB_HOLD"] = "1"
 		}
 		return StartRequest{Brief: "do it", Dir: t.TempDir(), Env: env}
 	}}
@@ -231,8 +231,19 @@ var forbiddenSpawns = map[string]Spawn{
 
 func TestCheckAllowsRestrictingModes(t *testing.T) {
 	for _, m := range []string{"", "default", "plan", "dontAsk"} {
-		if err := Check(Spawn{Mode: m}); err != nil {
+		if err := CheckRequest(StartRequest{Spawn: Spawn{Mode: m}}); err != nil {
 			t.Errorf("mode %q refused: %v", m, err)
 		}
+	}
+}
+
+func TestCheckRefusesForeignEnvironment(t *testing.T) {
+	for _, k := range []string{"HOME", "CLAUDE_CONFIG_DIR", "ANTHROPIC_API_KEY", "XDG_CONFIG_HOME"} {
+		if err := CheckRequest(StartRequest{Env: map[string]string{k: "x"}}); !errors.Is(err, ErrForbidden) {
+			t.Errorf("env %s: %v", k, err)
+		}
+	}
+	if err := CheckRequest(StartRequest{Env: map[string]string{"ARCHWRIGHT_RUN": "r"}}); err != nil {
+		t.Error(err)
 	}
 }

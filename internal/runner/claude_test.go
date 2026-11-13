@@ -112,7 +112,7 @@ func stubRun(t *testing.T, fixture string, env map[string]string) (Run, string) 
 	t.Helper()
 	dir := t.TempDir()
 	stub, _ := filepath.Abs("testdata/stub-claude.sh")
-	e := map[string]string{"STUB_FIXTURE": fixture, "STUB_ARGS": filepath.Join(dir, "args"), "STUB_STDIN": filepath.Join(dir, "stdin"), "STUB_PWD": filepath.Join(dir, "pwd")}
+	e := map[string]string{"ARCHWRIGHT_STUB_FIXTURE": fixture, "ARCHWRIGHT_STUB_ARGS": filepath.Join(dir, "args"), "ARCHWRIGHT_STUB_STDIN": filepath.Join(dir, "stdin"), "ARCHWRIGHT_STUB_PWD": filepath.Join(dir, "pwd")}
 	for k, v := range env {
 		e[k] = v
 	}
@@ -130,7 +130,7 @@ func TestClaudeSpawnIsEphemeralAndStdinClosed(t *testing.T) {
 	run.Result()
 	args, _ := os.ReadFile(filepath.Join(dir, "args"))
 	got := strings.Fields(string(args))
-	if got[0] != "-p" || !strings.Contains(string(args), "the brief") {
+	if got[0] != "-p" || !strings.Contains(string(args), "--\nthe brief") {
 		t.Errorf("args = %q", args)
 	}
 	for _, want := range []string{"--no-session-persistence", "--output-format", "stream-json", "--permission-mode", "default", "--max-turns", "3", "--max-budget-usd", "1.5", "--model", "m1"} {
@@ -186,5 +186,15 @@ func TestClaudeFailedFixtureResult(t *testing.T) {
 	collect(t, run)
 	if res := run.Result(); res.Status != StatusFailed || res.Usage.CostUSD != 0.5 {
 		t.Errorf("result = %+v", res)
+	}
+}
+
+func TestDenialWithoutIDIsNotDuplicated(t *testing.T) {
+	p := &claudeParser{}
+	sys := `{"type":"system","subtype":"permission_denied","tool_name":"Bash","tool_input":{"command":"x"}}`
+	res := `{"type":"result","subtype":"success","result":"r","permission_denials":[{"tool_name":"Bash","tool_input":{"command":"x"}}]}`
+	n := len(p.feed([]byte(sys))) + len(p.feed([]byte(res)))
+	if n != 2 || len(p.denials) != 1 { // the denial and the result
+		t.Errorf("events %d, denials %+v", n, p.denials)
 	}
 }

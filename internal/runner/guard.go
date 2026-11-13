@@ -15,6 +15,9 @@ var ErrForbidden = errors.New("forbidden by the never-list")
 // permittedModes are the permission modes a run may ask for: the runner's
 // default and the two that only restrict it. Every other value, known or not,
 // is refused, so a mode added later fails closed.
+// ModeDefault is the runner's own default permission mode.
+const ModeDefault = "default"
+
 var permittedModes = map[string]bool{"": true, "default": true, "plan": true, "dontAsk": true}
 
 // forbiddenFlags are runner flags refused outright, in any spelling.
@@ -33,8 +36,22 @@ var forbiddenFlags = []string{
 // forbiddenValues are values refused wherever they appear in an argument.
 var forbiddenValues = []string{"bypasspermissions", "danger-full-access", "dangerouslydisablesandbox"}
 
-// Check refuses a request the never-list forbids. An adapter calls it before
-// spawning anything.
+// EnvPrefix is the only prefix a run's extra environment may carry (ADR 0018).
+// Anything else could point the runner at other settings or managed keys.
+const EnvPrefix = "ARCHWRIGHT_"
+
+// CheckRequest refuses a request the never-list forbids. An adapter calls it
+// before spawning anything.
+func CheckRequest(req StartRequest) error {
+	for k := range req.Env {
+		if !strings.HasPrefix(k, EnvPrefix) {
+			return refuse("environment variable %q may not be set; only %s* is allowed", k, EnvPrefix)
+		}
+	}
+	return Check(req.Spawn)
+}
+
+// Check refuses a Spawn the never-list forbids.
 func Check(s Spawn) error {
 	if !permittedModes[s.Mode] {
 		return refuse("permission mode %q is more permissive than the runner's default or unknown", s.Mode)

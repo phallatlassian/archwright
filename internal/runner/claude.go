@@ -38,15 +38,11 @@ func (c *Claude) bin() string {
 	return "claude"
 }
 
-// args builds the flags of one run. The brief is the only free text; every
-// other flag is fixed here or comes from limits, and the permission mode is
+// args builds the flags of one run. The brief is not among them; every
+// flag is fixed here or comes from limits, and the permission mode is
 // always passed explicitly so the run never inherits a looser one.
 func (c *Claude) args(req StartRequest) (flags []string) {
-	mode := req.Spawn.Mode
-	if mode == "" {
-		mode = "default"
-	}
-	flags = []string{"--output-format", "stream-json", "--verbose", "--no-session-persistence", "--permission-mode", mode}
+	flags = []string{"--output-format", "stream-json", "--verbose", "--no-session-persistence", "--permission-mode", req.Spawn.EffectiveMode()}
 	if m := req.Limits.Model; m != "" {
 		flags = append(flags, "--model", m)
 	}
@@ -61,13 +57,13 @@ func (c *Claude) args(req StartRequest) (flags []string) {
 
 // Start implements Runner. Runs are ephemeral and start with stdin closed.
 func (c *Claude) Start(ctx context.Context, req StartRequest) (Run, error) {
-	if err := Check(req.Spawn); err != nil {
+	if err := CheckRequest(req); err != nil {
 		return nil, err
 	}
 	flags := c.args(req)
 	version := c.version(ctx)
 
-	cmd := exec.Command(c.bin(), append([]string{"-p", req.Brief}, flags...)...)
+	cmd := exec.Command(c.bin(), append(append([]string{"-p"}, flags...), "--", req.Brief)...) // "--": the brief is never read as a flag
 	cmd.Dir = req.Dir
 	cmd.Env = os.Environ()
 	for k, v := range req.Env {
@@ -82,15 +78,8 @@ func (c *Claude) Start(ctx context.Context, req StartRequest) (Run, error) {
 		return nil, err
 	}
 
-	mode := req.Spawn.Mode
-	if mode == "" {
-		mode = "default"
-	}
 	r := &claudeRun{log: newLog(), done: make(chan struct{})}
-	r.log.add(Event{Kind: KindPosture, Posture: &Posture{
-		Runner: "claude", Version: version, Mode: mode, Sandbox: "inherited",
-		Flags: flags, Notices: []string{},
-	}})
+	r.log.add(newPosture("claude", version, req.Spawn, flags))
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start claude: %w", err)
 	}

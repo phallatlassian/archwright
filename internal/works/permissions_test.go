@@ -19,7 +19,7 @@ func TestPermissionDeniedSurfacesAsPermissionWanted(t *testing.T) {
 	}
 	stub, _ := filepath.Abs("../runner/testdata/stub-claude.sh")
 	c := &runner.Claude{Binary: stub}
-	run, err := c.Start(context.Background(), runner.StartRequest{Brief: "b", Dir: t.TempDir(), Env: map[string]string{"STUB_FIXTURE": "denied.jsonl"}})
+	run, err := c.Start(context.Background(), runner.StartRequest{Brief: "b", Dir: t.TempDir(), Env: map[string]string{"ARCHWRIGHT_STUB_FIXTURE": "denied.jsonl"}})
 	if err != nil {
 		t.Fatal(err)
 	}

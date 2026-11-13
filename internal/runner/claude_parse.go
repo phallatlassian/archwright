@@ -108,16 +108,18 @@ func (p *claudeParser) blocks(l claudeLine, raw json.RawMessage) []Event {
 }
 
 func (p *claudeParser) denial(tool, id string, input, raw json.RawMessage) []Event {
-	if id != "" && p.seen[id] {
+	d := Denial{Tool: tool, ToolUseID: id, Command: commandOf(input)}
+	key := id
+	if key == "" {
+		key = tool + "\x00" + d.Command
+	}
+	if p.seen[key] {
 		return nil
 	}
 	if p.seen == nil {
 		p.seen = map[string]bool{}
 	}
-	if id != "" {
-		p.seen[id] = true
-	}
-	d := Denial{Tool: tool, ToolUseID: id, Command: commandOf(input)}
+	p.seen[key] = true
 	p.denials = append(p.denials, d)
 	return []Event{{Kind: KindPermissionDenied, Tool: d.Tool, Command: d.Command, ToolUseID: id, Raw: raw}}
 }
@@ -180,6 +182,7 @@ func contentText(c json.RawMessage) string {
 	return string(c)
 }
 
+// quoted JSON-quotes raw bytes that were not JSON themselves.
 func quoted(b []byte) json.RawMessage {
 	q, _ := json.Marshal(string(b))
 	return q

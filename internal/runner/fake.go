@@ -40,21 +40,14 @@ func (f *Fake) Capabilities() Capabilities {
 
 // Start implements Runner.
 func (f *Fake) Start(ctx context.Context, req StartRequest) (Run, error) {
-	if err := Check(req.Spawn); err != nil {
+	if err := CheckRequest(req); err != nil {
 		return nil, err
 	}
 	f.mu.Lock()
 	s := f.script
 	f.mu.Unlock()
-	mode := req.Spawn.Mode
-	if mode == "" {
-		mode = "default"
-	}
 	r := &fakeRun{log: newLog(), done: make(chan struct{}), cancel: make(chan struct{})}
-	r.log.add(Event{Kind: KindPosture, Posture: &Posture{
-		Runner: "fake", Version: "fake", Mode: mode, Sandbox: "inherited",
-		Flags: append([]string{}, req.Spawn.ExtraArgs...), Notices: []string{},
-	}})
+	r.log.add(newPosture("fake", "fake", req.Spawn, append([]string{}, req.Spawn.ExtraArgs...)))
 	go r.play(ctx, s)
 	return r, nil
 }
