@@ -1,0 +1,5 @@
+# Runners are stock vendor CLIs spawned as subprocesses behind a small contract
+
+The Works runs Wright and Warden agents by spawning the stock `claude` and `codex` CLIs headlessly (`claude -p --output-format stream-json`, `codex exec --json`), one adapter per vendor, with no vendor SDK embedded in the Works. This keeps every agent on the same binary, login and managed permission policy as a terminal run, and keeps the Works free of SDK language and version coupling; richer SDK callbacks are given up.
+
+The runner contract is start(brief, working directory, limits), an event stream, cancel, and result (final message, structured output, status, usage). Resume is an optional capability, unused in v1: rework is a fresh run with an amended brief. Adapters normalize events to a small common set and also store the raw vendor event. Each adapter reports capability flags, and a Guild may require capabilities; the Works refuses to bind a Guild to a runner lacking them. A Guild's definition declares its default runner and model and the permitted set, and the Warden may override within that set per Wright.
