@@ -157,10 +157,6 @@ func reject(id, code, msg string) spool.Response {
 // handle answers one request file and removes it. Every request is untrusted.
 func (r *Runs) handle(ru *run, id string) {
 	defer os.Remove(spool.RequestPath(ru.dir, id))
-	if prev, ok := ru.answered[id]; ok { // idempotent by id
-		spool.WriteResponse(ru.dir, prev)
-		return
-	}
 	resp, cache := r.respond(ru, id)
 	if _, err := spool.WriteResponse(ru.dir, resp); err != nil {
 		return
@@ -179,6 +175,9 @@ func (r *Runs) respond(ru *run, id string) (resp spool.Response, cache bool) {
 	}
 	if subtle.ConstantTimeCompare([]byte(req.Token), []byte(ru.token)) != 1 {
 		return reject(id, spool.CodeUnauthorized, "token does not match this run"), false
+	}
+	if prev, ok := ru.answered[id]; ok { // idempotent by id
+		return prev, true
 	}
 	t, ok := catalogue[req.Tool]
 	if !ok {
