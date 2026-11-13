@@ -2,6 +2,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -199,7 +200,10 @@ func tool(args []string, stdin io.Reader, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if len(strings.TrimSpace(string(input))) > 0 && !json.Valid(input) {
+	input = bytes.TrimSpace(input)
+	if len(input) == 0 {
+		input = nil
+	} else if !json.Valid(input) {
 		return errors.New("tool input is not valid JSON")
 	}
 	resp, err := spool.Call(context.Background(), env, *id, name, input, *wait)
