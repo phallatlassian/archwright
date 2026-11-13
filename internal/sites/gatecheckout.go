@@ -66,3 +66,28 @@ func (c *GateCheckout) Release() error {
 	_, err := git(c.site.ClonePath, "worktree", "remove", "--force", c.Dir)
 	return err
 }
+
+// IntegrationTip is the branch and commit a Job's integration branch is at
+// now: what a handback hands back, and what a Review's pass is valid for.
+func (m *Manager) IntegrationTip(jobID string) (branch, sha string, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, site, err := m.jobSite(jobID)
+	if err != nil {
+		return "", "", err
+	}
+	wts, err := m.st.Worktrees(jobID)
+	if err != nil {
+		return "", "", err
+	}
+	integration := activeOf(wts, store.KindIntegration)
+	if len(integration) == 0 {
+		return "", "", fmt.Errorf("job %s has no integration branch", jobID)
+	}
+	branch = integration[0].Branch
+	sha, err = git(site.ClonePath, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch+"^{commit}")
+	if err != nil {
+		return "", "", fmt.Errorf("integration branch %q does not resolve to a commit in site %s", branch, site.Name)
+	}
+	return branch, sha, nil
+}

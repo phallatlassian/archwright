@@ -64,6 +64,10 @@ _Avoid_: notifications, alerts
 The one inspected result a Warden returns to the Archwright: done, partial or failed, with any flags.
 _Avoid_: report, response
 
+**Review**:
+A separate, read-only task issued by the Archwright after Engineering's handback and run by a fresh Warden that shares no context with the builder. It reports Standards and Spec independently as pass, fail or not evaluated, with findings tied to file and line. One fail sends the Job back to Engineering once, automatically; a second parks it. The PR go-ahead needs an overall pass (ADR 0012).
+_Avoid_: code review, QA, approval
+
 **Ask**:
 A structured request for a human, raised by a Warden or Wright: questions with options and a recommended default, a kind (decision, manual step or clarification), and whether it blocks. The Works routes it up (Wright to Warden to Archwright to developer), parks the asking task, and re-dispatches it with the Q&A record once answered. The first answer wins; an Ask never expires.
 _Avoid_: question, prompt, notification

@@ -1,12 +1,17 @@
 package store
 
 import (
+	"database/sql"
 	"encoding/json"
 	"time"
 )
 
 // Needs-you item kinds.
-const NeedsScopeOverlap = "scope-overlap"
+const (
+	NeedsScopeOverlap       = "scope-overlap"
+	NeedsReviewParked       = "review-parked"        // a second failed review parked the Job (ADR 0012)
+	NeedsReviewNotEvaluated = "review-not-evaluated" // a review could not evaluate an axis, so the Job cannot pass
+)
 
 // NeedsYouItem is one entry in the Needs-you inbox.
 type NeedsYouItem struct {
@@ -28,16 +33,27 @@ type NewNeedsYou struct {
 
 // AddNeedsYou files an item in the inbox and reports whether it was new.
 func (s *Store) AddNeedsYou(n NewNeedsYou) (bool, error) {
-	detail, err := json.Marshal(n.Detail)
-	if err != nil {
-		return false, err
-	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return false, err
 	}
 	defer tx.Rollback()
-	at := s.stamp()
+	added, err := addNeedsYou(tx, s.stamp(), n)
+	if err != nil {
+		return false, err
+	}
+	if !added {
+		return false, nil
+	}
+	return true, tx.Commit()
+}
+
+// addNeedsYou files an item inside a transaction, reporting whether it was new.
+func addNeedsYou(tx *sql.Tx, at string, n NewNeedsYou) (bool, error) {
+	detail, err := json.Marshal(n.Detail)
+	if err != nil {
+		return false, err
+	}
 	res, err := tx.Exec("INSERT OR IGNORE INTO needs_you (kind, job_id, site, summary, detail, dedupe_key, created_at) VALUES (?,?,?,?,?,?,?)",
 		n.Kind, n.JobID, n.Site, n.Summary, string(detail), n.DedupeKey, at)
 	if err != nil {
@@ -46,10 +62,7 @@ func (s *Store) AddNeedsYou(n NewNeedsYou) (bool, error) {
 	if c, _ := res.RowsAffected(); c == 0 {
 		return false, nil
 	}
-	if err := appendEvent(tx, at, n.JobID, "needs_you."+n.Kind, map[string]string{"summary": n.Summary}); err != nil {
-		return false, err
-	}
-	return true, tx.Commit()
+	return true, appendEvent(tx, at, n.JobID, "needs_you."+n.Kind, map[string]string{"summary": n.Summary})
 }
 
 // NeedsYou lists the inbox, oldest first.

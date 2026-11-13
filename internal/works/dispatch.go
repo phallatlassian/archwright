@@ -94,6 +94,9 @@ func (c *callCtx) warden() (Guild, error) {
 	if c.run.ctx.Job == "" || c.run.ctx.Guild == "" {
 		return Guild{}, fmt.Errorf("%w: this run is not bound to a Job and Guild", errInvalidInput)
 	}
+	if c.run.ctx.Review != "" {
+		return Guild{}, fmt.Errorf("%w: a Review run only reports through report_review", errInvalidInput)
+	}
 	job, err := c.st.GetJob(c.run.ctx.Job)
 	if err != nil {
 		return Guild{}, err
