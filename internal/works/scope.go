@@ -15,8 +15,8 @@ import (
 // "" means the whole repository.
 func scopePath(s string) string {
 	s = strings.TrimSpace(s)
-	for _, suffix := range []string{"/**", "/*", "**", "*"} {
-		s = strings.TrimSuffix(s, suffix)
+	if i := strings.IndexAny(s, "*?["); i >= 0 {
+		s = s[:strings.LastIndex(s[:i], "/")+1]
 	}
 	s = strings.Trim(path.Clean("/"+s), "/")
 	return s

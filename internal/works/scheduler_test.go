@@ -350,3 +350,22 @@ func TestLimitsFromEnv(t *testing.T) {
 		t.Fatalf("%+v", got)
 	}
 }
+
+func TestScopesOverlapGlobs(t *testing.T) {
+	cases := []struct {
+		a, b string
+		want bool
+	}{
+		{"src/*.go", "src/foo.go", true},
+		{"internal/**/store.go", "internal", true},
+		{"internal/**/store.go", "internal/x/y.go", true},
+		{"src/fo*.go", "src/foo.go", true},
+		{"docs/**", "src/a.go", false},
+		{"src/a?.go", "lib/a.go", false},
+	}
+	for _, c := range cases {
+		if got := scopesOverlap(c.a, c.b); got != c.want {
+			t.Errorf("scopesOverlap(%q,%q)=%v want %v", c.a, c.b, got, c.want)
+		}
+	}
+}
