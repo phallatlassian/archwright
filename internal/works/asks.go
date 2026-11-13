@@ -252,24 +252,29 @@ func (r *Runs) CancelAsk(id, who string) (map[string]any, error) {
 			return nil, err
 		}
 	}
+	if err := r.discard(a.JobID); err != nil {
+		return nil, fmt.Errorf("ask cancelled but the Job could not be closed (close it again): %w", err)
+	}
+	return map[string]any{"ask_id": id, "job_id": a.JobID, "status": store.AskCancelled, "job_outcome": "discarded"}, nil
+}
+
+// discard closes a Job as discarded, removing its worktrees; an already closed Job stays as it is.
+func (r *Runs) discard(jobID string) error {
 	r.mu.Lock()
 	sm := r.sites
 	r.mu.Unlock()
-	job, err := r.st.GetJob(a.JobID)
+	job, err := r.st.GetJob(jobID)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	if job.Outcome == "" {
-		if job.Site != "" && sm != nil {
-			_, err = sm.Close(job.ID, "discarded")
-		} else {
-			err = r.st.CloseJob(job.ID, "discarded")
-		}
-		if err != nil {
-			return nil, fmt.Errorf("ask cancelled but the Job could not be closed (close it again): %w", err)
-		}
+	if job.Outcome != "" {
+		return nil
 	}
-	return map[string]any{"ask_id": id, "job_id": a.JobID, "status": store.AskCancelled, "job_outcome": "discarded"}, nil
+	if job.Site != "" && sm != nil {
+		_, err = sm.Close(job.ID, "discarded")
+		return err
+	}
+	return r.st.CloseJob(job.ID, "discarded")
 }
 
 func (r *Runs) launchResumed(ds []store.Dispatch) {

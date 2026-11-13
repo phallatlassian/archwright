@@ -105,13 +105,14 @@ type scheduler struct {
 	seq         int
 	running     map[string]entry
 	queue       []entry
+	paused      map[string]bool // Jobs the developer paused: none of their queued dispatches start
 	pausedUntil time.Time
 	failures    int
 	timer       *time.Timer
 }
 
 func newScheduler(r *Runs) *scheduler {
-	return &scheduler{r: r, limits: DefaultLimits, backoffBase: defaultBackoffBase, backoffMax: defaultBackoffMax, now: time.Now, running: map[string]entry{}}
+	return &scheduler{r: r, limits: DefaultLimits, backoffBase: defaultBackoffBase, backoffMax: defaultBackoffMax, now: time.Now, running: map[string]entry{}, paused: map[string]bool{}}
 }
 
 // LimitsFromEnv reads the caps from ARCHWRIGHT_MAX_RUNS, ARCHWRIGHT_MAX_RUNS_PER_SITE
@@ -126,6 +127,15 @@ func LimitsFromEnv(getenv func(string) string) Limits {
 
 // Resume re-submits the dispatches left queued by a previous Works, oldest first.
 func (r *Runs) Resume() error {
+	paused, err := r.st.PausedJobs()
+	if err != nil {
+		return err
+	}
+	r.sched.mu.Lock()
+	for _, id := range paused {
+		r.sched.paused[id] = true
+	}
+	r.sched.mu.Unlock()
 	queued, err := r.st.QueuedDispatches()
 	if err != nil {
 		return err
@@ -198,6 +208,9 @@ func (s *scheduler) report(errs map[string]error) {
 
 // blockedLocked says what keeps e from starting, or "" if nothing does.
 func (s *scheduler) blockedLocked(e entry) string {
+	if s.paused[e.d.JobID] {
+		return "the Job is paused"
+	}
 	if len(s.running) >= s.limits.Total {
 		return fmt.Sprintf("overall cap of %d runs", s.limits.Total)
 	}
@@ -251,6 +264,33 @@ func (s *scheduler) pumpLocked() map[string]error {
 		}
 	}
 	return errs
+}
+
+// setPaused holds back (or releases) a Job's queued dispatches. Runs already
+// started carry on.
+func (s *scheduler) setPaused(job string, on bool) {
+	s.mu.Lock()
+	if on {
+		s.paused[job] = true
+	} else {
+		delete(s.paused, job)
+	}
+	errs := s.pumpLocked()
+	s.mu.Unlock()
+	s.report(errs)
+}
+
+// dequeue removes a waiting dispatch, reporting whether it was waiting.
+func (s *scheduler) dequeue(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, e := range s.queue {
+		if e.d.ID == id {
+			s.queue = append(s.queue[:i:i], s.queue[i+1:]...)
+			return true
+		}
+	}
+	return false
 }
 
 func (s *scheduler) wake() {

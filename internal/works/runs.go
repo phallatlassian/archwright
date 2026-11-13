@@ -55,6 +55,10 @@ type Runs struct {
 
 	mu   sync.Mutex
 	runs map[string]*run
+	// cancels stops the run of a started dispatch; cancelled marks the
+	// dispatches the developer cancelled, so their end is not a failure to report.
+	cancels   map[string]context.CancelFunc
+	cancelled map[string]bool
 }
 
 type run struct {
@@ -73,7 +77,7 @@ type run struct {
 // NewRuns returns an empty registry over st.
 func NewRuns(st *store.Store) *Runs {
 	bg, cancel := context.WithCancel(context.Background())
-	r := &Runs{st: st, poll: 25 * time.Millisecond, runs: map[string]*run{}, bg: bg, cancelBg: cancel,
+	r := &Runs{st: st, poll: 25 * time.Millisecond, runs: map[string]*run{}, cancels: map[string]context.CancelFunc{}, cancelled: map[string]bool{}, bg: bg, cancelBg: cancel,
 		spoolRoot: filepath.Join(os.TempDir(), fmt.Sprintf("archwright-%d", os.Getuid()))}
 	r.sched = newScheduler(r)
 	return r

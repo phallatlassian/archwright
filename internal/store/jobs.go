@@ -24,6 +24,8 @@ type Job struct {
 	ParkedFor   string    `json:"parked_for,omitempty"`  // why the Job awaits the Archwright, after a partial handback or a second failed review
 	Writ        string    `json:"writ,omitempty"`        // the ticket that authorised the Job's work, once linked
 	PRGoAhead   string    `json:"pr_go_ahead,omitempty"` // when the Archwright's PR go-ahead was recorded; it needs an overall review pass (ADR 0012)
+	PausedAt    string    `json:"paused_at,omitempty"`   // set while the developer has paused the Job: no new Wright starts
+	PurgedAt    string    `json:"purged_at,omitempty"`   // when the developer purged the Job's raw run content (ADR 0017)
 	CreatedAt   time.Time `json:"created_at"`
 }
 
@@ -97,13 +99,13 @@ func (s *Store) createJob(site, title, description string) (Job, error) {
 	return j, tx.Commit()
 }
 
-const jobCols = "id, title, description, COALESCE(site,''), COALESCE(outcome,''), COALESCE(parked_reason,''), COALESCE(writ,''), COALESCE(pr_go_ahead_at,''), created_at"
+const jobCols = "id, title, description, COALESCE(site,''), COALESCE(outcome,''), COALESCE(parked_reason,''), COALESCE(writ,''), COALESCE(pr_go_ahead_at,''), COALESCE(paused_at,''), COALESCE(purged_at,''), created_at"
 
 // GetJob reads one Job.
 func (s *Store) GetJob(id string) (Job, error) {
 	var j Job
 	var at string
-	err := s.db.QueryRow("SELECT "+jobCols+" FROM jobs WHERE id = ?", id).Scan(&j.ID, &j.Title, &j.Description, &j.Site, &j.Outcome, &j.ParkedFor, &j.Writ, &j.PRGoAhead, &at)
+	err := s.db.QueryRow("SELECT "+jobCols+" FROM jobs WHERE id = ?", id).Scan(&j.ID, &j.Title, &j.Description, &j.Site, &j.Outcome, &j.ParkedFor, &j.Writ, &j.PRGoAhead, &j.PausedAt, &j.PurgedAt, &at)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Job{}, fmt.Errorf("job %q: %w", id, ErrNotFound)
 	}
@@ -125,7 +127,7 @@ func (s *Store) ListJobs() ([]Job, error) {
 	for rows.Next() {
 		var j Job
 		var at string
-		if err := rows.Scan(&j.ID, &j.Title, &j.Description, &j.Site, &j.Outcome, &j.ParkedFor, &j.Writ, &j.PRGoAhead, &at); err != nil {
+		if err := rows.Scan(&j.ID, &j.Title, &j.Description, &j.Site, &j.Outcome, &j.ParkedFor, &j.Writ, &j.PRGoAhead, &j.PausedAt, &j.PurgedAt, &at); err != nil {
 			return nil, err
 		}
 		j.CreatedAt, _ = time.Parse(time.RFC3339Nano, at)
@@ -308,12 +310,21 @@ type execer interface {
 }
 
 func appendEvent(tx execer, at, jobID, typ string, payload any) error {
+	_, err := appendEventID(tx, at, jobID, typ, payload)
+	return err
+}
+
+// appendEventID is appendEvent that returns the new event's id.
+func appendEventID(tx execer, at, jobID, typ string, payload any) (int64, error) {
 	raw, err := json.Marshal(payload)
 	if err != nil {
-		return err
+		return 0, err
 	}
-	_, err = tx.Exec("INSERT INTO events (at, job_id, type, payload) VALUES (?,?,?,?)", at, jobID, typ, string(raw))
-	return err
+	res, err := tx.Exec("INSERT INTO events (at, job_id, type, payload) VALUES (?,?,?,?)", at, jobID, typ, string(raw))
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
 }
 
 // Events returns a Job's events in order.

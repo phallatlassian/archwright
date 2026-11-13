@@ -127,6 +127,22 @@ func (c *callCtx) planCleared() error {
 	return nil
 }
 
+// jobRunnable refuses work for a Job the developer paused or that is closed,
+// including one they cancelled.
+func (c *callCtx) jobRunnable() error {
+	job, err := c.st.GetJob(c.run.ctx.Job)
+	if err != nil {
+		return err
+	}
+	switch {
+	case job.Outcome != "":
+		return fmt.Errorf("job %q is %s: no more work is dispatched for it: %w", job.ID, job.Outcome, store.ErrConflict)
+	case job.PausedAt != "":
+		return fmt.Errorf("job %q is paused by the developer: no work is dispatched until it is resumed: %w", job.ID, store.ErrConflict)
+	}
+	return nil
+}
+
 // pieceOf loads a piece the calling Warden may touch: its own Job and Guild.
 func (c *callCtx) pieceOf(name string) (store.Piece, error) {
 	if err := requireField("piece", name); err != nil {
@@ -185,6 +201,9 @@ func dispatchWright(c *callCtx, in json.RawMessage) (any, error) {
 	if err := c.planCleared(); err != nil {
 		return nil, err
 	}
+	if err := c.jobRunnable(); err != nil {
+		return nil, err
+	}
 	b, err := parseBrief(a.Brief)
 	if err != nil {
 		return nil, err
@@ -212,6 +231,9 @@ func reworkWright(c *callCtx, in json.RawMessage) (any, error) {
 	}
 	g, err := c.warden()
 	if err != nil {
+		return nil, err
+	}
+	if err := c.jobRunnable(); err != nil {
 		return nil, err
 	}
 	piece, err := c.pieceOf(a.Piece)
@@ -468,14 +490,33 @@ func (r *Runs) start(d store.Dispatch) error {
 		r.wg.Done()
 		return err
 	}
+	// Each run has its own context so the developer can cancel one Wright.
+	ctx, cancel := context.WithCancel(r.bg)
+	r.mu.Lock()
+	r.cancels[d.ID] = cancel
+	if r.cancelled[d.ID] {
+		cancel() // cancelled between leaving the queue and starting
+	}
+	r.mu.Unlock()
 	go func() {
 		defer r.wg.Done()
-		runErr := runner.Run(r.bg, RunRequest{Env: env, Job: d.JobID, Piece: d.Piece, DispatchID: d.ID, Brief: d.Rendered})
+		defer cancel()
+		runErr := runner.Run(ctx, RunRequest{Env: env, Job: d.JobID, Piece: d.Piece, DispatchID: d.ID, Brief: d.Rendered})
 		unreported := false
 		if cur, err := r.st.GetDispatch(d.ID); err == nil && cur.Status == store.DispatchRunning {
 			unreported = true
 		}
 		r.End(env.Run)
+		r.mu.Lock()
+		wasCancelled := r.cancelled[d.ID]
+		delete(r.cancels, d.ID)
+		delete(r.cancelled, d.ID)
+		r.mu.Unlock()
+		if wasCancelled && unreported {
+			r.failDispatch(d.ID, cancelledByDeveloper)
+			r.sched.finished(d.ID, false)
+			return
+		}
 		if rl, ok := asRateLimit(runErr); ok && unreported {
 			r.sched.rateLimited(d.ID, rl)
 			return
