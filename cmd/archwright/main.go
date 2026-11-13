@@ -221,9 +221,9 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 			if ch.ID != id {
 				continue
 			}
-			fmt.Fprintf(stdout, "Site %s will run these commands on every handback:\n  typecheck: %s\n  lint:      %s\n  test:      %s\nApprove? [y/N] ", ch.Site, ch.Gates.Typecheck, ch.Gates.Lint, ch.Gates.Test)
+			_, _ = fmt.Fprintf(stdout, "Site %s will run these commands on every handback:\n  typecheck: %s\n  lint:      %s\n  test:      %s\nApprove? [y/N] ", ch.Site, ch.Gates.Typecheck, ch.Gates.Lint, ch.Gates.Test)
 			var answer string
-			fmt.Fscanln(stdin, &answer)
+			_, _ = fmt.Fscanln(stdin, &answer)
 			if answer != "y" && answer != "Y" && answer != "yes" {
 				return errors.New("not approved")
 			}
