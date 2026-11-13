@@ -3,9 +3,12 @@
 package sites
 
 import (
+	"bufio"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -22,11 +25,15 @@ type Manager struct {
 	st   *store.Store
 	root string // where worktrees live: outside every Site
 	mu   sync.Mutex
+
+	// lookPath finds an executable on PATH; injectable so detection does not
+	// depend on the machine's installed tools.
+	lookPath func(string) (string, error)
 }
 
 // New returns a Manager keeping worktrees under root.
 func New(st *store.Store, root string) *Manager {
-	return &Manager{st: st, root: root}
+	return &Manager{st: st, root: root, lookPath: exec.LookPath}
 }
 
 // Proposal is what Detect infers for a repository; the developer confirms it.
@@ -88,7 +95,7 @@ func (m *Manager) Detect(path string) (Proposal, error) {
 	if p.BaseBranch == "" {
 		p.BaseBranch, _ = git(root, "symbolic-ref", "--short", "HEAD")
 	}
-	p.Gates = detectGates(root)
+	p.Gates = m.detectGates(root)
 	return p, nil
 }
 
@@ -106,28 +113,94 @@ func SanitizeName(s string) string {
 	return strings.TrimLeft(b.String(), ".-_")
 }
 
-func detectGates(root string) store.Gates {
+// detectGates proposes gate commands: a marker file's defaults first, then the
+// project's own Makefile targets for any gate the markers leave empty.
+func (m *Manager) detectGates(root string) store.Gates {
 	exists := func(name string) bool { _, err := os.Stat(filepath.Join(root, name)); return err == nil }
+	var g store.Gates
 	switch {
 	case exists("go.mod"):
-		return store.Gates{Typecheck: "go vet ./...", Test: "go test ./..."}
+		g = store.Gates{Typecheck: "go vet ./...", Test: "go test ./..."}
+		if _, err := m.lookPath("golangci-lint"); err == nil {
+			g.Lint = "golangci-lint run"
+		}
 	case exists("package.json"):
-		return store.Gates{Typecheck: "npm run typecheck", Lint: "npm run lint", Test: "npm test"}
+		g = store.Gates{Typecheck: "npm run typecheck", Lint: "npm run lint", Test: "npm test"}
 	case exists("Cargo.toml"):
-		return store.Gates{Typecheck: "cargo check", Lint: "cargo clippy", Test: "cargo test"}
+		g = store.Gates{Typecheck: "cargo check", Lint: "cargo clippy", Test: "cargo test"}
 	}
-	return store.Gates{}
+	targets := makeTargets(filepath.Join(root, "Makefile"))
+	fill := func(dst *string, names ...string) {
+		if *dst != "" {
+			return
+		}
+		for _, n := range names {
+			if targets[n] {
+				*dst = "make " + n
+				return
+			}
+		}
+	}
+	fill(&g.Typecheck, "typecheck", "vet")
+	fill(&g.Lint, "lint")
+	fill(&g.Test, "test")
+	return g
+}
+
+// makeTargets conservatively lists the targets a Makefile defines: lines
+// starting with a plain name and a colon. Make is never executed.
+func makeTargets(path string) map[string]bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+	targets := map[string]bool{}
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		name, rest, ok := strings.Cut(sc.Text(), ":")
+		if !ok || name == "" || strings.HasPrefix(rest, "=") { // `X := y` is a variable
+			continue
+		}
+		valid := true
+		for _, r := range name {
+			if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '-') {
+				valid = false
+				break
+			}
+		}
+		if valid {
+			targets[name] = true
+		}
+	}
+	return targets
 }
 
 // Register records the repository at in.Path as a Site. Doing so is the
 // trust act for the repository's hooks and MCP config (ADR 0010).
 func (m *Manager) Register(in RegisterInput) (store.Site, error) {
-	if in.Gates == nil {
-		return store.Site{}, errors.New("gates are required: confirm the commands from `site detect` (empty strings for none)")
-	}
 	root, err := repoRoot(in.Path)
 	if err != nil {
 		return store.Site{}, err
+	}
+	// Fill anything left blank from detection; explicit values always win.
+	// Detected gate commands are never accepted silently (ADR 0010).
+	prop, err := m.Detect(root)
+	if err != nil {
+		return store.Site{}, err
+	}
+	if in.Name == "" {
+		in.Name = prop.Name
+	}
+	if in.BaseBranch == "" {
+		in.BaseBranch = prop.BaseBranch
+	}
+	if in.Remote == "" {
+		in.Remote = prop.Remote
+	}
+	if in.Gates == nil {
+		g, _ := json.Marshal(prop.Gates)
+		return store.Site{}, fmt.Errorf("gates must be confirmed: detected %s; resubmit them explicitly (empty strings for none)", g)
 	}
 	wtRoot, err := m.realRoot()
 	if err != nil {

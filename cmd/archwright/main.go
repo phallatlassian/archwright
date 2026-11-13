@@ -138,15 +138,16 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 		return call("GET", "/sites", nil)
 	case "site register":
 		fs := flag.NewFlagSet("site register", flag.ContinueOnError)
-		in := sites.RegisterInput{Gates: &store.Gates{}}
-		fs.StringVar(&in.Name, "name", "", "Site name (default: directory name)")
+		var gates store.Gates
+		in := sites.RegisterInput{}
+		fs.StringVar(&in.Name, "name", "", "Site name (default: detected)")
 		fs.StringVar(&in.Path, "path", "", "repository root")
-		fs.StringVar(&in.BaseBranch, "base-branch", "", "default branch the factory never commits to")
-		fs.StringVar(&in.Remote, "remote", "", "git remote name")
+		fs.StringVar(&in.BaseBranch, "base-branch", "", "default branch the factory never commits to (default: detected)")
+		fs.StringVar(&in.Remote, "remote", "", "git remote name (default: detected)")
 		fs.IntVar(&in.ConcurrencyCap, "cap", 0, "concurrent runs (default 3)")
-		fs.StringVar(&in.Gates.Typecheck, "typecheck", "", "type-check gate command")
-		fs.StringVar(&in.Gates.Lint, "lint", "", "lint gate command")
-		fs.StringVar(&in.Gates.Test, "test", "", "test gate command")
+		fs.StringVar(&gates.Typecheck, "typecheck", "", "type-check gate command")
+		fs.StringVar(&gates.Lint, "lint", "", "lint gate command")
+		fs.StringVar(&gates.Test, "test", "", "test gate command")
 		if err := fs.Parse(args[2:]); err != nil {
 			return err
 		}
@@ -154,9 +155,15 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 			return errors.New("--path is required")
 		}
 		in.Path = absPath(in.Path)
-		if in.Name == "" {
-			in.Name = sites.SanitizeName(filepath.Base(in.Path))
-		}
+		// Gates are the developer's confirmation: only sent when a gate flag
+		// was given (an empty value means none); otherwise the Works refuses
+		// and shows what it detected.
+		fs.Visit(func(f *flag.Flag) {
+			switch f.Name {
+			case "typecheck", "lint", "test":
+				in.Gates = &gates
+			}
+		})
 		return call("POST", "/sites", in)
 	case "worktree create":
 		id, err := arg(args, 2)
