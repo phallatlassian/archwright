@@ -7,6 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/phallatlassian/archwright/internal/paths"
+	"github.com/phallatlassian/archwright/internal/works"
 )
 
 var binary string
@@ -139,5 +142,83 @@ func TestXDGDefaultsWithoutOverrides(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, "c", "archwright")); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// startRun asks the sandbox's Works for a run, as a runner adapter would, and
+// returns the environment the run's agent would inherit.
+func (s *sandbox) startRun(role string) works.RunEnv {
+	s.t.Helper()
+	s.run("job", "list") // ensures the Works is up
+	c, ok := works.Running(paths.Dirs{Config: s.cfg, State: s.st})
+	if !ok {
+		s.t.Fatal("works not running")
+	}
+	var env works.RunEnv
+	if err := c.Do("POST", "/runs", map[string]string{"role": role, "spoolRoot": s.t.TempDir()}, &env); err != nil {
+		s.t.Fatal(err)
+	}
+	return env
+}
+
+func (s *sandbox) tool(env works.RunEnv, stdin string, args ...string) (string, int, error) {
+	c := exec.Command(binary, append([]string{"tool"}, args...)...)
+	c.Env = append(s.env, env.Environ()...)
+	c.Stdin = strings.NewReader(stdin)
+	var stdout, stderr strings.Builder
+	c.Stdout, c.Stderr = &stdout, &stderr
+	err := c.Run()
+	code := 0
+	if ee, ok := err.(*exec.ExitError); ok {
+		code = ee.ExitCode()
+	}
+	return stdout.String(), code, err
+}
+
+func TestToolCommandReachesTheWorksThroughTheSpool(t *testing.T) {
+	s := newSandbox(t)
+	env := s.startRun("archwright")
+
+	out, _, err := s.tool(env, `{"title":"Via spool"}`, "create_job")
+	if err != nil {
+		t.Fatal(err, out)
+	}
+	var job struct{ ID, Title string }
+	json.Unmarshal([]byte(out), &job)
+	if job.Title != "Via spool" {
+		t.Fatalf("%s", out)
+	}
+	// the same Job is visible through the ordinary CLI
+	if !strings.Contains(s.run("job", "show", job.ID), "Via spool") {
+		t.Fatal("job not in the Works")
+	}
+	if entries, _ := os.ReadDir(env.Spool); len(entries) != 0 {
+		t.Fatalf("spool not cleaned: %v", entries)
+	}
+
+	// a tool error is exit 1 with the error JSON on stdout
+	out, code, _ := s.tool(env, `{"id":"missing"}`, "show_job")
+	if code != 1 || !strings.Contains(out, `"not_found"`) {
+		t.Fatalf("code %d: %s", code, out)
+	}
+	// a role without the tool is refused
+	out, code, _ = s.tool(s.startRun("wright"), `{"title":"x"}`, "create_job")
+	if code != 1 || !strings.Contains(out, `"forbidden"`) {
+		t.Fatalf("code %d: %s", code, out)
+	}
+}
+
+func TestToolCommandTimeoutExitsWithDistinctCode(t *testing.T) {
+	s := newSandbox(t)
+	env := works.RunEnv{Run: "run-x", Spool: t.TempDir(), Token: "t"} // no Works serves this spool
+	_, code, _ := s.tool(env, ``, "list_jobs", "--wait", "100ms")
+	if code != 75 {
+		t.Fatalf("exit code %d", code)
+	}
+	if entries, _ := os.ReadDir(env.Spool); len(entries) != 0 {
+		t.Fatalf("left behind: %v", entries)
+	}
+	if _, code, _ := s.tool(works.RunEnv{}, ``, "list_jobs"); code != 1 {
+		t.Fatalf("outside a run: exit %d", code)
 	}
 }

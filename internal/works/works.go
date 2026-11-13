@@ -75,6 +75,8 @@ func Serve(ctx context.Context, d paths.Dirs, ready chan<- struct{}) error {
 		return err
 	}
 	defer st.Close()
+	runs := NewRuns(st)
+	defer runs.Close()
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -86,7 +88,7 @@ func Serve(ctx context.Context, d paths.Dirs, ready chan<- struct{}) error {
 	}
 	ctx, stop := context.WithCancel(ctx)
 	defer stop()
-	srv := &http.Server{Handler: newHandler(st, token, os.Getpid(), stop)}
+	srv := &http.Server{Handler: newHandler(st, runs, token, os.Getpid(), stop)}
 	info := Info{PID: os.Getpid(), Port: ln.Addr().(*net.TCPAddr).Port, Token: token}
 	if err := writeInfo(d, info); err != nil {
 		return err
