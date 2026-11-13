@@ -376,7 +376,7 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 			return errors.New("not approved")
 		}
 		var out json.RawMessage
-		if err := c.Do("POST", "/jobs/"+url.PathEscape(id)+"/plan/approve", nil, &out); err != nil {
+		if err := c.Do("POST", "/jobs/"+url.PathEscape(id)+"/plan/approve", map[string]any{"updated_at": plan.UpdatedAt}, &out); err != nil {
 			return err
 		}
 		return emit(out)

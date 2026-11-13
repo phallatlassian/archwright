@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func open(t *testing.T) (*Store, string) {
@@ -255,27 +256,45 @@ func TestAdHocPlanNeedsApprovalJigPlanDoesNot(t *testing.T) {
 	if err != nil || p.Approval != ApprovalPending || p.Cleared() || p.Jig != "" {
 		t.Fatalf("ad hoc plan: %+v %v", p, err)
 	}
-	if p, err = s.DecidePlan(j.ID, true); err != nil || p.Approval != ApprovalApproved || !p.Cleared() {
+	if p, err = s.DecidePlan(j.ID, true, time.Time{}); err != nil || p.Approval != ApprovalApproved || !p.Cleared() {
 		t.Fatalf("approve: %+v %v", p, err)
 	}
-	if _, err := s.DecidePlan(j.ID, false); !errors.Is(err, ErrConflict) {
+	if _, err := s.DecidePlan(j.ID, false, time.Time{}); !errors.Is(err, ErrConflict) {
 		t.Errorf("decided twice: %v", err)
 	}
 	// A replacement ad hoc plan awaits a new decision.
 	if p, _ = s.SetPlan(j.ID, steps); p.Cleared() {
 		t.Error("replaced plan kept its approval")
 	}
-	if p, err = s.DecidePlan(j.ID, false); err != nil || p.Approval != ApprovalRejected || p.Cleared() {
+	if p, err = s.DecidePlan(j.ID, false, time.Time{}); err != nil || p.Approval != ApprovalRejected || p.Cleared() {
 		t.Fatalf("reject: %+v %v", p, err)
 	}
 	p, err = s.SetJigPlan(j.ID, "fix", steps)
 	if err != nil || p.Approval != ApprovalNotRequired || !p.Cleared() || p.Jig != "fix" {
 		t.Fatalf("jig plan: %+v %v", p, err)
 	}
-	if _, err := s.DecidePlan(j.ID, true); !errors.Is(err, ErrConflict) {
+	if _, err := s.DecidePlan(j.ID, true, time.Time{}); !errors.Is(err, ErrConflict) {
 		t.Errorf("jig plan decided: %v", err)
 	}
-	if _, err := s.DecidePlan("nojob", true); !errors.Is(err, ErrNotFound) {
+	if _, err := s.DecidePlan("nojob", true, time.Time{}); !errors.Is(err, ErrNotFound) {
 		t.Errorf("missing plan: %v", err)
+	}
+}
+
+func TestApprovalBoundToReviewedPlan(t *testing.T) {
+	s, _ := open(t)
+	j, _ := s.CreateJob("x", "")
+	steps := []Step{{ID: "a", Guild: "engineering", Title: "do"}}
+	seen, _ := s.SetPlan(j.ID, steps)
+	time.Sleep(2 * time.Millisecond)
+	if _, err := s.SetPlan(j.ID, steps); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DecidePlan(j.ID, true, seen.UpdatedAt); !errors.Is(err, ErrConflict) {
+		t.Fatalf("approved a replaced plan: %v", err)
+	}
+	cur, _ := s.GetPlan(j.ID)
+	if p, err := s.DecidePlan(j.ID, true, cur.UpdatedAt); err != nil || !p.Cleared() {
+		t.Fatalf("approve reviewed plan: %+v %v", p, err)
 	}
 }

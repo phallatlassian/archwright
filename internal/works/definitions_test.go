@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/phallatlassian/archwright/internal/defs"
 	"github.com/phallatlassian/archwright/internal/spool"
@@ -24,7 +25,7 @@ func TestAdHocPlanGatesDispatchJigPlanDoesNot(t *testing.T) {
 		t.Fatal(err)
 	}
 	g.fails(g.warden, "dispatch_wright", req, spool.CodeConflict)
-	if _, err := g.st.DecidePlan(g.job.ID, false); err != nil {
+	if _, err := g.st.DecidePlan(g.job.ID, false, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
 	g.fails(g.warden, "dispatch_wright", req, spool.CodeConflict)
@@ -32,7 +33,7 @@ func TestAdHocPlanGatesDispatchJigPlanDoesNot(t *testing.T) {
 	if _, err := g.st.SetPlan(g.job.ID, onePieceSteps); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := g.st.DecidePlan(g.job.ID, true); err != nil {
+	if _, err := g.st.DecidePlan(g.job.ID, true, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
 	g.ok(g.warden, "dispatch_wright", req, nil)

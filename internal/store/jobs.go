@@ -204,14 +204,19 @@ func (s *Store) GetPlan(jobID string) (Plan, error) {
 
 // DecidePlan records the developer's go (approve) or no-go on a Job's ad hoc
 // Plan. Only a pending Plan can be decided; a rejected one is replaced by a
-// new Plan, and a Jig Plan never needs a decision.
-func (s *Store) DecidePlan(jobID string, approve bool) (Plan, error) {
+// new Plan, and a Jig Plan never needs a decision. A non-zero seen is the
+// updated_at of the Plan the developer reviewed; the decision only applies if
+// the Plan has not been replaced since.
+func (s *Store) DecidePlan(jobID string, approve bool, seen time.Time) (Plan, error) {
 	p, err := s.GetPlan(jobID)
 	if err != nil {
 		return Plan{}, err
 	}
 	if p.Approval != ApprovalPending {
 		return Plan{}, fmt.Errorf("the Plan of job %q is %s, not awaiting a decision: %w", jobID, p.Approval, ErrConflict)
+	}
+	if !seen.IsZero() && !p.UpdatedAt.Equal(seen) {
+		return Plan{}, fmt.Errorf("the Plan of job %q was replaced after you reviewed it: %w", jobID, ErrConflict)
 	}
 	state, typ := ApprovalRejected, "plan.rejected"
 	if approve {
@@ -223,7 +228,7 @@ func (s *Store) DecidePlan(jobID string, approve bool) (Plan, error) {
 		return Plan{}, err
 	}
 	defer tx.Rollback()
-	res, err := tx.Exec("UPDATE plans SET approval = ? WHERE job_id = ? AND approval = ?", state, jobID, ApprovalPending)
+	res, err := tx.Exec("UPDATE plans SET approval = ? WHERE job_id = ? AND approval = ? AND updated_at = ?", state, jobID, ApprovalPending, p.UpdatedAt.UTC().Format(time.RFC3339Nano))
 	if err != nil {
 		return Plan{}, err
 	}

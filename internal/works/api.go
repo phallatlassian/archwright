@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/phallatlassian/archwright/internal/sites"
 	"github.com/phallatlassian/archwright/internal/store"
@@ -138,7 +139,14 @@ func newHandler(st *store.Store, runs *Runs, sm *sites.Manager, token string, pi
 		reply(w, 200, p)
 	})
 	mux.HandleFunc("POST /jobs/{id}/plan/approve", func(w http.ResponseWriter, r *http.Request) {
-		p, err := st.DecidePlan(r.PathValue("id"), true)
+		var in struct {
+			UpdatedAt time.Time `json:"updated_at"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.UpdatedAt.IsZero() {
+			fail(w, errors.New("updated_at of the reviewed Plan is required"))
+			return
+		}
+		p, err := st.DecidePlan(r.PathValue("id"), true, in.UpdatedAt)
 		if err != nil {
 			fail(w, err)
 			return
@@ -146,7 +154,7 @@ func newHandler(st *store.Store, runs *Runs, sm *sites.Manager, token string, pi
 		reply(w, 200, p)
 	})
 	mux.HandleFunc("POST /jobs/{id}/plan/reject", func(w http.ResponseWriter, r *http.Request) {
-		p, err := st.DecidePlan(r.PathValue("id"), false)
+		p, err := st.DecidePlan(r.PathValue("id"), false, time.Time{})
 		if err != nil {
 			fail(w, err)
 			return
