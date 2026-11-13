@@ -19,6 +19,8 @@ const (
 const (
 	DispatchQueued   = "queued"   // waiting for the scheduler to have room (ADR 0008)
 	DispatchRunning  = "running"  // the Wright's run has not reported
+	DispatchBlocked  = "blocked"  // the run ended on an ask; the piece is parked (ADR 0015)
+	DispatchAnswered = "answered" // its ask was answered and a fresh dispatch took over
 	DispatchReported = "reported" // a result is stored, awaiting the Warden's inspection
 	DispatchRejected = "rejected" // the Warden sent the piece back, or it failed
 )
@@ -123,6 +125,13 @@ func (s *Store) insertDispatch(tx *sql.Tx, jobID, guild, piece string, round int
 	d.CreatedAt, _ = time.Parse(time.RFC3339Nano, at)
 	err := appendEvent(tx, at, jobID, "wright.dispatched", map[string]any{"dispatch": d.ID, "piece": piece, "round": round})
 	return d, err
+}
+
+// nextRound is the round for a piece's next dispatch: rework and ask answers both add one.
+func nextRound(q queryer, jobID, piece string) (int, error) {
+	var n int
+	err := q.QueryRow("SELECT COALESCE(MAX(round)+1, 0) FROM dispatches WHERE job_id = ? AND piece = ?", jobID, piece).Scan(&n)
+	return n, err
 }
 
 // GetPiece reads one piece.
@@ -332,7 +341,11 @@ func (s *Store) Rework(jobID, piece string, limit int, reason, diagnosis string,
 		return Piece{}, nil, err
 	}
 	p.Reworks++
-	d, err := s.insertDispatch(tx, jobID, p.Guild, piece, p.Reworks, brief, rendered)
+	round, err := nextRound(tx, jobID, piece)
+	if err != nil {
+		return Piece{}, nil, err
+	}
+	d, err := s.insertDispatch(tx, jobID, p.Guild, piece, round, brief, rendered)
 	if err != nil {
 		return Piece{}, nil, err
 	}

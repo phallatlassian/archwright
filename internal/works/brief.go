@@ -122,6 +122,10 @@ func (b Brief) Render(guild, standards string, round int, reason string) string 
 	}
 	w.WriteString("\n## Returning your result\n\nWhen finished, call `archwright tool report_result` with JSON on stdin:\n" +
 		"`{\"status\":\"done|blocked|failed\",\"result\":\"<pointer to the result>\",\"evidence\":[...],\"observations\":[...],\"uncertainty\":\"...\"}`.\n" +
-		"Return large artifacts by pointer. Put anything outside your remit under `observations`.\n")
+		"Return large artifacts by pointer. Put anything outside your remit under `observations`.\n" +
+		"\n## Asking\n\nIf you need a human decision, a manual step done, or something clarified, call `archwright tool ask` with JSON on stdin:\n" +
+		"`{\"kind\":\"decision|manual-step|clarification\",\"blocking\":true,\"why\":\"...\",\"questions\":[{\"id\":\"q1\",\"text\":\"...\",\"options\":[...],\"default\":\"<recommended option>\"}]}`.\n" +
+		"With `blocking` true, stop right after the call and end your run without reporting a result: your task is parked, and a fresh run starts with this brief plus the answers. " +
+		"A manual step is a checklist the developer confirms. Never ask for a secret or put one in an ask.\n")
 	return w.String()
 }

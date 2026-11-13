@@ -63,3 +63,7 @@ _Avoid_: notifications, alerts
 **Handback**:
 The one inspected result a Warden returns to the Archwright: done, partial or failed, with any flags.
 _Avoid_: report, response
+
+**Ask**:
+A structured request for a human, raised by a Warden or Wright: questions with options and a recommended default, a kind (decision, manual step or clarification), and whether it blocks. The Works routes it up (Wright to Warden to Archwright to developer), parks the asking task, and re-dispatches it with the Q&A record once answered. The first answer wins; an Ask never expires.
+_Avoid_: question, prompt, notification
