@@ -56,6 +56,10 @@ _Avoid_: subtask, chunk
 The schema-checked instructions a Warden gives a Wright for one piece; the Works rejects an incomplete one and adds the Guild's standards.
 _Avoid_: prompt, ticket
 
+**Needs-you inbox**:
+The Works' list of items that want the developer's eye without stopping work, such as a warning that two Jobs on one Site declared overlapping scopes.
+_Avoid_: notifications, alerts
+
 **Handback**:
 The one inspected result a Warden returns to the Archwright: done, partial or failed, with any flags.
 _Avoid_: report, response

@@ -50,6 +50,8 @@ const usage = `usage: archwright <command>
   job show ID                              show a Job and its Plan
   plan set ID [FILE]                       set a Job's Plan from JSON ({"steps":[...]}); stdin if no FILE
   plan show ID                             show a Job's Plan
+  queue show                               show running and queued Wrights, the caps and any runner pause
+  needs-you list                           list the Needs-you inbox (such as scope-overlap warnings)
   tool NAME [--id ID] [--wait D]           call a Works tool inside a run: JSON on stdin, JSON on stdout
                                            (exit 75 if the Works does not answer within D, default 60s)
   works status                             report whether the Works is running
@@ -277,6 +279,10 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 			return err
 		}
 		return call("POST", "/jobs/"+id+"/close", map[string]string{"outcome": outcome})
+	case "queue show":
+		return call("GET", "/queue", nil)
+	case "needs-you list":
+		return call("GET", "/needs-you", nil)
 	case "job list":
 		return call("GET", "/jobs", nil)
 	case "job show":

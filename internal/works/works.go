@@ -85,6 +85,10 @@ func Serve(ctx context.Context, d paths.Dirs, ready chan<- struct{}) error {
 	runs.UseSites(sm)
 	// Until the vendor adapters land, dispatched Wrights run on the fake runner.
 	runs.Configure(GuildsFromDir(filepath.Join(d.Config, "guilds")), NewFakeRunner(nil))
+	runs.SetLimits(LimitsFromEnv(os.Getenv))
+	if err := runs.Resume(); err != nil {
+		return err
+	}
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

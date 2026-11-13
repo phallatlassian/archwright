@@ -80,7 +80,7 @@ func (g *rig) dispatch(piece string) DispatchInfo {
 func (g *rig) waitReported(piece string) store.Dispatch {
 	g.t.Helper()
 	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
-		if d, err := g.st.LatestDispatch(g.job.ID, piece); err == nil && d.Status != store.DispatchRunning {
+		if d, err := g.st.LatestDispatch(g.job.ID, piece); err == nil && d.Status != store.DispatchRunning && d.Status != store.DispatchQueued {
 			return d
 		}
 	}

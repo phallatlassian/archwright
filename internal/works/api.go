@@ -124,6 +124,19 @@ func newHandler(st *store.Store, runs *Runs, sm *sites.Manager, token string, pi
 		reply(w, 200, p)
 	})
 
+	// The dispatch scheduler's running and queued Wrights, and the Needs-you inbox.
+	mux.HandleFunc("GET /queue", func(w http.ResponseWriter, r *http.Request) {
+		reply(w, 200, runs.Queue())
+	})
+	mux.HandleFunc("GET /needs-you", func(w http.ResponseWriter, r *http.Request) {
+		items, err := st.NeedsYou()
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		reply(w, 200, items)
+	})
+
 	mux.HandleFunc("POST /sites", func(w http.ResponseWriter, r *http.Request) {
 		var in sites.RegisterInput
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
