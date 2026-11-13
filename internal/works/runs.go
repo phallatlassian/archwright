@@ -1,6 +1,7 @@
 package works
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -33,12 +34,22 @@ type Runs struct {
 	st   *store.Store
 	poll time.Duration
 
+	// Dispatch (ADR 0004, 0006): the Guilds that standards and limits come
+	// from, the Runner Wrights run on, and where their spools live.
+	guilds    GuildSource
+	runner    Runner
+	spoolRoot string
+	bg        context.Context
+	cancelBg  context.CancelFunc
+	wg        sync.WaitGroup
+
 	mu   sync.Mutex
 	runs map[string]*run
 }
 
 type run struct {
 	id, role, token, dir string
+	ctx                  RunContext
 	stop                 chan struct{}
 	done                 chan struct{}
 
@@ -51,12 +62,34 @@ type run struct {
 
 // NewRuns returns an empty registry over st.
 func NewRuns(st *store.Store) *Runs {
-	return &Runs{st: st, poll: 25 * time.Millisecond, runs: map[string]*run{}}
+	bg, cancel := context.WithCancel(context.Background())
+	return &Runs{st: st, poll: 25 * time.Millisecond, runs: map[string]*run{}, bg: bg, cancelBg: cancel,
+		spoolRoot: filepath.Join(os.TempDir(), fmt.Sprintf("archwright-%d", os.Getuid()))}
+}
+
+// RunContext binds a run to the work it serves.
+type RunContext struct {
+	Job        string // the Job a Warden or Wright works for
+	Guild      string // the Guild a Warden leads, or the Wright's Warden's
+	DispatchID string // the dispatch a Wright carries out
+}
+
+// Configure sets where Guild definitions come from and which Runner carries
+// out dispatched Wrights. Without them dispatch_wright fails closed.
+func (r *Runs) Configure(guilds GuildSource, runner Runner) {
+	r.mu.Lock()
+	r.guilds, r.runner = guilds, runner
+	r.mu.Unlock()
 }
 
 // Start registers a run with the given role and creates its spool directory
 // (mode 0700) under root, which the runner's adapter chooses.
 func (r *Runs) Start(role, root string) (RunEnv, error) {
+	return r.StartFor(role, root, RunContext{})
+}
+
+// StartFor is Start for a run bound to a Job, Guild or dispatch.
+func (r *Runs) StartFor(role, root string, rc RunContext) (RunEnv, error) {
 	switch role {
 	case RoleArchwright, RoleWarden, RoleWright:
 	default:
@@ -78,7 +111,7 @@ func (r *Runs) Start(role, root string) (RunEnv, error) {
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		return RunEnv{}, err
 	}
-	ru := &run{id: id, role: role, token: token, dir: dir, stop: make(chan struct{}), done: make(chan struct{}), answered: map[string]spool.Response{}}
+	ru := &run{id: id, role: role, ctx: rc, token: token, dir: dir, stop: make(chan struct{}), done: make(chan struct{}), answered: map[string]spool.Response{}}
 	r.mu.Lock()
 	r.runs[id] = ru
 	r.mu.Unlock()
@@ -101,6 +134,8 @@ func (r *Runs) End(id string) error {
 
 // Close ends every run.
 func (r *Runs) Close() {
+	r.cancelBg()
+	r.wg.Wait() // dispatched Wrights end their own runs
 	r.mu.Lock()
 	all := r.runs
 	r.runs = map[string]*run{}
@@ -191,7 +226,7 @@ func (r *Runs) respond(ru *run, id string) (resp spool.Response, cache bool) {
 	if ru.ended {
 		return reject(id, spool.CodeRunEnded, "run has ended"), true
 	}
-	out, err := t.call(r.st, req.Input)
+	out, err := t.call(&callCtx{st: r.st, runs: r, run: ru}, req.Input)
 	switch {
 	case err == nil:
 		b, merr := json.Marshal(out)
@@ -201,6 +236,8 @@ func (r *Runs) respond(ru *run, id string) (resp spool.Response, cache bool) {
 		return spool.Response{ID: id, OK: true, Output: b}, true
 	case errors.Is(err, store.ErrNotFound):
 		return reject(id, spool.CodeNotFound, err.Error()), true
+	case errors.Is(err, store.ErrConflict):
+		return reject(id, spool.CodeConflict, err.Error()), true
 	default:
 		return reject(id, spool.CodeInvalidInput, err.Error()), true
 	}

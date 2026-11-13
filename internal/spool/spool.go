@@ -37,6 +37,7 @@ const (
 	CodeUnknownTool  = "unknown_tool"
 	CodeInvalidInput = "invalid_input"
 	CodeNotFound     = "not_found"
+	CodeConflict     = "conflict"
 	CodeRunEnded     = "run_ended"
 )
 
