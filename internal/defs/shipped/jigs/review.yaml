@@ -1,0 +1,11 @@
+name: review
+description: "Review finished work independently on the Standards and Spec axes."
+parameters:
+  - name: subject
+    description: "What to review (a branch, PR or diff) and the writ it came from"
+    required: true
+steps:
+  - id: review
+    guild: review
+    task: "Review this work on the Standards and Spec axes: {{subject}}"
+    outputs: [verdict]

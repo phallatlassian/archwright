@@ -1,0 +1,11 @@
+name: investigate
+description: "Answer a question about the codebase or the world with cited evidence, without changing anything."
+parameters:
+  - name: question
+    description: The question to answer
+    required: true
+steps:
+  - id: investigate
+    guild: research
+    task: "Investigate, with evidence for every claim: {{question}}"
+    outputs: [findings]

@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/phallatlassian/archwright/internal/defs"
 	"github.com/phallatlassian/archwright/internal/sites"
 	"github.com/phallatlassian/archwright/internal/spool"
 	"github.com/phallatlassian/archwright/internal/store"
@@ -38,6 +39,7 @@ type Runs struct {
 	// Dispatch (ADR 0004, 0006): the Guilds that standards and limits come
 	// from, the Runner Wrights run on, and where their spools live.
 	guilds    GuildSource
+	defs      *defs.Registry // the loaded Guild and Jig catalogue (ADR 0009)
 	runner    Runner
 	reviewer  ReviewRunner // runs Reviews (ADR 0012)
 	spoolRoot string

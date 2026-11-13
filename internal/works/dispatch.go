@@ -6,10 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"os"
-	"path/filepath"
-	"strings"
 
+	"github.com/phallatlassian/archwright/internal/defs"
 	"github.com/phallatlassian/archwright/internal/store"
 )
 
@@ -19,8 +17,9 @@ const DefaultReworkRounds = 2
 // Guild is what the Works needs of a Guild definition to dispatch for it.
 type Guild struct {
 	Name         string
-	Standards    string // injected into every brief
-	ReworkRounds int    // zero means DefaultReworkRounds
+	Standards    string       // injected into every brief
+	ReworkRounds int          // zero means DefaultReworkRounds
+	Binding      defs.Binding // the permissions its runs get; never wider than the developer's runner configuration
 }
 
 func (g Guild) reworkLimit() int {
@@ -33,21 +32,20 @@ func (g Guild) reworkLimit() int {
 // GuildSource looks a Guild up by name; an unknown Guild is an error.
 type GuildSource func(name string) (Guild, error)
 
-// GuildsFromDir reads Guilds from dir/<name>/standards.md (ADR 0018's config home).
-func GuildsFromDir(dir string) GuildSource {
+// GuildsFromRegistry serves the loaded Guild definitions. Each lookup binds
+// the Guild to its default runner, so a requirement the runner cannot enforce
+// fails the lookup (ADR 0009).
+func GuildsFromRegistry(reg *defs.Registry, profiles map[string]defs.Profile) GuildSource {
 	return func(name string) (Guild, error) {
-		if name == "" || name != filepath.Base(name) || strings.HasPrefix(name, ".") {
+		g, ok := reg.Guild(name)
+		if !ok {
 			return Guild{}, fmt.Errorf("%w: no guild %q", errInvalidInput, name)
 		}
-		gdir := filepath.Join(dir, name)
-		if fi, err := os.Stat(gdir); err != nil || !fi.IsDir() {
-			return Guild{}, fmt.Errorf("%w: no guild %q", errInvalidInput, name)
+		b, err := defs.Bind(g, "", profiles)
+		if err != nil {
+			return Guild{}, fmt.Errorf("%w: %v", errInvalidInput, err)
 		}
-		b, err := os.ReadFile(filepath.Join(gdir, "standards.md"))
-		if err != nil && !errors.Is(err, os.ErrNotExist) {
-			return Guild{}, err
-		}
-		return Guild{Name: name, Standards: string(b)}, nil
+		return Guild{Name: g.Name, Standards: g.Charter, ReworkRounds: g.ReworkRounds, Binding: b}, nil
 	}
 }
 
@@ -113,6 +111,22 @@ func (c *callCtx) warden() (Guild, error) {
 	return src(c.run.ctx.Guild)
 }
 
+// planCleared refuses work for a Job whose Plan awaits, or was refused, the
+// developer's go. A Jig Plan is never held; a Job with no Plan is not either.
+func (c *callCtx) planCleared() error {
+	p, err := c.st.GetPlan(c.run.ctx.Job)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !p.Cleared() {
+		return fmt.Errorf("the Plan of job %q is %s: the developer must approve an ad hoc Plan before work is dispatched: %w", c.run.ctx.Job, p.Approval, store.ErrConflict)
+	}
+	return nil
+}
+
 // pieceOf loads a piece the calling Warden may touch: its own Job and Guild.
 func (c *callCtx) pieceOf(name string) (store.Piece, error) {
 	if err := requireField("piece", name); err != nil {
@@ -166,6 +180,9 @@ func dispatchWright(c *callCtx, in json.RawMessage) (any, error) {
 	}
 	g, err := c.warden()
 	if err != nil {
+		return nil, err
+	}
+	if err := c.planCleared(); err != nil {
 		return nil, err
 	}
 	b, err := parseBrief(a.Brief)

@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/phallatlassian/archwright/internal/defs"
 	"github.com/phallatlassian/archwright/internal/paths"
 	"github.com/phallatlassian/archwright/internal/sites"
 	"github.com/phallatlassian/archwright/internal/store"
@@ -87,7 +88,10 @@ func Serve(ctx context.Context, d paths.Dirs, ready chan<- struct{}) error {
 	defer runs.Close()
 	runs.UseSites(sm)
 	// Until the vendor adapters land, dispatched Wrights run on the fake runner.
-	runs.Configure(GuildsFromDir(filepath.Join(d.Config, "guilds")), NewFakeRunner(nil))
+	reg := defs.New(defs.Shipped(), d.Config)
+	ReloadDefinitions(reg)
+	runs.UseDefinitions(reg)
+	runs.Configure(GuildsFromRegistry(reg, DefaultProfiles()), NewFakeRunner(nil))
 	runs.SetLimits(LimitsFromEnv(os.Getenv))
 	if err := runs.Resume(); err != nil {
 		return err

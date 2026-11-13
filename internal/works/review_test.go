@@ -126,7 +126,7 @@ func TestSpecFallsBackAndWithNothingIsNotEvaluated(t *testing.T) {
 	}
 
 	// the Plan step's brief and the original request stand in for a missing writ
-	g.ok(g.arch, "set_plan", `{"job_id":"`+g.job.ID+`","steps":[{"id":"a","guild":"engineering","title":"notes","brief":"Add a notes file"},{"id":"b","guild":"hallmark","title":"review","brief":"ignored","blocked_by":["a"]}]}`, nil)
+	g.ok(g.arch, "set_plan", `{"job_id":"`+g.job.ID+`","steps":[{"id":"a","guild":"engineering","title":"notes","brief":"Add a notes file"},{"id":"b","guild":"review","title":"review","brief":"ignored","blocked_by":["a"]}]}`, nil)
 	r = g.review().Reviews[1]
 	if r.SpecBasis != store.SpecPlanAndRequest || r.Overall != store.VerdictPass || !strings.Contains(r.Brief, "Add a notes file") || strings.Contains(r.Brief, "ignored") {
 		t.Fatalf("%+v", r)
@@ -279,7 +279,7 @@ func TestReviewWardenIsFreshAndReadOnly(t *testing.T) {
 				t.Errorf("review brief leaks Engineering's %q", leak)
 			}
 		}
-		if !strings.Contains(req.Brief, "hallmark standards.") || !strings.Contains(req.Brief, "do not re-run") && !strings.Contains(req.Brief, "Do not re-run") {
+		if !strings.Contains(req.Brief, "review standards.") || !strings.Contains(req.Brief, "do not re-run") && !strings.Contains(req.Brief, "Do not re-run") {
 			t.Errorf("brief: %s", req.Brief)
 		}
 	}

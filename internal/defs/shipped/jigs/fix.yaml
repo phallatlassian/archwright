@@ -1,0 +1,16 @@
+name: fix
+description: "Fix a defect in a Site: reproduce, correct and verify it, then review the fix. Use for a bug report or failing behaviour."
+parameters:
+  - name: problem
+    description: The defect, with how to reproduce it
+    required: true
+steps:
+  - id: fix
+    guild: engineering
+    task: "Diagnose and fix this defect, adding a failing test first: {{problem}}"
+    outputs: [diff]
+  - id: review
+    guild: review
+    task: "Review the fix for this defect: {{problem}}"
+    inputs: [fix.diff]
+    blocked_by: [fix]

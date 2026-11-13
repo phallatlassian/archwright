@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/phallatlassian/archwright/internal/sites"
 	"github.com/phallatlassian/archwright/internal/store"
@@ -118,6 +119,63 @@ func newHandler(st *store.Store, runs *Runs, sm *sites.Manager, token string, pi
 			return
 		}
 		reply(w, 200, p)
+	})
+	// Jig Plans start without approval; an ad hoc Plan waits for the
+	// developer's go or no-go (ADR 0009).
+	mux.HandleFunc("POST /jobs/{id}/jig", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Jig    string            `json:"jig"`
+			Params map[string]string `json:"params"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			fail(w, err)
+			return
+		}
+		p, err := instantiateJig(st, runs.Definitions(), r.PathValue("id"), in.Jig, in.Params)
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		reply(w, 200, p)
+	})
+	mux.HandleFunc("POST /jobs/{id}/plan/approve", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			UpdatedAt time.Time `json:"updated_at"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.UpdatedAt.IsZero() {
+			fail(w, errors.New("updated_at of the reviewed Plan is required"))
+			return
+		}
+		p, err := st.DecidePlan(r.PathValue("id"), true, in.UpdatedAt)
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		reply(w, 200, p)
+	})
+	mux.HandleFunc("POST /jobs/{id}/plan/reject", func(w http.ResponseWriter, r *http.Request) {
+		p, err := st.DecidePlan(r.PathValue("id"), false, time.Time{})
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		reply(w, 200, p)
+	})
+	mux.HandleFunc("GET /catalogue", func(w http.ResponseWriter, r *http.Request) {
+		reg := runs.Definitions()
+		if reg == nil {
+			fail(w, errors.New("no definitions are loaded"))
+			return
+		}
+		reply(w, 200, catalogueOf(reg))
+	})
+	mux.HandleFunc("POST /catalogue/reload", func(w http.ResponseWriter, r *http.Request) {
+		reg := runs.Definitions()
+		if reg == nil {
+			fail(w, errors.New("no definitions are loaded"))
+			return
+		}
+		reply(w, 200, ReloadDefinitions(reg))
 	})
 	mux.HandleFunc("GET /jobs/{id}/plan", func(w http.ResponseWriter, r *http.Request) {
 		p, err := st.GetPlan(r.PathValue("id"))

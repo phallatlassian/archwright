@@ -1,0 +1,12 @@
+name: specify
+description: "Turn an ambition into a spec and tickets for the developer to check before any building starts."
+parameters:
+  - name: ambition
+    description: What the developer wants
+    required: true
+steps:
+  - id: specify
+    guild: chancery
+    task: "Write a spec and tickets, with declared blocking dependencies, for: {{ambition}}"
+    outputs: [spec, tickets]
+    checkpoint: true
