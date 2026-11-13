@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -296,5 +297,54 @@ func TestApprovalBoundToReviewedPlan(t *testing.T) {
 	cur, _ := s.GetPlan(j.ID)
 	if p, err := s.DecidePlan(j.ID, true, cur.UpdatedAt); err != nil || !p.Cleared() {
 		t.Fatalf("approve reviewed plan: %+v %v", p, err)
+	}
+}
+
+func TestInterruptDispatchesRequeuesRunningFromStoredBrief(t *testing.T) {
+	st, _ := open(t)
+	job, _ := st.CreateJob("J", "")
+	brief := json.RawMessage(`{"goal":"g"}`)
+	run, _ := st.NewPiece(job.ID, "engineering", "a", brief, "rendered a")
+	queued, _ := st.NewPiece(job.ID, "engineering", "b", brief, "rendered b")
+	reported, _ := st.NewPiece(job.ID, "engineering", "c", brief, "rendered c")
+	for _, id := range []string{run.ID, reported.ID} {
+		if err := st.StartDispatch(id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := st.RecordResult(reported.ID, json.RawMessage(`{"status":"done"}`)); err != nil {
+		t.Fatal(err)
+	}
+	next, err := st.InterruptDispatches()
+	if err != nil || len(next) != 1 {
+		t.Fatalf("%v %v", next, err)
+	}
+	old, _ := st.GetDispatch(run.ID)
+	if old.Status != DispatchInterrupted {
+		t.Fatalf("old dispatch is %s", old.Status)
+	}
+	n := next[0]
+	if n.Status != DispatchQueued || n.Piece != "a" || n.Round != 1 || string(n.Brief) != string(brief) || n.Rendered != "rendered a" {
+		t.Fatalf("%+v", n)
+	}
+	if p, _ := st.GetPiece(job.ID, "a"); p.Reworks != 0 || p.Status != PieceOpen {
+		t.Fatalf("restart counted as rework: %+v", p)
+	}
+	if d, _ := st.GetDispatch(queued.ID); d.Status != DispatchQueued {
+		t.Fatalf("queued dispatch touched: %s", d.Status)
+	}
+	if d, _ := st.GetDispatch(reported.ID); d.Status != DispatchReported {
+		t.Fatalf("reported dispatch touched: %s", d.Status)
+	}
+	if again, err := st.InterruptDispatches(); err != nil || len(again) != 0 {
+		t.Fatalf("second pass: %v %v", again, err)
+	}
+	evs, _ := st.Events(job.ID)
+	found := false
+	for _, e := range evs {
+		found = found || e.Type == "wright.interrupted"
+	}
+	if !found {
+		t.Fatalf("no wright.interrupted event: %+v", evs)
 	}
 }
