@@ -258,9 +258,9 @@ const views = {
       h('h2', {}, 'Guilds'),
       table(['Name', 'Access', 'Runners', 'Intake', 'Handback', 'Source'], cat.guilds.map((g) => [g.name, g.access, (g.runners || []).join(', ') || 'any', g.intake, g.handback, h('span', { class: 'mono' }, g.source)])),
       h('h2', {}, 'Jigs'),
-      cat.jigs.map((j) => h('div', { class: 'panel' }, h('strong', {}, j.name), ' ', h('span', { class: 'muted' }, j.description),
+      ...cat.jigs.map((j) => h('div', { class: 'panel' }, h('strong', {}, j.name), ' ', h('span', { class: 'muted' }, j.description),
         j.parameters && j.parameters.length ? h('div', { class: 'muted' }, 'Parameters: ' + j.parameters.map((p) => p.name + (p.required ? '*' : '')).join(', ')) : null,
-        planGraph(j.steps.map((s) => ({ id: s.id, guild: s.guild, title: s.task, blocked_by: s.blocked_by, checkpoint: s.checkpoint })), {}))),
+        jigTrack(j.steps.map((s) => ({ id: s.id, guild: s.guild, title: s.task, blocked_by: s.blocked_by, checkpoint: s.checkpoint }))))),
     ];
     if (cat.errors && cat.errors.length) out.push(h('h2', {}, 'Definitions that failed to load'), cat.errors.map((e) => h('div', { class: 'panel attn' }, `${e.kind} ${e.name}: ${e.error}`)));
     out.push(h('h2', {}, 'Runner'),
@@ -277,8 +277,8 @@ function table(head, rows) {
     h('tbody', {}, rows.map((r) => h('tr', {}, r.map((c) => h('td', {}, c))))));
 }
 
-// planGraph lays steps out in columns by depth: a step sits one column right of its deepest blocker.
-function planGraph(steps, state) {
+// layers groups steps into columns by depth: a step sits one column right of its deepest blocker.
+function layers(steps) {
   const by = Object.fromEntries(steps.map((s) => [s.id, s]));
   const depth = {};
   const of = (s, seen = new Set()) => {
@@ -288,9 +288,54 @@ function planGraph(steps, state) {
     return (depth[s.id] = Math.max(-1, ...(s.blocked_by || []).filter((b) => by[b]).map((b) => of(by[b], seen))) + 1);
   };
   steps.forEach((s) => of(s));
-  const layers = [];
-  steps.forEach((s) => (layers[depth[s.id]] = layers[depth[s.id]] || []).push(s));
-  return h('div', { class: 'graph' }, layers.filter(Boolean).map((l) => h('div', { class: 'layer' }, l.map((s) => {
+  const out = [];
+  steps.forEach((s) => (out[depth[s.id]] = out[depth[s.id]] || []).push(s));
+  return out.filter(Boolean);
+}
+
+// jigTrack draws a Jig as dots joined by a line, one column per depth with the step name as its header.
+// Steps that can run in parallel stack in one column, and the line curves from each step into the steps it
+// blocks, so a fan-in bends together. A hollow dot marks a checkpoint. Every step has a fixed height so
+// the curves can be placed without measuring the page.
+const STEP = 96; // px per step: header, rail, guild and up to two lines of task
+const DOT_Y = 31; // px from the top of a step to its dot's centre
+const LINK = 44; // px between columns
+function jigTrack(steps) {
+  const cols = layers(steps);
+  const tall = Math.max(...cols.map((c) => c.length));
+  const dotY = (n, k) => ((tall - n) / 2 + k) * STEP + DOT_Y;
+  const ns = 'http://www.w3.org/2000/svg';
+  const parts = [];
+  cols.forEach((l, i) => {
+    if (i > 0) {
+      const prev = cols[i - 1];
+      const svg = document.createElementNS(ns, 'svg');
+      svg.setAttribute('class', 'link');
+      svg.setAttribute('width', LINK);
+      svg.setAttribute('height', tall * STEP);
+      l.forEach((s, k) => prev.forEach((p, pk) => {
+        if (!(s.blocked_by || []).includes(p.id)) return;
+        const y1 = dotY(prev.length, pk), y2 = dotY(l.length, k);
+        const path = document.createElementNS(ns, 'path');
+        path.setAttribute('d', `M0,${y1} C${LINK / 2},${y1} ${LINK / 2},${y2} ${LINK},${y2}`);
+        svg.append(path);
+      }));
+      parts.push(svg);
+    }
+    parts.push(h('div', { class: 'tcol' + (i === 0 ? ' first' : '') + (i === cols.length - 1 ? ' last' : ''), style: `height:${tall * STEP}px` },
+      l.map((s) => h('div', { class: 'tstep', style: `height:${STEP}px` },
+        h('div', { class: 'th' }, s.id),
+        h('div', { class: 'rail' }, h('span', { class: 'dot' + (s.checkpoint ? ' cp' : ''), title: s.checkpoint ? 'checkpoint' : '' })),
+        h('div', { class: 'tg' }, s.guild),
+        h('div', { class: 'tt muted' }, s.title)))));
+  });
+  return h('div', { class: 'track' }, parts);
+}
+
+// planGraph lays a Plan's steps out in columns by depth, as boxes.
+function planGraph(steps, state) {
+  const layersOfSteps = layers(steps);
+  return h('div', { class: 'graph' }, layersOfSteps.map((l) => h('div', { class: 'layer' }, l.map((s) => {
     const st = (state && state[s.id]) || '';
     return h('div', { class: 'step ' + (st === 'running' ? 'running' : '') + (s.checkpoint ? ' cp' : '') },
       h('strong', {}, s.id), ' ', st ? h('span', { class: 'tag' + (st === 'running' ? ' running' : '') }, st) : null, s.checkpoint ? h('span', { class: 'tag' }, 'checkpoint') : null,

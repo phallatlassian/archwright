@@ -40,3 +40,16 @@ input[type=text], textarea, select { font:inherit; padding:.3rem .5rem; border:1
 a { color:var(--accent); }
 #toast { position:fixed; bottom:1rem; right:1rem; background:var(--fg); color:var(--bg); padding:.5rem .9rem; border-radius:5px; display:none; max-width:30rem; }
 #toast.err { background:var(--bad); color:#fff; }
+.track { display:flex; overflow-x:auto; padding:.6rem 0 .2rem; align-items:flex-start; }
+.tcol { display:flex; flex-direction:column; justify-content:center; min-width:170px; flex:0 0 auto; }
+.tstep { text-align:center; padding:0 .5rem; overflow:hidden; }
+.th { font-weight:600; height:22px; line-height:22px; }
+.rail { position:relative; height:18px; margin:0 -.5rem; }
+.rail::before, .rail::after { content:""; position:absolute; top:8px; height:2px; background:var(--line); }
+.rail::before { left:0; right:50%; } .rail::after { left:50%; right:0; }
+.tcol.first .rail::before, .tcol.last .rail::after { display:none; }
+.dot { position:absolute; left:50%; top:3px; width:12px; height:12px; margin-left:-6px; border-radius:50%; background:var(--accent); z-index:1; }
+.dot.cp { background:var(--card); border:2px solid var(--accent); }
+.tg, .tt { font-size:.8rem; line-height:1.2; }
+.tt { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+.link { flex:0 0 auto; fill:none; stroke:var(--line); stroke-width:2; }

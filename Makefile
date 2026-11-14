@@ -5,7 +5,7 @@ COVER   := $(BIN_DIR)/coverage.out
 
 .DEFAULT_GOAL := help
 
-.PHONY: help build test vet fmt fmt-check tidy clean run cover lint
+.PHONY: help build test vet fmt fmt-check tidy clean run cover lint dash
 
 help: ## List available targets
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-10s %s\n", $$1, $$2}'
@@ -41,3 +41,6 @@ cover: ## Run tests with coverage; writes bin/coverage.out
 
 lint: ## Run golangci-lint (optional; skipped if not installed)
 	@if command -v golangci-lint >/dev/null 2>&1; then golangci-lint run ./...; else echo "golangci-lint not installed; skipping"; fi
+
+dash: ## Serve the dashboard UI on mock data with live reload (pass ARGS="-scenario empty")
+	go run ./cmd/dashdev $(ARGS)
