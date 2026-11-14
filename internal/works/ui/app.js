@@ -80,9 +80,13 @@ function showTip(el, content) {
   if (!tipEl) { tipEl = h('div', { id: 'tip', role: 'tooltip' }); document.body.append(tipEl); }
   tipEl.replaceChildren(content);
   tipEl.className = 'show';
-  const r = el.getBoundingClientRect(), t = tipEl.getBoundingClientRect();
+  // Anchor to the step's visible content (its header down to its last child), not the whole fixed-height
+  // cell, so the card sits right against what the pointer is on.
+  const box = el.getBoundingClientRect(), last = el.lastElementChild ? el.lastElementChild.getBoundingClientRect() : box;
+  const r = { left: box.left, width: box.width, top: box.top, bottom: Math.min(box.bottom, last.bottom) };
+  const t = tipEl.getBoundingClientRect(), gap = 4;
   const left = Math.min(Math.max(8, r.left + r.width / 2 - t.width / 2), window.innerWidth - t.width - 8);
-  const top = r.bottom + 8 + t.height > window.innerHeight && r.top - 8 - t.height > 0 ? r.top - 8 - t.height : r.bottom + 8;
+  const top = r.bottom + gap + t.height > window.innerHeight && r.top - gap - t.height > 0 ? r.top - gap - t.height : r.bottom + gap;
   tipEl.style.left = left + 'px';
   tipEl.style.top = top + 'px';
 }
@@ -478,11 +482,10 @@ function jigTrack(steps) {
       parts.push(svg);
     }
     parts.push(h('div', { class: 'tcol' + (i === 0 ? ' first' : '') + (i === cols.length - 1 ? ' last' : ''), style: `height:${tall * STEP}px` },
-      l.map((s) => h('div', { class: 'tstep', style: `height:${STEP}px` },
+      l.map((s) => withTip(h('div', { class: 'tstep', style: `height:${STEP}px` },
         h('div', { class: 'th' }, s.id),
-        h('div', { class: 'rail' }, h('span', { class: 'dot' + (s.checkpoint ? ' cp' : '') + ' pending', title: s.checkpoint ? 'checkpoint' : '' })),
-        h('div', { class: 'tg' }, s.guild),
-        h('div', { class: 'tt muted' }, s.title)))));
+        h('div', { class: 'rail' }, h('span', { class: 'dot' + (s.checkpoint ? ' cp' : '') + ' pending' })),
+        h('div', { class: 'tg' }, s.guild)), () => stepCard(s)))));
   });
   return h('div', { class: 'track' }, parts);
 }
@@ -545,8 +548,7 @@ function stairStep(s, top, cell, state, compact, ctx) {
   const cellEl = h('div', { class: 'sstep', style: `top:${top}px;height:${cell}px` },
     compact ? null : h('div', { class: 'th' }, s.id),
     h('div', { class: 'rail' }, h('span', { class: 'dot' + (s.checkpoint ? ' cp' : '') + ' ' + ((state && state[s.id]) || 'pending') })),
-    compact ? null : h('div', { class: 'tg' }, s.guild),
-    compact ? null : h('div', { class: 'tt muted' }, s.title));
+    compact ? null : h('div', { class: 'tg' }, s.guild));
   return withTip(cellEl, () => stepCard(s, state && state[s.id], ctx));
 }
 
