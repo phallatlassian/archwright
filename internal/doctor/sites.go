@@ -30,7 +30,10 @@ func checkSites(ctx context.Context, r *collector, d Deps, snap *store.Snapshot)
 		r.pass("sites", "no Sites registered; register one with `archwright site register --url URL --typecheck C --lint C --test C`")
 		return
 	}
-	pending, _ := snap.GateChanges(store.ChangePending)
+	pending, err := snap.GateChanges(store.ChangePending)
+	if err != nil {
+		r.warn("sites", "cannot read proposed gate changes: "+err.Error(), "re-run `archwright doctor`; list them with `archwright site gate-changes`")
+	}
 	for _, s := range sites {
 		checkRepository(ctx, r, d, s)
 		checkPocock(ctx, r, d, s)

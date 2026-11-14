@@ -1,8 +1,9 @@
 // Package doctor is `archwright doctor` (ADR 0014, 0016): read-only checks of
 // everything a run depends on, each reporting pass or the exact fix. It never
 // writes a settings file, an allow rule or any configuration; it prints what
-// the developer should do (ADR 0011). A failing report also stops runs from
-// starting (Gate).
+// the developer should do (ADR 0011). The one thing it writes is the probe's
+// short-lived spool directory in each runner's own temp area, removed again.
+// A failing report also stops runs from starting (Gate).
 package doctor
 
 import (
@@ -120,10 +121,8 @@ func Run(ctx context.Context, d Deps) Report {
 	}
 	checkSites(ctx, r, d, snap)
 
-	rep := Report{OK: true, Checks: r.checks}
-	if len(rep.Failures()) > 0 {
-		rep.OK = false
-	}
+	rep := Report{Checks: r.checks}
+	rep.OK = len(rep.Failures()) == 0
 	return rep
 }
 
@@ -149,11 +148,7 @@ func checkBinary(r *collector, d Deps) {
 			"build it and put it in a directory on PATH: make build && install bin/archwright ~/.local/bin/ (and add ~/.local/bin to PATH)")
 		return
 	}
-	if d.Exe != "" && sameFile(found, d.Exe) {
-		r.pass("archwright-on-path", "%s", found)
-		return
-	}
-	if d.Exe == "" {
+	if d.Exe == "" || sameFile(found, d.Exe) {
 		r.pass("archwright-on-path", "%s", found)
 		return
 	}

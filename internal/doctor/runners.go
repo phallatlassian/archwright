@@ -94,7 +94,7 @@ func checkProbe(r *collector, d Deps, spec runnerSpec, res ProbeResult) {
 
 	switch {
 	case !res.RequestSeen:
-		r.fail("transport:"+name, fmt.Sprintf("no request reached the spool: from inside %s's sandbox `archwright tool` wrote nothing under %s", name, root),
+		r.fail("transport:"+name, fmt.Sprintf("no request reached the spool: the probe's `archwright tool` call wrote nothing under %s (the agent may also have declined to run it; the probe is a live model call, so re-run once to rule that out)", root),
 			fmt.Sprintf("make sure %s can write under %s in its sandbox (it is %s's own temp area, ADR 0018) and that `archwright` is on the PATH %s runs with", root, name, name, name))
 	case !res.ResponseRead:
 		r.fail("transport:"+name, fmt.Sprintf("the request reached the spool but the response was not read back from inside %s's sandbox", name),

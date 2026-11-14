@@ -34,7 +34,7 @@ func checkDirs(r *collector, d Deps) {
 			r.fail(name, err.Error(), "make "+dir.path+" readable: it is the per-user directory (ADR 0018)")
 		case !fi.IsDir():
 			r.fail(name, dir.path+" is not a directory", "move it aside: mv "+dir.path+" "+dir.path+".old")
-		case fi.Mode().Perm()&0o077 != 0 || fi.Mode().Perm()&0o700 != 0o700:
+		case fi.Mode().Perm() != 0o700:
 			r.fail(name, fmt.Sprintf("%s has mode %04o, want 0700", dir.path, fi.Mode().Perm()), "chmod 700 "+dir.path)
 		default:
 			r.pass(name, "%s (mode 0700)", dir.path)
@@ -69,6 +69,7 @@ func checkSchema(r *collector, d Deps) *store.Snapshot {
 		return nil
 	case snap.Version < want:
 		r.pass("schema", "the database is schema v%d; the Works migrates it to v%d at its next start, copying it aside first", snap.Version, want)
+		r.warn("sites", "Site checks are skipped: the registry is still at the old schema", "start the Works to migrate it (`archwright site list` does), then re-run `archwright doctor`")
 		snap.Close()
 		return nil
 	}
