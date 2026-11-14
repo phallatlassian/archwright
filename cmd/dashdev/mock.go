@@ -139,7 +139,7 @@ func newWorld(scenario string) *mockWorld {
 	w.Sites = []store.Site{
 		{Name: "archwright", URL: "https://github.com/phallatlassian/archwright", BaseBranch: "main", ConcurrencyCap: 3,
 			Gates: store.Gates{Typecheck: "go vet ./...", Lint: "golangci-lint run", Test: "go test ./..."}, CreatedAt: ago(72 * time.Hour)},
-		{Name: "billing-api", URL: "https://github.com/example/billing-api", BaseBranch: "trunk", ConcurrencyCap: 2,
+		{Name: "billing-api", URL: "https://github.com/example/billing-api", BaseBranch: "trunk", ConcurrencyCap: 3,
 			Gates: store.Gates{Test: "npm test"}, CreatedAt: ago(48 * time.Hour)},
 	}
 	if scenario == "empty" {
@@ -170,6 +170,19 @@ func buildPlan(jobID, jig, approval string, at time.Time) *store.Plan {
 	s[2].BlockedBy = []string{"implement"}
 	s[2].Checkpoint = true
 	return &store.Plan{JobID: jobID, Steps: s, Jig: jig, Approval: approval, UpdatedAt: at}
+}
+
+// investigatePlan is a Plan instantiated from the investigate-and-fix Jig.
+func investigatePlan(jobID string, at time.Time) *store.Plan {
+	s := steps("trace-code", "survey", "Trace the failing code path",
+		"trace-docs", "survey", "Check docs and ADRs for intended behaviour",
+		"plan-fix", "chancery", "Draft the fix as a ticket",
+		"fix", "masonry", "Implement the fix with a regression test",
+		"review", "hallmark", "Review against the ticket")
+	s[2].BlockedBy, s[2].Checkpoint = []string{"trace-code", "trace-docs"}, true
+	s[3].BlockedBy = []string{"plan-fix"}
+	s[4].BlockedBy = []string{"fix"}
+	return &store.Plan{JobID: jobID, Steps: s, Jig: "investigate-and-fix", Approval: store.ApprovalNotRequired, UpdatedAt: at}
 }
 
 func dispatch(id, jobID, piece, guild string, round int, status, runID string, at time.Time) store.Dispatch {
@@ -229,17 +242,19 @@ func seed(w *mockWorld) {
 
 	// 3. Needs you: a blocking ask the Archwright escalated to the developer.
 	j3 := &mockJob{Job: store.Job{ID: "j-91be55", Title: "Fix flaky scheduler test", Description: "TestSchedulerFairness fails about 1 run in 20 on CI.", Site: "archwright", CreatedAt: ago(2 * time.Hour)}}
-	j3.Plan = buildPlan(j3.Job.ID, "build", store.ApprovalNotRequired, ago(2*time.Hour))
+	j3.Plan = investigatePlan(j3.Job.ID, ago(2*time.Hour))
 	j3.Dispatches = []store.Dispatch{
-		dispatch("d-301", j3.Job.ID, "explore", "survey", 0, store.DispatchReported, "r-301", ago(110*time.Minute)),
-		dispatch("d-302", j3.Job.ID, "implement", "masonry", 0, store.DispatchBlocked, "r-302", ago(30*time.Minute)),
+		dispatch("d-301", j3.Job.ID, "trace-code", "survey", 0, store.DispatchReported, "r-301", ago(110*time.Minute)),
+		dispatch("d-303", j3.Job.ID, "trace-docs", "survey", 0, store.DispatchReported, "r-303", ago(108*time.Minute)),
+		dispatch("d-302", j3.Job.ID, "plan-fix", "chancery", 0, store.DispatchBlocked, "r-302", ago(30*time.Minute)),
 	}
 	j3.Runs = []store.RunRecord{
 		run("r-301", j3.Job.ID, "d-301", "survey", "claude", 30100, 3900, 0.2012, "done", ago(110*time.Minute), 3*time.Minute),
-		run("r-302", j3.Job.ID, "d-302", "masonry", "claude", 55800, 7400, 0.4417, "done", ago(30*time.Minute), 9*time.Minute),
+		run("r-303", j3.Job.ID, "d-303", "survey", "claude", 18300, 2200, 0.1204, "done", ago(108*time.Minute), 2*time.Minute),
+		run("r-302", j3.Job.ID, "d-302", "chancery", "claude", 35800, 4400, 0.2917, "done", ago(30*time.Minute), 6*time.Minute),
 	}
 	j3.Asks = []store.Ask{{
-		ID: "ask-1", JobID: j3.Job.ID, Asker: "warden", Guild: "masonry", Piece: "implement", DispatchID: "d-302", Kind: store.AskDecision,
+		ID: "ask-1", JobID: j3.Job.ID, Asker: "warden", Guild: "chancery", Piece: "plan-fix", DispatchID: "d-302", Kind: store.AskDecision,
 		Blocking: true, Why: "Two fixes are viable and they differ in how much of the scheduler's public behaviour changes.",
 		Questions: []store.Question{
 			{ID: "q1", Text: "How should the test be made deterministic?", Options: []string{"Inject a fake clock", "Sleep longer", "Remove the timing assertion"}, Default: "Inject a fake clock"},
@@ -250,6 +265,7 @@ func seed(w *mockWorld) {
 	}}
 	w.Events["r-301"] = runEvents("r-301", ago(110*time.Minute), 5, false)
 	w.Events["r-302"] = runEvents("r-302", ago(30*time.Minute), 9, false)
+	w.Events["r-303"] = runEvents("r-303", ago(108*time.Minute), 4, false)
 	add(j3)
 
 	// 4. Parked: two failed reviews.
@@ -313,8 +329,67 @@ func seed(w *mockWorld) {
 	w.Events["r-901"] = runEvents("r-901", ago(80*time.Minute), 5, false)
 	add(j9)
 
-	w.Queue.Running = []works.QueueEntry{{DispatchID: "d-102", Job: j1.Job.ID, Piece: "implement", Guild: "masonry", Site: "billing-api"}}
-	w.Queue.Queued = []works.QueueEntry{{DispatchID: "d-902", Job: j9.Job.ID, Piece: "implement", Guild: "masonry", Site: "billing-api", Position: 1, Waiting: "Site cap (2 of 2 running)"}}
+	// 10. investigate-and-fix, mid-flight: one trace done, the other running.
+	j10 := &mockJob{Job: store.Job{ID: "j-a17c30", Title: "Intermittent 502s from the invoice export", Description: "The nightly export returns 502 for about 1 in 10 large accounts.", Site: "billing-api", CreatedAt: ago(25 * time.Minute)}}
+	j10.Plan = investigatePlan(j10.Job.ID, ago(24*time.Minute))
+	j10.Dispatches = []store.Dispatch{
+		dispatch("d-1001", j10.Job.ID, "trace-code", "survey", 0, store.DispatchReported, "r-1001", ago(23*time.Minute)),
+		dispatch("d-1002", j10.Job.ID, "trace-docs", "survey", 0, store.DispatchRunning, "r-1002", ago(4*time.Minute)),
+	}
+	j10.Runs = []store.RunRecord{
+		run("r-1001", j10.Job.ID, "d-1001", "survey", "claude", 27400, 3300, 0.1822, "done", ago(23*time.Minute), 4*time.Minute),
+		run("r-1002", j10.Job.ID, "d-1002", "survey", "claude", 9800, 1100, 0.0640, "running", ago(4*time.Minute), 0),
+	}
+	w.Events["r-1001"] = runEvents("r-1001", ago(23*time.Minute), 6, false)
+	w.Events["r-1002"] = runEvents("r-1002", ago(4*time.Minute), 3, false)
+	add(j10)
+
+	// 11. investigate-and-fix, finished: every step done and accepted.
+	j11 := &mockJob{Job: store.Job{ID: "j-c4d9e1", Title: "Session cookie not cleared on logout", Site: "archwright", Writ: "AW-81", Outcome: "accepted", CreatedAt: ago(30 * time.Hour)}}
+	j11.Plan = investigatePlan(j11.Job.ID, ago(30*time.Hour))
+	for i, st := range []struct{ piece, guild string }{{"trace-code", "survey"}, {"trace-docs", "survey"}, {"plan-fix", "chancery"}, {"fix", "masonry"}, {"review", "hallmark"}} {
+		at := ago(time.Duration(29*60-i*40) * time.Minute)
+		did, rid := fmt.Sprintf("d-110%d", i), fmt.Sprintf("r-110%d", i)
+		j11.Dispatches = append(j11.Dispatches, dispatch(did, j11.Job.ID, st.piece, st.guild, 0, store.DispatchReported, rid, at))
+		j11.Runs = append(j11.Runs, run(rid, j11.Job.ID, did, st.guild, "claude", 20000+i*7000, 2500+i*900, 0.15+float64(i)*0.11, "done", at, 5*time.Minute))
+		w.Events[rid] = runEvents(rid, at, 5, true)
+	}
+	j11.Reviews = []store.Review{{ID: "rv-11", JobID: j11.Job.ID, Seq: 1, Branch: "aw/j-c4d9e1", SHA: "7a6b5c4", Status: store.ReviewReported, SpecBasis: store.SpecWrit, Overall: store.VerdictPass,
+		Standards: &store.Axis{Verdict: store.VerdictPass, Findings: []store.Finding{}}, Spec: &store.Axis{Verdict: store.VerdictPass, Findings: []store.Finding{}}, CreatedAt: ago(25 * time.Hour)}}
+	add(j11)
+
+	// 12. A second ad hoc Plan, with different steps from j-2c9d04: a fan-out then a join.
+	j12 := &mockJob{Job: store.Job{ID: "j-e05b62", Title: "Audit and bump vulnerable dependencies", Description: "npm audit reports 3 high severity advisories.", Site: "billing-api", CreatedAt: ago(70 * time.Minute)}}
+	adhoc := steps("audit", "survey", "List advisories and affected packages",
+		"bump-runtime", "masonry", "Bump runtime dependencies",
+		"bump-dev", "masonry", "Bump dev dependencies",
+		"changelog", "chancery", "Write the upgrade notes")
+	adhoc[1].BlockedBy, adhoc[2].BlockedBy = []string{"audit"}, []string{"audit"}
+	adhoc[3].BlockedBy = []string{"bump-runtime", "bump-dev"}
+	j12.Plan = &store.Plan{JobID: j12.Job.ID, Steps: adhoc, Approval: store.ApprovalApproved, UpdatedAt: ago(66 * time.Minute)}
+	j12.Dispatches = []store.Dispatch{
+		dispatch("d-1201", j12.Job.ID, "audit", "survey", 0, store.DispatchReported, "r-1201", ago(64*time.Minute)),
+		dispatch("d-1202", j12.Job.ID, "bump-runtime", "masonry", 0, store.DispatchRunning, "r-1202", ago(12*time.Minute)),
+		dispatch("d-1203", j12.Job.ID, "bump-dev", "masonry", 0, store.DispatchBlocked, "r-1203", ago(20*time.Minute)),
+	}
+	j12.Runs = []store.RunRecord{
+		run("r-1201", j12.Job.ID, "d-1201", "survey", "codex", 15200, 1900, 0, "done", ago(64*time.Minute), 3*time.Minute),
+		run("r-1202", j12.Job.ID, "d-1202", "masonry", "claude", 48100, 6200, 0.3911, "running", ago(12*time.Minute), 0),
+		run("r-1203", j12.Job.ID, "d-1203", "masonry", "claude", 22700, 2600, 0.1688, "done", ago(20*time.Minute), 6*time.Minute),
+	}
+	j12.Asks = []store.Ask{{ID: "ask-2", JobID: j12.Job.ID, Asker: "wright", Guild: "masonry", Piece: "bump-dev", DispatchID: "d-1203", Kind: store.AskDecision, Blocking: true,
+		Why: "Upgrading the test runner is a major version bump.", Holder: store.HolderWarden, Status: store.AskOpen, Answers: []store.Answer{}, CreatedAt: ago(14 * time.Minute),
+		Questions: []store.Question{{ID: "q1", Text: "Take the major bump of the test runner?", Options: []string{"Yes", "No, pin the current major"}, Default: "No, pin the current major"}}}}
+	w.Events["r-1201"] = runEvents("r-1201", ago(64*time.Minute), 4, false)
+	w.Events["r-1202"] = runEvents("r-1202", ago(12*time.Minute), 7, false)
+	w.Events["r-1203"] = runEvents("r-1203", ago(20*time.Minute), 6, false)
+	add(j12)
+
+	w.Queue.Running = []works.QueueEntry{
+		{DispatchID: "d-102", Job: j1.Job.ID, Piece: "implement", Guild: "masonry", Site: "billing-api"},
+		{DispatchID: "d-1002", Job: j10.Job.ID, Piece: "trace-docs", Guild: "survey", Site: "billing-api"},
+		{DispatchID: "d-1202", Job: j12.Job.ID, Piece: "bump-runtime", Guild: "masonry", Site: "billing-api"}}
+	w.Queue.Queued = []works.QueueEntry{{DispatchID: "d-902", Job: j9.Job.ID, Piece: "implement", Guild: "masonry", Site: "billing-api", Position: 1, Waiting: "Warden cap (2 of 2 masonry Wrights running)"}}
 	w.NeedsYou = append(w.NeedsYou,
 		store.NeedsYouItem{ID: 2, Kind: store.NeedsPermissionWanted, JobID: j1.Job.ID, Site: "billing-api",
 			Summary: "A runner denied `npm install left-pad`, which would have prompted.", Detail: json.RawMessage(`{"tool":"Bash","command":"npm install left-pad","runner":"codex"}`), CreatedAt: ago(4 * time.Minute)},

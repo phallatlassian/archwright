@@ -1,5 +1,5 @@
-:root { --bg:#f6f7f9; --fg:#1d2129; --muted:#6b7280; --card:#fff; --line:#d9dde3; --accent:#2457c5; --bad:#b42318; --warn:#b54708; --ok:#17692f; }
-@media (prefers-color-scheme: dark) { :root { --bg:#14171c; --fg:#e6e8ec; --muted:#9097a3; --card:#1d222a; --line:#313846; --accent:#7aa2f7; --bad:#f97066; --warn:#fdb022; --ok:#47cd89; } }
+:root { --orange:#ea580c; --bg:#f6f7f9; --fg:#1d2129; --muted:#6b7280; --card:#fff; --line:#d9dde3; --accent:#2457c5; --bad:#b42318; --warn:#b54708; --ok:#17692f; }
+@media (prefers-color-scheme: dark) { :root { --orange:#fb923c; --bg:#14171c; --fg:#e6e8ec; --muted:#9097a3; --card:#1d222a; --line:#313846; --accent:#7aa2f7; --bad:#f97066; --warn:#fdb022; --ok:#47cd89; } }
 * { box-sizing: border-box; }
 body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.45 system-ui, sans-serif; }
 header { display:flex; align-items:center; gap:1.5rem; padding:.6rem 1rem; border-bottom:1px solid var(--line); background:var(--card); position:sticky; top:0; z-index:1; }
@@ -43,13 +43,47 @@ a { color:var(--accent); }
 .track { display:flex; overflow-x:auto; padding:.6rem 0 .2rem; align-items:flex-start; }
 .tcol { display:flex; flex-direction:column; justify-content:center; min-width:170px; flex:0 0 auto; }
 .tstep { text-align:center; padding:0 .5rem; overflow:hidden; }
-.th { font-weight:600; height:22px; line-height:22px; }
-.rail { position:relative; height:18px; margin:0 -.5rem; }
-.rail::before, .rail::after { content:""; position:absolute; top:8px; height:2px; background:var(--line); }
-.rail::before { left:0; right:50%; } .rail::after { left:50%; right:0; }
+.link { flex:0 0 auto; fill:none; stroke:var(--line); stroke-width:2; }
+.tcol .rail::before, .tcol .rail::after { content:""; position:absolute; top:8px; height:2px; background:var(--line); }
+.tcol .rail::before { left:0; right:50%; } .tcol .rail::after { left:50%; right:0; }
 .tcol.first .rail::before, .tcol.last .rail::after { display:none; }
+/* the Job lanes' staircase: a column per step, each step placed by row */
+.sinner { position:relative; display:flex; flex:1 0 auto; }
+.sinner > svg path { vector-effect:non-scaling-stroke; }
+.sinner > svg { position:absolute; left:0; top:0; pointer-events:none; fill:none; stroke:var(--line); stroke-width:2; }
+.scol { position:relative; flex:1 1 0; }
+.sstep { position:absolute; left:0; right:0; text-align:center; }
+.sstep .rail { margin:0; }
+.sstep .tg, .sstep .tt { background:var(--card); position:relative; } /* text hides a curve passing behind it */
+.th { font-weight:600; height:22px; line-height:22px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.rail { position:relative; height:18px; margin:0 -.5rem; }
 .dot { position:absolute; left:50%; top:3px; width:12px; height:12px; margin-left:-6px; border-radius:50%; background:var(--accent); z-index:1; }
 .dot.cp { background:var(--card); border:2px solid var(--accent); }
 .tg, .tt { font-size:.8rem; line-height:1.2; }
 .tt { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
-.link { flex:0 0 auto; fill:none; stroke:var(--line); stroke-width:2; }
+.dot.done { --c:var(--ok); } .dot.running { --c:var(--ok); } .dot.blocked { --c:var(--orange); } .dot.pending { --c:var(--accent); }
+.dot { background:var(--c, var(--accent)); } .dot.cp { background:var(--card); border-color:var(--c, var(--accent)); }
+.legend { margin-left:1rem; display:inline-flex; gap:1rem; align-items:center; font-size:.8rem; color:var(--muted); }
+.dot.sw { position:static; display:inline-block; width:10px; height:10px; margin:0 .25rem 0 0; vertical-align:middle; }
+.lanes { display:flex; flex-direction:column; gap:.6rem; }
+.lane { display:flex; align-items:center; gap:1rem; background:var(--card); border:1px solid var(--line); border-radius:6px; padding:.4rem .8rem; }
+.lane > .track { flex:1 1 0; min-width:0; }
+.lhead { flex:0 0 240px; text-decoration:none; color:inherit; }
+.lhead:hover .t { color:var(--accent); }
+.lhead .t { font-weight:600; } .lhead .m { color:var(--muted); font-size:.8rem; }
+.lempty { align-self:center; }
+.group summary { cursor:pointer; margin:1.2rem 0 .5rem; list-style:none; } .group summary::-webkit-details-marker { display:none; }
+.group summary::before { content:"\25B8"; display:inline-block; width:1rem; color:var(--muted); } .group[open] > summary::before { content:"\25BE"; }
+.group summary h2 { display:inline; margin:0; } .gdesc { font-weight:400; margin-left:.8rem; }
+.track.compact { padding:.1rem 0; }
+.track.compact .sstep .rail { margin-top:4px; }
+.lhrow { background:none; border-color:transparent; padding-bottom:0; align-items:flex-end; }
+.hcol { flex:1 1 0; padding:0 .15rem; box-sizing:border-box; overflow:hidden; text-align:center; font-weight:600; } /* same face as a step name (.th) */
+.hname { line-height:1.4; white-space:nowrap; text-overflow:ellipsis; overflow:hidden; }
+.dot.done { background:var(--card); border:0; display:flex; align-items:center; justify-content:center; color:var(--ok); font-size:15px; font-weight:700; line-height:1; }
+.dot.done::after { content:"\2713"; }
+.dot.done.cp { border:2px solid var(--ok); font-size:10px; }
+.dot.sw.done { width:12px; height:12px; font-size:13px; }
+.dot.running { animation:pulse 1.6s ease-out infinite; }
+@keyframes pulse { 0% { box-shadow:0 0 0 0 color-mix(in srgb, var(--ok) 65%, transparent); } 70%, 100% { box-shadow:0 0 0 8px transparent; } }
+@media (prefers-reduced-motion: reduce) { .dot.running { animation:none; } }

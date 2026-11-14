@@ -83,24 +83,54 @@ const views = {
     const jobs = await get('/board');
     const sites = [...new Set(jobs.map((j) => j.site || '(no site)'))].sort();
     const want = sessionStorage.getItem('aw-site') || '';
-    const shown = jobs.filter((j) => !want || (j.site || '(no site)') === want);
+    const shown = jobs.filter((j) => !want || (j.site || '(no site)') === want)
+      .sort((a, b) => STATES.indexOf(a.state) - STATES.indexOf(b.state) || b.created_at.localeCompare(a.created_at));
+    const [full, dispatches, catalogue] = await Promise.all([Promise.all(shown.map((j) => get('/jobs/' + j.id))),
+      Promise.all(shown.map((j) => get(`/jobs/${j.id}/dispatches`))), get('/catalogue').catch(() => ({ jigs: [] }))]);
     const sel = h('select', { onchange: (e) => { sessionStorage.setItem('aw-site', e.target.value); refresh(); } },
       h('option', { value: '' }, 'All Sites'),
       sites.map((s) => h('option', { value: s, selected: s === want }, s)));
-    const cols = STATES.map((st) => {
-      const mine = shown.filter((j) => j.state === st).sort((a, b) => b.created_at.localeCompare(a.created_at));
-      return h('div', { class: 'col' },
-        h('h2', {}, h('span', {}, st), h('span', { class: 'muted' }, mine.length)),
-        mine.map((j) => h('a', { class: 'card', href: '#/job/' + j.id },
+    const lane = (j, i, columns) => {
+      const plan = full[i].plan;
+      return h('div', { class: 'lane' },
+        h('a', { class: 'lhead', href: '#/job/' + j.id },
           h('div', { class: 't' }, j.title),
+          h('div', {}, tag(j.state), plan && plan.approval === 'pending' ? tag('plan pending') : null),
           h('div', { class: 'm' }, [j.site || 'no site', j.id].join(' · ')),
           h('div', { class: 'm' },
-            j.steps ? j.steps + ' steps · ' : '',
             j.live_runs ? j.live_runs + ' running · ' : '',
             j.open_asks ? j.open_asks + ' ask(s) · ' : '',
-            money(j.cost_usd)))));
+            money(j.cost_usd))),
+        plan && plan.steps.length ? stairTrack(plan.steps, stepStatuses(plan.steps, dispatches[i], full[i]), !!columns, columns) : h('div', { class: 'muted lempty' }, 'No Plan yet.'));
+    };
+    // Group by the Jig each Plan came from: one section per Jig, then ad hoc Plans, then Jobs with no Plan.
+    const AD_HOC = '\uffffad hoc', NO_PLAN = '\uffffzno plan'; // sort after every Jig name
+    const groups = new Map();
+    shown.forEach((j, i) => {
+      const key = !j.steps ? NO_PLAN : j.jig || AD_HOC;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push({ j, i });
     });
-    return h('div', {}, h('h1', {}, 'Jobs'), h('div', { class: 'row' }, sel), h('div', { class: 'board' }, cols));
+    const desc = Object.fromEntries(catalogue.jigs.map((j) => [j.name, j.description]));
+    const label = (k) => (k === AD_HOC ? 'Ad hoc Plans' : k === NO_PLAN ? 'No Plan yet' : k);
+    const sections = [...groups].sort(([a], [b]) => a.localeCompare(b)).map(([k, members]) => {
+      // A Jig's columns come from its definition (or, if it is gone, its first Plan), so every lane lines up.
+      const named = k !== AD_HOC && k !== NO_PLAN;
+      const layout = named ? ((catalogue.jigs.find((j) => j.name === k) || {}).steps || []).map((s) => ({ id: s.id, guild: s.guild, title: s.task, blocked_by: s.blocked_by, checkpoint: s.checkpoint })) : [];
+      const steps = layout.length ? layout : named ? full[members[0].i].plan.steps
+        : k === AD_HOC ? sharedSteps(members.map(({ i }) => full[i].plan.steps)) : [];
+      const ordered = k === AD_HOC ? steps : layers(steps).flat(); // the merged order is already one column per step
+      const columns = ordered.length ? ordered.map((s) => s.id) : null;
+      // Each group expands and collapses; the choice survives the live refresh and reloads of the tab.
+      const closed = () => { try { return JSON.parse(sessionStorage.getItem('aw-collapsed') || '[]'); } catch { return []; } };
+      return h('details', { class: 'group', open: !closed().includes(k), ontoggle: (e) => {
+        const rest = closed().filter((x) => x !== k);
+        sessionStorage.setItem('aw-collapsed', JSON.stringify(e.target.open ? rest : [...rest, k]));
+      } },
+        h('summary', {}, h('h2', {}, label(k), ' ', h('span', { class: 'muted' }, members.length), desc[k] ? h('span', { class: 'muted gdesc' }, desc[k]) : null)),
+        h('div', { class: 'lanes' }, ordered.length ? jigHeader(ordered) : null, members.map(({ j, i }) => lane(j, i, columns))));
+    });
+    return h('div', {}, h('h1', {}, 'Jobs'), h('div', { class: 'row' }, sel, legend()), sections.length ? sections : h('p', { class: 'muted' }, 'No Jobs.'));
   },
 
   async needsYou() {
@@ -293,10 +323,31 @@ function layers(steps) {
   return out.filter(Boolean);
 }
 
-// jigTrack draws a Jig as dots joined by a line, one column per depth with the step name as its header.
-// Steps that can run in parallel stack in one column, and the line curves from each step into the steps it
-// blocks, so a fan-in bends together. A hollow dot marks a checkpoint. Every step has a fixed height so
-// the curves can be placed without measuring the page.
+// stepStatuses says where each Plan step stands: done, running, blocked or pending. The API only reports
+// a running step (step_states), so the rest is read from the Job's dispatches, matching a dispatch to a step
+// by piece name; a step whose latest dispatch is live is running, one that ended on an ask is blocked, one
+// that reported is done, and anything else is pending. An accepted Job has every step done.
+function stepStatuses(steps, ds, job) {
+  const out = {};
+  for (const s of steps) {
+    const mine = ds.filter((d) => d.piece === s.id).sort((a, b) => b.round - a.round || b.created_at.localeCompare(a.created_at));
+    const d = mine[0];
+    out[s.id] = job.outcome === 'accepted' ? 'done'
+      : !d ? 'pending'
+      : d.status === 'queued' || d.status === 'running' ? 'running'
+      : d.status === 'blocked' ? 'blocked'
+      : d.status === 'reported' || d.status === 'answered' ? 'done'
+      : 'pending';
+  }
+  return out;
+}
+const STATUS_LABEL = { done: 'completed', running: 'executing', blocked: 'blocked', pending: 'pending' };
+
+// jigTrack draws a Jig for the catalogue: dots joined by a line, one column per depth with the step name as
+// its header. Steps that can run in parallel stack in one column, and the line curves from each step into
+// the steps it blocks, so a fan-in bends together. A hollow dot marks a checkpoint. Every step has a fixed
+// height so the curves can be placed without measuring the page.
+const COLW = 120; // the narrowest a column of a Job lane and its header gets; wider lanes spread the columns evenly
 const STEP = 96; // px per step: header, rail, guild and up to two lines of task
 const DOT_Y = 31; // px from the top of a step to its dot's centre
 const LINK = 44; // px between columns
@@ -325,11 +376,106 @@ function jigTrack(steps) {
     parts.push(h('div', { class: 'tcol' + (i === 0 ? ' first' : '') + (i === cols.length - 1 ? ' last' : ''), style: `height:${tall * STEP}px` },
       l.map((s) => h('div', { class: 'tstep', style: `height:${STEP}px` },
         h('div', { class: 'th' }, s.id),
-        h('div', { class: 'rail' }, h('span', { class: 'dot' + (s.checkpoint ? ' cp' : ''), title: s.checkpoint ? 'checkpoint' : '' })),
+        h('div', { class: 'rail' }, h('span', { class: 'dot' + (s.checkpoint ? ' cp' : '') + ' pending', title: s.checkpoint ? 'checkpoint' : '' })),
         h('div', { class: 'tg' }, s.guild),
         h('div', { class: 'tt muted' }, s.title)))));
   });
   return h('div', { class: 'track' }, parts);
+}
+
+// stairs places a Plan's steps for a Job lane: one column per step, in dependency order, and a row for each,
+// so parallel steps sit at different heights and a step that waits on several is centred between them
+// (a fan-in) while siblings spread evenly around the step they share (a fan-out). Rows may be fractional.
+function stairs(steps) {
+  const row = {};
+  for (const l of layers(steps)) {
+    const want = l.map((s) => {
+      const bs = (s.blocked_by || []).filter((b) => row[b] != null).map((b) => row[b]);
+      return bs.length ? bs.reduce((a, b) => a + b, 0) / bs.length : 0;
+    });
+    const idx = l.map((_, i) => i).sort((a, b) => want[a] - want[b]);
+    const got = [];
+    idx.forEach((i, n) => { got[n] = n && want[i] < got[n - 1] + 1 ? got[n - 1] + 1 : want[i]; });
+    const shift = idx.reduce((a, i) => a + want[i], 0) / idx.length - got.reduce((a, b) => a + b, 0) / got.length;
+    idx.forEach((i, n) => { row[l[i].id] = got[n] + shift; });
+  }
+  const top = Math.min(...Object.values(row));
+  for (const k of Object.keys(row)) row[k] -= top;
+  return row;
+}
+
+// stairTrack draws a Job's Plan as a staircase (see stairs): a dot per step coloured by status, joined by
+// S-curves that run from each blocker into the step it blocks. A compact track is only the dots, for lanes
+// under a jigHeader. Every step has a fixed size so the curves can be placed without measuring the page.
+const LANE_STEP = 26; // px per step in a compact lane: just the dot
+function stairTrack(steps, state, compact, columns) {
+  const ord = layers(steps).flat();
+  const ids = columns || ord.map((s) => s.id); // a shared header's columns; a lane without a step leaves its column empty
+  const byId = Object.fromEntries(ord.map((s) => [s.id, s]));
+  const row = stairs(steps);
+  const unit = 64; // px per row
+  const cell = compact ? LANE_STEP : STEP;
+  const dotAt = compact ? LANE_STEP / 2 : DOT_Y;
+  const H = Math.max(...Object.values(row)) * unit + cell;
+  const col = Object.fromEntries(ids.map((id, i) => [id, i]));
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  // x runs 100 units per column, stretched to the lane's width, so the columns spread evenly
+  svg.setAttribute('viewBox', `0 0 ${ids.length * 100} ${H}`);
+  svg.setAttribute('preserveAspectRatio', 'none');
+  svg.setAttribute('width', '100%');
+  svg.setAttribute('height', H);
+  for (const s of ord) for (const b of s.blocked_by || []) {
+    if (col[b] == null || col[s.id] == null) continue;
+    const x1 = col[b] * 100 + 50, x2 = col[s.id] * 100 + 50, mid = (x1 + x2) / 2;
+    const y1 = row[b] * unit + dotAt, y2 = row[s.id] * unit + dotAt;
+    const path = document.createElementNS(ns, 'path');
+    path.setAttribute('d', `M${x1},${y1} C${mid},${y1} ${mid},${y2} ${x2},${y2}`);
+    svg.append(path);
+  }
+  return h('div', { class: 'track' + (compact ? ' compact' : '') }, h('div', { class: 'sinner', style: `min-width:${ids.length * COLW}px;height:${H}px` }, svg,
+    ids.map((id) => h('div', { class: 'scol', style: `min-width:${COLW}px;height:${H}px` }, byId[id] ? stairStep(byId[id], row[id] * unit, cell, state, compact) : null))));
+}
+
+function stairStep(s, top, cell, state, compact) {
+  return h('div', { class: 'sstep', style: `top:${top}px;height:${cell}px` },
+    compact ? null : h('div', { class: 'th' }, s.id),
+    h('div', { class: 'rail' }, h('span', { class: 'dot' + (s.checkpoint ? ' cp' : '') + ' ' + ((state && state[s.id]) || 'pending'),
+      title: (compact ? s.id + ' \u00b7 ' + s.guild + ': ' + s.title + ' \u00b7 ' : '') + (state && state[s.id] ? STATUS_LABEL[state[s.id]] : 'pending') + (s.checkpoint ? ' (checkpoint)' : '') })),
+    compact ? null : h('div', { class: 'tg' }, s.guild),
+    compact ? null : h('div', { class: 'tt muted' }, s.title));
+}
+
+// sharedSteps merges several Plans' steps into the columns of one header: a step name keeps one column
+// across Plans, and a step new to the header goes after its blockers and after the Plan's earlier steps,
+// or at the end when it has neither.
+function sharedSteps(plans) {
+  const out = [];
+  for (const steps of plans) {
+    let cursor = -1; // the column of the Plan's latest step so far
+    for (const s of layers(steps).flat()) {
+      let at = out.findIndex((o) => o.id === s.id);
+      if (at < 0) {
+        const after = Math.max(cursor, ...(s.blocked_by || []).map((b) => out.findIndex((o) => o.id === b)));
+        at = after < 0 ? out.length : after + 1;
+        out.splice(at, 0, s);
+      }
+      cursor = at;
+    }
+  }
+  return out;
+}
+
+// legend explains the dot colours.
+function legend() {
+  return h('span', { class: 'legend' }, ['done', 'running', 'blocked', 'pending'].map((k) => h('span', {}, h('span', { class: 'dot sw ' + k }), ' ' + STATUS_LABEL[k])));
+}
+
+// jigHeader is the row of column headers over a group's compact lanes: one column per step in ord, at the
+// same widths as the lanes, so each name sits over its dots.
+function jigHeader(ord) {
+  return h('div', { class: 'lane lhrow' }, h('div', { class: 'lhead' }), h('div', { class: 'track' },
+    ord.map((s) => h('div', { class: 'hcol', style: `min-width:${COLW}px` }, h('div', { class: 'hname', title: s.guild + ': ' + s.title }, s.id, s.checkpoint ? h('span', { class: 'cpm' }, ' \u25C7') : null)))));
 }
 
 // planGraph lays a Plan's steps out in columns by depth, as boxes.
