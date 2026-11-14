@@ -190,7 +190,7 @@ const views = {
       return [g, [...new Set(mine.map((d) => d.piece))].length, mine.filter((d) => live.includes(d)).length, money(rs.reduce((a, r) => a + r.cost_usd, 0))];
     })) : h('p', { class: 'muted' }, 'No Warden has dispatched work.'));
 
-    parts.push(h('h2', {}, 'Tasks and Wright runs'));
+    parts.push(h('h2', {}, 'Pieces and Wright runs'));
     parts.push(ds.length ? table(['Piece', 'Guild', 'Round', 'Status', 'Run', 'Runner', 'Tokens in/out', 'Cost'], ds.map((d) => {
       const r = runs.find((x) => x.dispatch_id === d.id);
       return [d.piece, d.guild, d.round, tag(d.status),
@@ -247,7 +247,7 @@ const views = {
       return [...m].map(([k, g]) => [k || '(unknown)', g.runs, tokens(g.input_tokens), tokens(g.output_tokens), money(g.cost_usd)]);
     };
     const head = (first) => [first, 'Runs', 'Tokens in', 'Tokens out', 'Cost'];
-    const perJob = group('job_id').map((r, i) => { r[0] = h('a', { href: '#/job/' + r[0] }, title[r[0]] || r[0]); return r; });
+    const perJob = group('job_id').map((r) => { r[0] = h('a', { href: '#/job/' + r[0] }, title[r[0]] || r[0]); return r; });
     return h('div', {}, h('h1', {}, 'Usage and cost'),
       h('p', { class: 'muted' }, `Total ${money(sum(use, 'cost_usd'))} over ${sum(use, 'runs')} runs. A runner that reports no cost (codex) counts $0.`),
       h('h2', {}, 'Per Job'), table(head('Job'), perJob),

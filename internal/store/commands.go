@@ -271,9 +271,8 @@ func (s *Store) PurgeJob(id string) error {
 }
 
 // purgeJob is PurgeJob recording who asked: the developer, or retention. The
-// only raw run content the Works stores so far is the rendered brief; runner
-// events (messages, tool calls, vendor events) are not persisted yet, so there
-// is nothing more to clear (ADR 0017).
+// raw run content the Works stores is the rendered brief and the vendor event
+// behind each run timeline entry; the timeline's kind and summary stay (ADR 0017).
 func (s *Store) purgeJob(id, by string) error {
 	j, err := s.GetJob(id)
 	if err != nil {
