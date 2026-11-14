@@ -263,7 +263,19 @@ func newHandler(st *store.Store, runs *Runs, sm *sites.Manager, token string, pi
 			fail(w, err)
 			return
 		}
-		reply(w, 200, out)
+		resp := struct {
+			JobWithPlan
+			StepStates map[string]string `json:"step_states"`
+		}{JobWithPlan: out, StepStates: map[string]string{}}
+		if out.Plan != nil {
+			ds, err := st.Dispatches(out.ID)
+			if err != nil {
+				fail(w, err)
+				return
+			}
+			resp.StepStates = StepStates(out.Plan.Steps, ds)
+		}
+		reply(w, 200, resp)
 	})
 	mux.HandleFunc("PUT /jobs/{id}/plan", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {

@@ -148,12 +148,7 @@ const views = {
     const closed = !!full.outcome;
     const live = ds.filter((d) => d.status === 'queued' || d.status === 'running');
     const guilds = [...new Set([...(full.plan ? full.plan.steps.map((s) => s.guild) : []), ...ds.map((d) => d.guild)])];
-    const stepState = {};
-    for (const s of full.plan ? full.plan.steps : []) {
-      const mine = ds.filter((d) => d.guild === s.guild);
-      // The Works does not link a step to its pieces, so only a live Wright of the step's Guild is shown.
-      stepState[s.id] = mine.some((d) => live.includes(d)) ? 'running' : '';
-    }
+    const stepState = full.step_states || {};
     const cost = runs.reduce((a, r) => a + r.cost_usd, 0);
     const controls = closed ? [] : [
       full.paused_at
@@ -297,8 +292,8 @@ function planGraph(steps, state) {
   steps.forEach((s) => (layers[depth[s.id]] = layers[depth[s.id]] || []).push(s));
   return h('div', { class: 'graph' }, layers.filter(Boolean).map((l) => h('div', { class: 'layer' }, l.map((s) => {
     const st = (state && state[s.id]) || '';
-    return h('div', { class: 'step ' + st + (s.checkpoint ? ' cp' : '') },
-      h('strong', {}, s.id), ' ', st ? tag(st) : null, s.checkpoint ? h('span', { class: 'tag' }, 'checkpoint') : null,
+    return h('div', { class: 'step ' + (st === 'running' ? 'running' : '') + (s.checkpoint ? ' cp' : '') },
+      h('strong', {}, s.id), ' ', st ? h('span', { class: 'tag' + (st === 'running' ? ' running' : '') }, st) : null, s.checkpoint ? h('span', { class: 'tag' }, 'checkpoint') : null,
       h('div', {}, s.title), h('div', { class: 'muted' }, s.guild),
       s.blocked_by && s.blocked_by.length ? h('div', { class: 'muted' }, '← ' + s.blocked_by.join(', ')) : null);
   }))));
