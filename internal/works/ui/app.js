@@ -10,10 +10,11 @@ function h(tag, attrs, ...kids) {
   for (const [k, v] of Object.entries(attrs || {})) {
     if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
     else if (k === 'class') el.className = v;
+    else if (k === 'style') el.style.cssText = v; // not setAttribute: the page's CSP forbids inline style attributes
     else if (v === true) el.setAttribute(k, '');
     else if (v !== false && v != null) el.setAttribute(k, v);
   }
-  for (const kid of kids.flat()) if (kid != null && kid !== false) el.append(kid.nodeType ? kid : String(kid));
+  for (const kid of kids.flat(Infinity)) if (kid != null && kid !== false) el.append(kid.nodeType ? kid : String(kid));
   return el;
 }
 
@@ -60,6 +61,62 @@ async function act(label, method, path, body, then) {
   }
 }
 
+// ---- step popover -----------------------------------------------------------------
+// One floating card, shown while the pointer (or keyboard focus) is on an element that has a card to show.
+// It ignores the pointer, so it never gets in the way. A redraw replaces the element it was shown for, so
+// afterwards it moves to whatever step is under the pointer, with its up-to-date details.
+let tipEl;
+let pointer = { x: -1, y: -1 };
+document.addEventListener('mousemove', (e) => { pointer = { x: e.clientX, y: e.clientY }; }, { passive: true });
+function hideTip() { if (tipEl) tipEl.className = ''; }
+// retip runs after a redraw: the element the card was for is gone, so if one that has a card is now under
+// the pointer, show its (fresh) card there; otherwise hide it.
+function retip() {
+  const el = tipEl && tipEl.className === 'show' ? document.elementFromPoint(pointer.x, pointer.y) : null;
+  const target = el && el.closest('[data-tip]');
+  if (target) showTip(target, target._tip()); else hideTip();
+}
+function showTip(el, content) {
+  if (!tipEl) { tipEl = h('div', { id: 'tip', role: 'tooltip' }); document.body.append(tipEl); }
+  tipEl.replaceChildren(content);
+  tipEl.className = 'show';
+  const r = el.getBoundingClientRect(), t = tipEl.getBoundingClientRect();
+  const left = Math.min(Math.max(8, r.left + r.width / 2 - t.width / 2), window.innerWidth - t.width - 8);
+  const top = r.bottom + 8 + t.height > window.innerHeight && r.top - 8 - t.height > 0 ? r.top - 8 - t.height : r.bottom + 8;
+  tipEl.style.left = left + 'px';
+  tipEl.style.top = top + 'px';
+}
+// withTip makes el show build() on hover and focus.
+function withTip(el, build) {
+  el.setAttribute('tabindex', '0');
+  el.dataset.tip = '1';
+  el._tip = build;
+  el.addEventListener('mouseenter', () => showTip(el, build()));
+  el.addEventListener('focus', () => showTip(el, build()));
+  el.addEventListener('mouseleave', hideTip);
+  el.addEventListener('blur', hideTip);
+  return el;
+}
+window.addEventListener('scroll', hideTip, true);
+
+// stepCard is what the popover says about a Plan step: what it is, where it stands, and the Wright runs
+// behind it. ctx is the Job's dispatches and runs; without it the card describes the step alone.
+function stepCard(s, status, ctx) {
+  const ds = ctx ? ctx.ds.filter((d) => d.piece === s.id).sort((a, b) => a.round - b.round) : [];
+  return h('div', { class: 'tipc' },
+    h('div', { class: 'tiph' }, h('strong', {}, s.id), s.checkpoint ? h('span', { class: 'cpm' }, ' \u25C7 checkpoint') : null,
+      status ? h('span', { class: 'tag ' + status }, STATUS_LABEL[status]) : null),
+    h('div', { class: 'muted' }, s.guild),
+    h('div', {}, s.title),
+    s.brief ? h('div', { class: 'tipb' }, s.brief) : null,
+    s.blocked_by && s.blocked_by.length ? h('div', { class: 'muted' }, 'Waits on ' + s.blocked_by.join(', ')) : null,
+    ctx ? (ds.length ? h('div', { class: 'tipr' }, ds.map((d) => {
+      const r = ctx.runs.find((x) => x.dispatch_id === d.id);
+      return h('div', {}, h('span', { class: 'muted' }, 'Round ' + d.round + ' '), tag(d.status),
+        r ? h('span', { class: 'muted' }, ` ${r.runner || ''} \u00b7 ${tokens(r.input_tokens)} in / ${tokens(r.output_tokens)} out \u00b7 ${money(r.cost_usd)}`) : null);
+    })) : h('div', { class: 'muted' }, 'No Wright has run for this step.')) : null);
+}
+
 // ---- formatting -------------------------------------------------------------------
 const money = (n) => '$' + (n || 0).toFixed(4);
 const tokens = (n) => (n || 0).toLocaleString();
@@ -74,7 +131,6 @@ const ago = (iso) => {
 const tag = (s) => h('span', { class: 'tag ' + s }, s);
 const jobLink = (id, text) => h('a', { href: '#/job/' + id }, text || id);
 
-const STATES = ['needs-you', 'parked', 'running', 'in-progress', 'paused', 'planning', 'accepted', 'discarded'];
 
 // ---- views ------------------------------------------------------------------------
 // Each view fetches what it shows and returns a node; refresh() re-renders the current one.
@@ -83,24 +139,54 @@ const views = {
     const jobs = await get('/board');
     const sites = [...new Set(jobs.map((j) => j.site || '(no site)'))].sort();
     const want = sessionStorage.getItem('aw-site') || '';
-    const shown = jobs.filter((j) => !want || (j.site || '(no site)') === want);
-    const sel = h('select', { onchange: (e) => { sessionStorage.setItem('aw-site', e.target.value); refresh(); } },
+    const shown = jobs.filter((j) => !want || (j.site || '(no site)') === want)
+      .sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id)); // oldest first, and never by state, so a lane stays put as its Job moves
+    const [full, dispatches, runs, catalogue] = await Promise.all([Promise.all(shown.map((j) => get('/jobs/' + j.id))),
+      Promise.all(shown.map((j) => get(`/jobs/${j.id}/dispatches`))), Promise.all(shown.map((j) => get(`/jobs/${j.id}/runs`))), get('/catalogue').catch(() => ({ jigs: [] }))]);
+    const sel = h('select', { onchange: (e) => { sessionStorage.setItem('aw-site', e.target.value); e.target.blur(); refresh(); } }, // blur so the redraw is not held back by focus
       h('option', { value: '' }, 'All Sites'),
       sites.map((s) => h('option', { value: s, selected: s === want }, s)));
-    const cols = STATES.map((st) => {
-      const mine = shown.filter((j) => j.state === st).sort((a, b) => b.created_at.localeCompare(a.created_at));
-      return h('div', { class: 'col' },
-        h('h2', {}, h('span', {}, st), h('span', { class: 'muted' }, mine.length)),
-        mine.map((j) => h('a', { class: 'card', href: '#/job/' + j.id },
+    const lane = (j, i, columns) => {
+      const plan = full[i].plan;
+      return h('div', { class: 'lane' },
+        h('a', { class: 'lhead', href: '#/job/' + j.id },
           h('div', { class: 't' }, j.title),
+          h('div', {}, tag(j.state), plan && plan.approval === 'pending' ? tag('plan pending') : null),
           h('div', { class: 'm' }, [j.site || 'no site', j.id].join(' · ')),
           h('div', { class: 'm' },
-            j.steps ? j.steps + ' steps · ' : '',
             j.live_runs ? j.live_runs + ' running · ' : '',
             j.open_asks ? j.open_asks + ' ask(s) · ' : '',
-            money(j.cost_usd)))));
+            money(j.cost_usd))),
+        plan && plan.steps.length ? stairTrack(plan.steps, stepStatuses(plan.steps, dispatches[i], full[i]), !!columns, columns, { ds: dispatches[i], runs: runs[i] }) : h('div', { class: 'muted lempty' }, 'No Plan yet.'));
+    };
+    // Group by the Jig each Plan came from: one section per Jig, then ad hoc Plans, then Jobs with no Plan.
+    const AD_HOC = '\uffffad hoc', NO_PLAN = '\uffffzno plan'; // sort after every Jig name
+    const groups = new Map();
+    shown.forEach((j, i) => {
+      const key = !j.steps ? NO_PLAN : j.jig || AD_HOC;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push({ j, i });
     });
-    return h('div', {}, h('h1', {}, 'Jobs'), h('div', { class: 'row' }, sel), h('div', { class: 'board' }, cols));
+    const desc = Object.fromEntries(catalogue.jigs.map((j) => [j.name, j.description]));
+    const label = (k) => (k === AD_HOC ? 'Ad hoc Plans' : k === NO_PLAN ? 'No Plan yet' : k);
+    const sections = [...groups].sort(([a], [b]) => a.localeCompare(b)).map(([k, members]) => {
+      // A Jig's columns come from its definition (or, if it is gone, its first Plan), so every lane lines up.
+      const named = k !== AD_HOC && k !== NO_PLAN;
+      const layout = named ? ((catalogue.jigs.find((j) => j.name === k) || {}).steps || []).map((s) => ({ id: s.id, guild: s.guild, title: s.task, blocked_by: s.blocked_by, checkpoint: s.checkpoint })) : [];
+      const steps = layout.length ? layout : named ? full[members[0].i].plan.steps
+        : k === AD_HOC ? sharedSteps(members.map(({ i }) => full[i].plan.steps)) : [];
+      const ordered = k === AD_HOC ? steps : layers(steps).flat(); // the merged order is already one column per step
+      const columns = ordered.length ? ordered.map((s) => s.id) : null;
+      // Each group expands and collapses; the choice survives the live refresh and reloads of the tab.
+      const closed = () => { try { return JSON.parse(sessionStorage.getItem('aw-collapsed') || '[]'); } catch { return []; } };
+      return h('details', { class: 'group', open: !closed().includes(k), ontoggle: (e) => {
+        const rest = closed().filter((x) => x !== k);
+        sessionStorage.setItem('aw-collapsed', JSON.stringify(e.target.open ? rest : [...rest, k]));
+      } },
+        h('summary', {}, h('h2', {}, label(k), ' ', h('span', { class: 'muted' }, members.length), desc[k] ? h('span', { class: 'muted gdesc' }, desc[k]) : null)),
+        h('div', { class: 'lanes' }, ordered.length ? jigHeader(ordered) : null, members.map(({ j, i }) => lane(j, i, columns))));
+    });
+    return h('div', {}, crumbs(), h('h1', {}, 'Jobs'), h('div', { class: 'row' }, sel, legend()), sections.length ? sections : h('p', { class: 'muted' }, 'No Jobs.'));
   },
 
   async needsYou() {
@@ -113,7 +199,7 @@ const views = {
       const plan = await get('/jobs/' + j.id + '/plan');
       out.push(h('div', { class: 'panel attn' },
         h('h3', {}, 'Plan approval · ', jobLink(j.id, title(j.id))),
-        planGraph(plan.steps, []),
+        jigTrack(plan.steps),
         h('div', { class: 'row' },
           h('button', { class: 'primary', onclick: () => act('Approve Plan', 'POST', `/jobs/${j.id}/plan/approve`, { updated_at: plan.updated_at }) }, 'Approve'),
           h('button', { class: 'danger', onclick: () => act('Reject Plan', 'POST', `/jobs/${j.id}/plan/reject`, {}) }, 'Reject'))));
@@ -136,7 +222,7 @@ const views = {
         it.detail && Object.keys(it.detail).length ? h('pre', {}, JSON.stringify(it.detail, null, 2)) : null,
         it.job_id ? instructBox(it.job_id, 'Tell the Archwright what to do about it') : null));
     }
-    return h('div', {}, h('h1', {}, 'Needs you'), out.length ? out : h('p', { class: 'muted' }, 'Nothing is waiting on you.'));
+    return h('div', {}, crumbs('Needs you'), h('h1', {}, 'Needs you'), out.length ? out : h('p', { class: 'muted' }, 'Nothing is waiting on you.'));
   },
 
   async job(id) {
@@ -148,7 +234,6 @@ const views = {
     const closed = !!full.outcome;
     const live = ds.filter((d) => d.status === 'queued' || d.status === 'running');
     const guilds = [...new Set([...(full.plan ? full.plan.steps.map((s) => s.guild) : []), ...ds.map((d) => d.guild)])];
-    const stepState = full.step_states || {};
     const cost = runs.reduce((a, r) => a + r.cost_usd, 0);
     const controls = closed ? [] : [
       full.paused_at
@@ -158,6 +243,7 @@ const views = {
     ];
 
     const parts = [
+      crumbs(full.title),
       h('h1', {}, full.title, ' ', tag(state)),
       h('p', { class: 'muted' }, [full.site || 'no site', id, 'created ' + ago(full.created_at), full.writ ? 'writ ' + full.writ : '', money(cost)].filter(Boolean).join(' · ')),
       full.description ? h('p', {}, full.description) : null,
@@ -168,7 +254,7 @@ const views = {
     if (full.plan) {
       const p = full.plan;
       parts.push(h('h2', {}, 'Plan ', tag(p.approval), p.jig ? h('span', { class: 'muted' }, ' from Jig ' + p.jig) : ' (ad hoc)'));
-      parts.push(planGraph(p.steps, stepState));
+      parts.push(stairTrack(p.steps, stepStatuses(p.steps, ds, full), false, null, { ds, runs }));
       if (p.approval === 'pending') {
         parts.push(h('div', { class: 'row' },
           h('button', { class: 'primary', onclick: () => act('Approve Plan', 'POST', `/jobs/${id}/plan/approve`, { updated_at: p.updated_at }) }, 'Approve Plan'),
@@ -189,8 +275,11 @@ const views = {
     parts.push(ds.length ? table(['Piece', 'Guild', 'Round', 'Status', 'Run', 'Runner', 'Tokens in/out', 'Cost'], ds.map((d) => {
       const r = runs.find((x) => x.dispatch_id === d.id);
       return [d.piece, d.guild, d.round, tag(d.status),
-        r ? h('a', { href: '#/run/' + r.run_id + '/' + id }, r.status) : (d.run_id ? 'run' : ''),
+        r ? r.status : (d.run_id ? 'run' : ''),
         r ? r.runner : '', r ? tokens(r.input_tokens) + ' / ' + tokens(r.output_tokens) : '', r ? money(r.cost_usd) : ''];
+    }), ds.map((d) => { // a row opens its run's timeline
+      const run = (runs.find((x) => x.dispatch_id === d.id) || {}).run_id || d.run_id;
+      return run ? '#/run/' + run + '/' + id : '';
     })) : h('p', { class: 'muted' }, 'No Wrights dispatched.'));
 
     if (reviews.reviews && reviews.reviews.length) {
@@ -209,9 +298,10 @@ const views = {
   },
 
   async run(id) {
-    const evs = await get(`/runs/${id}/events`);
     const jobId = location.hash.split('/')[3] || '';
-    const out = [h('h1', {}, 'Run ', h('span', { class: 'mono' }, id)), jobId ? h('p', {}, jobLink(jobId, '← Job')) : null,
+    const [evs, job] = await Promise.all([get(`/runs/${id}/events`), jobId ? get('/jobs/' + jobId).catch(() => null) : null]);
+    const trail = job ? [[job.title, '#/job/' + jobId], 'Run ' + id] : ['Run ' + id];
+    const out = [crumbs(...trail), h('h1', {}, 'Run ', h('span', { class: 'mono' }, id)),
       h('p', { class: 'muted' }, 'Read-only timeline. Raw vendor events load on demand.')];
     if (!evs.length) out.push(h('p', { class: 'muted' }, 'No events recorded.'));
     for (const e of evs) {
@@ -243,7 +333,7 @@ const views = {
     };
     const head = (first) => [first, 'Runs', 'Tokens in', 'Tokens out', 'Cost'];
     const perJob = group('job_id').map((r) => { r[0] = h('a', { href: '#/job/' + r[0] }, title[r[0]] || r[0]); return r; });
-    return h('div', {}, h('h1', {}, 'Usage and cost'),
+    return h('div', {}, crumbs('Usage'), h('h1', {}, 'Usage and cost'),
       h('p', { class: 'muted' }, `Total ${money(sum(use, 'cost_usd'))} over ${sum(use, 'runs')} runs. A runner that reports no cost (codex) counts $0.`),
       h('h2', {}, 'Per Job'), table(head('Job'), perJob),
       h('h2', {}, 'Per Guild'), table(head('Guild'), group('guild')),
@@ -251,34 +341,78 @@ const views = {
   },
 
   async catalogue() {
-    const [sites, cat, queue] = await Promise.all([get('/sites'), get('/catalogue'), get('/queue')]);
-    const out = [h('h1', {}, 'Catalogue'), h('h2', {}, 'Sites'),
+    const [sites, cat] = await Promise.all([get('/sites'), get('/catalogue')]);
+    const out = [crumbs('Catalogue'), h('h1', {}, 'Catalogue'), h('h2', {}, 'Sites'),
       sites.length ? table(['Name', 'URL', 'Base', 'Cap', 'Typecheck', 'Lint', 'Test'], sites.map((s) => [s.name, s.url, s.base_branch, s.concurrency_cap,
         ...['typecheck', 'lint', 'test'].map((k) => h('code', {}, s.gates[k] || '—'))])) : h('p', { class: 'muted' }, 'No Sites registered.'),
       h('h2', {}, 'Guilds'),
       table(['Name', 'Access', 'Runners', 'Intake', 'Handback', 'Source'], cat.guilds.map((g) => [g.name, g.access, (g.runners || []).join(', ') || 'any', g.intake, g.handback, h('span', { class: 'mono' }, g.source)])),
       h('h2', {}, 'Jigs'),
-      cat.jigs.map((j) => h('div', { class: 'panel' }, h('strong', {}, j.name), ' ', h('span', { class: 'muted' }, j.description),
+      ...cat.jigs.map((j) => h('div', { class: 'panel' }, h('strong', {}, j.name), ' ', h('span', { class: 'muted' }, j.description),
         j.parameters && j.parameters.length ? h('div', { class: 'muted' }, 'Parameters: ' + j.parameters.map((p) => p.name + (p.required ? '*' : '')).join(', ')) : null,
-        planGraph(j.steps.map((s) => ({ id: s.id, guild: s.guild, title: s.task, blocked_by: s.blocked_by, checkpoint: s.checkpoint })), {}))),
+        jigTrack(j.steps.map((s) => ({ id: s.id, guild: s.guild, title: s.task, blocked_by: s.blocked_by, checkpoint: s.checkpoint }))))),
     ];
-    if (cat.errors && cat.errors.length) out.push(h('h2', {}, 'Definitions that failed to load'), cat.errors.map((e) => h('div', { class: 'panel attn' }, `${e.kind} ${e.name}: ${e.error}`)));
-    out.push(h('h2', {}, 'Runner'),
-      h('p', {}, `Running ${queue.running.length}, queued ${queue.queued.length}; caps: total ${queue.limits.total}, per Site ${queue.limits.per_site}, per Warden ${queue.limits.per_warden}.`,
-        queue.paused ? h('span', { class: 'warn' }, ` Paused after rate limits until ${queue.paused.until}.`) : ''),
-      table(['Dispatch', 'Job', 'Piece', 'Guild', 'Waiting'], [...queue.running, ...queue.queued].map((q) => [q.dispatch_id, jobLink(q.job), q.piece, q.guild, q.waiting || 'running'])));
+    if (cat.errors && cat.errors.length) out.push(h('h2', {}, 'Definitions that failed to load'), ...cat.errors.map((e) => h('div', { class: 'panel attn' }, `${e.kind} ${e.name}: ${e.error}`)));
+    return h('div', {}, out);
+  },
+
+  async runner() {
+    const [queue, board, sites] = await Promise.all([get('/queue'), get('/board'), get('/sites')]);
+    const title = Object.fromEntries(board.map((j) => [j.id, j.title]));
+    const job = (id) => jobLink(id, title[id] || id);
+    const count = (key) => queue.running.reduce((m, q) => m.set(q[key], (m.get(q[key]) || 0) + 1), new Map());
+    const perSite = count('site'), perGuild = count('guild');
+    const cap = Object.fromEntries(sites.map((x) => [x.name, x.concurrency_cap]));
+    const out = [crumbs('Runner'), h('h1', {}, 'Runner'),
+      h('p', { class: 'muted' }, 'The scheduler that starts Wrights. Work waits in a queue, oldest first, when a cap is reached.')];
+    if (queue.paused) out.push(h('div', { class: 'panel attn' }, h('strong', {}, 'Paused after rate limits '), `until ${queue.paused.until} (${queue.paused.failures} in a row). Nothing new starts until then.`));
+    out.push(h('h2', {}, 'Capacity'), table(['Cap', 'In use', 'Limit'], [
+      ['Total', queue.running.length, queue.limits.total],
+      ...[...perSite].map(([k, n]) => ['Site ' + (k || '(none)'), n, cap[k] || queue.limits.per_site]),
+      ...[...perGuild].map(([k, n]) => ['Warden ' + k, n, queue.limits.per_warden]),
+    ]));
+    out.push(h('h2', {}, 'Running ', h('span', { class: 'muted' }, queue.running.length)),
+      queue.running.length ? table(['Dispatch', 'Job', 'Piece', 'Guild', 'Site'], queue.running.map((q) => [q.dispatch_id, job(q.job), q.piece, q.guild, q.site || '']))
+        : h('p', { class: 'muted' }, 'Nothing is running.'));
+    out.push(h('h2', {}, 'Queued ', h('span', { class: 'muted' }, queue.queued.length)),
+      queue.queued.length ? table(['#', 'Dispatch', 'Job', 'Piece', 'Guild', 'Site', 'Waiting on'], queue.queued.map((q) => [q.position || '', q.dispatch_id, job(q.job), q.piece, q.guild, q.site || '', q.waiting || '']))
+        : h('p', { class: 'muted' }, 'Nothing is waiting.'));
     return h('div', {}, out);
   },
 };
 
 // ---- shared pieces ----------------------------------------------------------------
-function table(head, rows) {
-  return h('table', {}, h('thead', {}, h('tr', {}, head.map((c) => h('th', {}, c)))),
-    h('tbody', {}, rows.map((r) => h('tr', {}, r.map((c) => h('td', {}, c))))));
+// crumbs draws the breadcrumb trail every screen starts with. It begins at Jobs, the home screen; an item is
+// a string (plain text) or [text, href] (a link); the last item is the current page.
+function crumbs(...rest) {
+  const trail = [rest.length ? ['Jobs', '#/board'] : 'Jobs', ...rest];
+  const kids = [];
+  trail.forEach((c, i) => {
+    if (i) kids.push(h('span', {}, '\u203A'));
+    const [text, href] = Array.isArray(c) ? c : [c];
+    kids.push(i < trail.length - 1 && href ? h('a', { href }, text) : h('span', i === trail.length - 1 ? { class: 'cur', 'aria-current': 'page' } : {}, text));
+  });
+  return h('nav', { class: 'crumbs', 'aria-label': 'Breadcrumb' }, kids);
 }
 
-// planGraph lays steps out in columns by depth: a step sits one column right of its deepest blocker.
-function planGraph(steps, state) {
+// table draws rows of cells. When hrefs is given, a row with an href opens it on a click or Enter, so the
+// whole row is the target and not only a link inside it; a click on a link or button in the row is left alone.
+function table(head, rows, hrefs) {
+  return h('table', {}, h('thead', {}, h('tr', {}, head.map((c) => h('th', {}, c)))),
+    h('tbody', {}, rows.map((r, i) => {
+      const href = hrefs && hrefs[i];
+      const tr = h('tr', href ? { class: 'click', tabindex: '0' } : {}, r.map((c) => h('td', {}, c)));
+      if (href) {
+        const open = () => { location.hash = href; };
+        tr.addEventListener('click', (e) => { if (!e.target.closest('a, button')) open(); });
+        tr.addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target === tr) open(); });
+      }
+      return tr;
+    })));
+}
+
+// layers groups steps into columns by depth: a step sits one column right of its deepest blocker.
+function layers(steps) {
   const by = Object.fromEntries(steps.map((s) => [s.id, s]));
   const depth = {};
   const of = (s, seen = new Set()) => {
@@ -288,15 +422,164 @@ function planGraph(steps, state) {
     return (depth[s.id] = Math.max(-1, ...(s.blocked_by || []).filter((b) => by[b]).map((b) => of(by[b], seen))) + 1);
   };
   steps.forEach((s) => of(s));
-  const layers = [];
-  steps.forEach((s) => (layers[depth[s.id]] = layers[depth[s.id]] || []).push(s));
-  return h('div', { class: 'graph' }, layers.filter(Boolean).map((l) => h('div', { class: 'layer' }, l.map((s) => {
-    const st = (state && state[s.id]) || '';
-    return h('div', { class: 'step ' + (st === 'running' ? 'running' : '') + (s.checkpoint ? ' cp' : '') },
-      h('strong', {}, s.id), ' ', st ? h('span', { class: 'tag' + (st === 'running' ? ' running' : '') }, st) : null, s.checkpoint ? h('span', { class: 'tag' }, 'checkpoint') : null,
-      h('div', {}, s.title), h('div', { class: 'muted' }, s.guild),
-      s.blocked_by && s.blocked_by.length ? h('div', { class: 'muted' }, '← ' + s.blocked_by.join(', ')) : null);
-  }))));
+  const out = [];
+  steps.forEach((s) => (out[depth[s.id]] = out[depth[s.id]] || []).push(s));
+  return out.filter(Boolean);
+}
+
+// stepStatuses says where each Plan step stands: done, running, blocked or pending. The API only reports
+// a running step (step_states), so the rest is read from the Job's dispatches, matching a dispatch to a step
+// by piece name; a step whose latest dispatch is live is running, one that ended on an ask is blocked, one
+// that reported is done, and anything else is pending. An accepted Job has every step done.
+function stepStatuses(steps, ds, job) {
+  const out = {};
+  for (const s of steps) {
+    const mine = ds.filter((d) => d.piece === s.id).sort((a, b) => b.round - a.round || b.created_at.localeCompare(a.created_at));
+    const d = mine[0];
+    out[s.id] = job.outcome === 'accepted' ? 'done'
+      : !d ? 'pending'
+      : d.status === 'queued' || d.status === 'running' ? 'running'
+      : d.status === 'blocked' ? 'blocked'
+      : d.status === 'reported' || d.status === 'answered' ? 'done'
+      : 'pending';
+  }
+  return out;
+}
+const STATUS_LABEL = { done: 'completed', running: 'executing', blocked: 'blocked', pending: 'pending' };
+
+// jigTrack draws a Jig for the catalogue: dots joined by a line, one column per depth with the step name as
+// its header. Steps that can run in parallel stack in one column, and the line curves from each step into
+// the steps it blocks, so a fan-in bends together. A hollow dot marks a checkpoint. Every step has a fixed
+// height so the curves can be placed without measuring the page.
+const COLW = 120; // the narrowest a column of a Job lane and its header gets; wider lanes spread the columns evenly
+const STEP = 96; // px per step: header, rail, guild and up to two lines of task
+const DOT_Y = 31; // px from the top of a step to its dot's centre
+const LINK = 44; // px between columns
+function jigTrack(steps) {
+  const cols = layers(steps);
+  const tall = Math.max(...cols.map((c) => c.length));
+  const dotY = (n, k) => ((tall - n) / 2 + k) * STEP + DOT_Y;
+  const ns = 'http://www.w3.org/2000/svg';
+  const parts = [];
+  cols.forEach((l, i) => {
+    if (i > 0) {
+      const prev = cols[i - 1];
+      const svg = document.createElementNS(ns, 'svg');
+      svg.setAttribute('class', 'link');
+      svg.setAttribute('width', LINK);
+      svg.setAttribute('height', tall * STEP);
+      l.forEach((s, k) => prev.forEach((p, pk) => {
+        if (!(s.blocked_by || []).includes(p.id)) return;
+        const y1 = dotY(prev.length, pk), y2 = dotY(l.length, k);
+        const path = document.createElementNS(ns, 'path');
+        path.setAttribute('d', `M0,${y1} C${LINK / 2},${y1} ${LINK / 2},${y2} ${LINK},${y2}`);
+        svg.append(path);
+      }));
+      parts.push(svg);
+    }
+    parts.push(h('div', { class: 'tcol' + (i === 0 ? ' first' : '') + (i === cols.length - 1 ? ' last' : ''), style: `height:${tall * STEP}px` },
+      l.map((s) => h('div', { class: 'tstep', style: `height:${STEP}px` },
+        h('div', { class: 'th' }, s.id),
+        h('div', { class: 'rail' }, h('span', { class: 'dot' + (s.checkpoint ? ' cp' : '') + ' pending', title: s.checkpoint ? 'checkpoint' : '' })),
+        h('div', { class: 'tg' }, s.guild),
+        h('div', { class: 'tt muted' }, s.title)))));
+  });
+  return h('div', { class: 'track' }, parts);
+}
+
+// stairs places a Plan's steps for a Job lane: one column per step, in dependency order, and a row for each,
+// so parallel steps sit at different heights and a step that waits on several is centred between them
+// (a fan-in) while siblings spread evenly around the step they share (a fan-out). Rows may be fractional.
+function stairs(steps) {
+  const row = {};
+  for (const l of layers(steps)) {
+    const want = l.map((s) => {
+      const bs = (s.blocked_by || []).filter((b) => row[b] != null).map((b) => row[b]);
+      return bs.length ? bs.reduce((a, b) => a + b, 0) / bs.length : 0;
+    });
+    const idx = l.map((_, i) => i).sort((a, b) => want[a] - want[b]);
+    const got = [];
+    idx.forEach((i, n) => { got[n] = n && want[i] < got[n - 1] + 1 ? got[n - 1] + 1 : want[i]; });
+    const shift = idx.reduce((a, i) => a + want[i], 0) / idx.length - got.reduce((a, b) => a + b, 0) / got.length;
+    idx.forEach((i, n) => { row[l[i].id] = got[n] + shift; });
+  }
+  const top = Math.min(...Object.values(row));
+  for (const k of Object.keys(row)) row[k] -= top;
+  return row;
+}
+
+// stairTrack draws a Job's Plan as a staircase (see stairs): a dot per step coloured by status, joined by
+// S-curves that run from each blocker into the step it blocks. A compact track is only the dots, for lanes
+// under a jigHeader. Every step has a fixed size so the curves can be placed without measuring the page.
+const LANE_STEP = 26; // px per step in a compact lane: just the dot
+function stairTrack(steps, state, compact, columns, ctx) {
+  const ord = layers(steps).flat();
+  const ids = columns || ord.map((s) => s.id); // a shared header's columns; a lane without a step leaves its column empty
+  const byId = Object.fromEntries(ord.map((s) => [s.id, s]));
+  const row = stairs(steps);
+  const unit = 64; // px per row
+  const cell = compact ? LANE_STEP : STEP;
+  const dotAt = compact ? LANE_STEP / 2 : DOT_Y;
+  const H = Math.max(...Object.values(row)) * unit + cell;
+  const col = Object.fromEntries(ids.map((id, i) => [id, i]));
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  // x runs 100 units per column, stretched to the lane's width, so the columns spread evenly
+  svg.setAttribute('viewBox', `0 0 ${ids.length * 100} ${H}`);
+  svg.setAttribute('preserveAspectRatio', 'none');
+  svg.setAttribute('width', '100%');
+  svg.setAttribute('height', H);
+  for (const s of ord) for (const b of s.blocked_by || []) {
+    if (col[b] == null || col[s.id] == null) continue;
+    const x1 = col[b] * 100 + 50, x2 = col[s.id] * 100 + 50, mid = (x1 + x2) / 2;
+    const y1 = row[b] * unit + dotAt, y2 = row[s.id] * unit + dotAt;
+    const path = document.createElementNS(ns, 'path');
+    path.setAttribute('d', `M${x1},${y1} C${mid},${y1} ${mid},${y2} ${x2},${y2}`);
+    svg.append(path);
+  }
+  return h('div', { class: 'track' + (compact ? ' compact' : '') }, h('div', { class: 'sinner', style: `min-width:${ids.length * COLW}px;height:${H}px` }, svg,
+    ids.map((id) => h('div', { class: 'scol', style: `min-width:${COLW}px;height:${H}px` }, byId[id] ? stairStep(byId[id], row[id] * unit, cell, state, compact, ctx) : null))));
+}
+
+function stairStep(s, top, cell, state, compact, ctx) {
+  const cellEl = h('div', { class: 'sstep', style: `top:${top}px;height:${cell}px` },
+    compact ? null : h('div', { class: 'th' }, s.id),
+    h('div', { class: 'rail' }, h('span', { class: 'dot' + (s.checkpoint ? ' cp' : '') + ' ' + ((state && state[s.id]) || 'pending') })),
+    compact ? null : h('div', { class: 'tg' }, s.guild),
+    compact ? null : h('div', { class: 'tt muted' }, s.title));
+  return withTip(cellEl, () => stepCard(s, state && state[s.id], ctx));
+}
+
+// sharedSteps merges several Plans' steps into the columns of one header: a step name keeps one column
+// across Plans, and a step new to the header goes after its blockers and after the Plan's earlier steps,
+// or at the end when it has neither.
+function sharedSteps(plans) {
+  const out = [];
+  for (const steps of plans) {
+    let cursor = -1; // the column of the Plan's latest step so far
+    for (const s of layers(steps).flat()) {
+      let at = out.findIndex((o) => o.id === s.id);
+      if (at < 0) {
+        const after = Math.max(cursor, ...(s.blocked_by || []).map((b) => out.findIndex((o) => o.id === b)));
+        at = after < 0 ? out.length : after + 1;
+        out.splice(at, 0, s);
+      }
+      cursor = at;
+    }
+  }
+  return out;
+}
+
+// legend explains the dot colours.
+function legend() {
+  return h('span', { class: 'legend' }, ['done', 'running', 'blocked', 'pending'].map((k) => h('span', {}, h('span', { class: 'dot sw ' + k }), ' ' + STATUS_LABEL[k])));
+}
+
+// jigHeader is the row of column headers over a group's compact lanes: one column per step in ord, at the
+// same widths as the lanes, so each name sits over its dots.
+function jigHeader(ord) {
+  return h('div', { class: 'lane lhrow' }, h('div', { class: 'lhead' }), h('div', { class: 'track' },
+    ord.map((s) => h('div', { class: 'hcol', style: `min-width:${COLW}px` }, withTip(h('div', { class: 'hname' }, s.id, s.checkpoint ? h('span', { class: 'cpm' }, ' \u25C7') : null), () => stepCard(s))))));
 }
 
 function instructBox(jobId, placeholder) {
@@ -340,7 +623,7 @@ function askPanel(a, jobTitle) {
 }
 
 // ---- routing, rendering and live updates -------------------------------------------
-const NAV = [['#/board', 'Jobs'], ['#/needs-you', 'Needs you'], ['#/usage', 'Usage'], ['#/catalogue', 'Catalogue']];
+const NAV = [['#/board', 'Jobs'], ['#/needs-you', 'Needs you'], ['#/runner', 'Runner'], ['#/usage', 'Usage'], ['#/catalogue', 'Catalogue']];
 
 function route() {
   const [, name, arg] = location.hash.split('/');
@@ -348,6 +631,7 @@ function route() {
     case 'needs-you': return ['needsYou'];
     case 'job': return ['job', arg];
     case 'run': return ['run', arg];
+    case 'runner': return ['runner'];
     case 'usage': return ['usage'];
     case 'catalogue': return ['catalogue'];
     default: return ['board'];
@@ -364,10 +648,10 @@ async function refresh() {
     if (!token) throw new Error('No token. Open the dashboard with the URL printed by `archwright dashboard`.');
     // A form being filled must not be lost to a live refresh: skip while a field in the view has focus.
     const el = document.activeElement;
-    const editing = el && ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName) && $('main').contains(el) && el.type !== 'button' && !(el.tagName === 'SELECT' && !el.closest('.panel'));
+    const editing = el && ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName) && $('main').contains(el) && el.type !== 'button';
     if (!editing) {
       const node = await views[name](arg);
-      if (node.innerHTML !== $('main').firstElementChild?.innerHTML || $('main').childElementCount !== 1) $('main').replaceChildren(node);
+      if (node.innerHTML !== $('main').firstElementChild?.innerHTML || $('main').childElementCount !== 1) { $('main').replaceChildren(node); retip(); };
     }
   } catch (e) {
     $('main').replaceChildren(h('p', { class: 'bad' }, e.message));
