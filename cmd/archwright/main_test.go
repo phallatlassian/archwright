@@ -12,7 +12,10 @@ import (
 	"github.com/phallatlassian/archwright/internal/works"
 )
 
-var binary string
+// binary is built without the doctor gate (-tags nodoctorgate), so the tests that
+// are not about doctor never probe a runner on this machine; gatedBinary is the
+// production build, for the tests of doctor and of the gate.
+var binary, gatedBinary string
 
 func TestMain(m *testing.M) {
 	dir, err := os.MkdirTemp("", "archwright-bin")
@@ -20,7 +23,11 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	binary = filepath.Join(dir, "archwright")
-	if out, err := exec.Command("go", "build", "-o", binary, ".").CombinedOutput(); err != nil {
+	if out, err := exec.Command("go", "build", "-tags", "nodoctorgate", "-o", binary, ".").CombinedOutput(); err != nil {
+		panic(string(out))
+	}
+	gatedBinary = filepath.Join(dir, "gated", "archwright")
+	if out, err := exec.Command("go", "build", "-o", gatedBinary, ".").CombinedOutput(); err != nil {
 		panic(string(out))
 	}
 	code := m.Run()

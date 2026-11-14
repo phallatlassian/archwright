@@ -57,6 +57,17 @@ func writeInfo(d paths.Dirs, info Info) error {
 // It returns ErrAlreadyRunning, touching nothing, if another instance holds the lock.
 // ready, if non-nil, is closed once the pid file is written.
 func Serve(ctx context.Context, d paths.Dirs, ready chan<- struct{}) error {
+	return ServeWith(ctx, d, ready, Options{})
+}
+
+// Options are what a caller adds to the Works.
+type Options struct {
+	// Preflight must pass before any run starts (ADR 0014); nil means none.
+	Preflight func(context.Context) error
+}
+
+// ServeWith is Serve with options.
+func ServeWith(ctx context.Context, d paths.Dirs, ready chan<- struct{}, opts Options) error {
 	if err := d.Ensure(); err != nil {
 		return err
 	}
@@ -91,6 +102,7 @@ func Serve(ctx context.Context, d paths.Dirs, ready chan<- struct{}) error {
 	runs := NewRuns(st)
 	defer runs.Close()
 	runs.UseSites(sm)
+	runs.SetPreflight(opts.Preflight)
 	// Until the vendor adapters land, dispatched Wrights run on the fake runner.
 	reg := defs.New(defs.Shipped(), d.Config)
 	ReloadDefinitions(reg)
