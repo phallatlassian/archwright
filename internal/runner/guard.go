@@ -18,6 +18,9 @@ var ErrForbidden = errors.New("forbidden by the never-list")
 // ModeDefault is the runner's own default permission mode.
 const ModeDefault = "default"
 
+// ModeDontAsk denies what would prompt; it only restricts.
+const ModeDontAsk = "dontAsk"
+
 var permittedModes = map[string]bool{"": true, "default": true, "plan": true, "dontAsk": true}
 
 // forbiddenFlags are runner flags refused outright, in any spelling.
@@ -30,7 +33,10 @@ var forbiddenFlags = []string{
 	"--settings", "--setting-sources", "--mcp-config", "--strict-mcp-config",
 	"--allowedtools", "--allowed-tools", "--allow-tools", "--tools",
 	"--add-dir", "--bare",
-	"-c", "--config", "--profile",
+	"-c", "--config", "--profile", "-p",
+	// Codex flags that skip or replace the developer's own hook trust, rules
+	// and config, or toggle features as -c does.
+	"--dangerously-bypass-hook-trust", "--ignore-rules", "--ignore-user-config", "--enable", "--disable",
 }
 
 // forbiddenValues are values refused wherever they appear in an argument.
@@ -75,6 +81,9 @@ func Check(s Spawn) error {
 		name := strings.ToLower(a)
 		if i := strings.IndexByte(name, '='); i > 0 && strings.HasPrefix(name, "-") {
 			name = name[:i]
+		}
+		if len(name) > 2 && name[0] == '-' && name[1] != '-' && strings.IndexByte("ascp", name[1]) >= 0 {
+			name = name[:2]
 		}
 		for _, f := range forbiddenFlags {
 			if name == f {
