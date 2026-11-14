@@ -21,8 +21,8 @@ date=$(git -C "$src" show -s --format=%cI HEAD)
 
 rm -rf "$dest/upstream"
 mkdir -p "$dest/upstream"
-for cat in engineering productivity; do
-  for d in "$src"/skills/$cat/*/; do
+for group in engineering productivity; do
+  for d in "$src"/skills/$group/*/; do
     name=$(basename "$d")
     [ -e "$dest/upstream/$name" ] && { echo "duplicate skill name $name" >&2; exit 1; }
     cp -R "$d" "$dest/upstream/$name"
@@ -34,6 +34,7 @@ files=$(cd "$dest/upstream" && find . -type f | sort | sed 's|^\./||' | while re
 done | jq -R 'split("  ") | {(.[1]): .[0]}' | jq -s add)
 
 
+prev_forks='[]'
 [ -f "$dest/PROVENANCE.json" ] && prev_forks=$(jq '.forks' "$dest/PROVENANCE.json")
 
 jq -n --arg url "$url" --arg sha "$sha" --arg date "$date" --arg at "$(date -u +%Y-%m-%d)" \

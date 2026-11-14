@@ -145,5 +145,3 @@ func (c *Catalogue) Verify() error {
 	}
 	return nil
 }
-
-func readFile(s Skill, name string) ([]byte, error) { return fs.ReadFile(s.FS, name) }

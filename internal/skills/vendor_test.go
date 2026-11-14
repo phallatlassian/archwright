@@ -3,6 +3,7 @@ package skills
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -111,3 +112,5 @@ func TestEveryShippedGuildSkillResolves(t *testing.T) {
 		}
 	}
 }
+
+func readFile(s Skill, name string) ([]byte, error) { return fs.ReadFile(s.FS, name) }

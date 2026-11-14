@@ -16,7 +16,7 @@ import (
 // ErrCollision means a skill to deliver clashes with something the Site tracks.
 var ErrCollision = errors.New("skill collides with the Site")
 
-// CollisionError names the skill and the Site path it collides with. A run
+// CollisionError names the skill (empty when the Site tracks the skills directory itself as a file or link) and the Site path it collides with. A run
 // that hits one fails visibly and never overwrites the Site's file (ADR 0018).
 type CollisionError struct {
 	Skill string
@@ -24,6 +24,9 @@ type CollisionError struct {
 }
 
 func (e *CollisionError) Error() string {
+	if e.Skill == "" {
+		return fmt.Sprintf("the Site tracks %s as a file or link, so the Works cannot add skills beside it", e.Path)
+	}
 	return fmt.Sprintf("skill %q collides with %s, which the Site tracks: rename the Site's skill or drop it from the Guild", e.Skill, e.Path)
 }
 
@@ -90,7 +93,7 @@ func Deliver(req Request) (Delivery, error) {
 		}
 	}
 	if claude && len(claudeTracked) == 1 && claudeTracked[0] == claudeSkills {
-		return Delivery{}, &CollisionError{Skill: req.Skills[0].Name, Path: claudeSkills} // the Site tracks it as a file or link
+		return Delivery{}, &CollisionError{Path: claudeSkills} // the Site tracks it as a file or link
 	}
 
 	// Where the Site tracks content in a skills directory the Works adds
@@ -286,19 +289,17 @@ func writeGitConfig(runDir string, hidden []string) (string, error) {
 
 	// Ask git what the developer's excludes file is, so includes, ~ and
 	// conditional configuration resolve exactly as they would outside a run.
-	devExcludes := ""
+	var devExcludes string
 	if out, err := git(runDir, []string{"GIT_CONFIG_GLOBAL=" + cfgPath}, "config", "--type=path", "--get", "core.excludesFile"); err == nil {
 		devExcludes = strings.TrimSpace(out)
-	} else if home := os.Getenv("HOME"); home != "" {
-		devExcludes = filepath.Join(xdgConfig(), "git", "ignore")
+	} else {
+		devExcludes = filepath.Join(xdgConfig(), "git", "ignore") // git's default when core.excludesFile is unset
 	}
 	var excludes bytes.Buffer
-	if devExcludes != "" {
-		if b, err := os.ReadFile(devExcludes); err == nil {
-			excludes.Write(b)
-			if !bytes.HasSuffix(b, []byte("\n")) {
-				excludes.WriteByte('\n')
-			}
+	if b, err := os.ReadFile(devExcludes); err == nil {
+		excludes.Write(b)
+		if !bytes.HasSuffix(b, []byte("\n")) {
+			excludes.WriteByte('\n')
 		}
 	}
 	excludes.WriteString("# Factory skills created by the Works for this run.\n")
