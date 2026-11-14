@@ -275,3 +275,22 @@ func TestCreateJobToolTakesTheLaunchSiteHint(t *testing.T) {
 		t.Fatalf("an unregistered Site must be refused: %+v", resp)
 	}
 }
+
+func TestPreflightRefusesRunsUntilItPasses(t *testing.T) {
+	r, _ := newRuns(t)
+	refuse := errors.New("doctor does not pass: add the allow rule")
+	r.SetPreflight(func(context.Context) error { return refuse })
+	root := t.TempDir()
+	for _, role := range []string{RoleArchwright, RoleWarden, RoleWright} {
+		if _, err := r.Start(role, root); !errors.Is(err, refuse) {
+			t.Fatalf("%s run started or failed otherwise: %v", role, err)
+		}
+	}
+	if entries, _ := os.ReadDir(root); len(entries) != 0 {
+		t.Fatalf("a refused run left a spool behind: %v", entries)
+	}
+	r.SetPreflight(func(context.Context) error { return nil }) // the developer fixed it
+	if _, err := r.Start(RoleArchwright, root); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/phallatlassian/archwright/internal/doctor"
 	"github.com/phallatlassian/archwright/internal/paths"
 	"github.com/phallatlassian/archwright/internal/sites"
 	"github.com/phallatlassian/archwright/internal/spool"
@@ -75,6 +76,8 @@ const usage = `usage: archwright [command]
   needs-you list                           list the Needs-you inbox (such as scope-overlap warnings)
   tool NAME [--id ID] [--wait D]           call a Works tool inside a run: JSON on stdin, JSON on stdout
                                            (exit 75 if the Works does not answer within D, default 60s)
+  doctor                                   check everything a run depends on, read-only; prints the exact fix for
+                                           anything wrong (exit 1 if a check fails; runs refuse to start until none does)
   works status                             report whether the Works is running
   stop                                     stop the Works
 
@@ -139,6 +142,16 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 
 	if len(args) == 0 {
 		return launchArchwright(dirs, connect)
+	}
+	if args[0] == "doctor" {
+		rep := doctor.Run(context.Background(), doctor.DefaultDeps(dirs))
+		if err := emit(rep); err != nil {
+			return err
+		}
+		if !rep.OK {
+			return &exitError{1, fmt.Errorf("doctor: %d check(s) failed; apply the fixes above and run it again", len(rep.Failures()))}
+		}
+		return nil
 	}
 
 	switch key(args, 2) {
@@ -462,7 +475,7 @@ func arg(args []string, i int) (string, error) {
 func serve(dirs paths.Dirs) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	err := works.Serve(ctx, dirs, nil)
+	err := works.ServeWith(ctx, dirs, nil, works.Options{Preflight: preflight(dirs)})
 	if errors.Is(err, works.ErrAlreadyRunning) {
 		return nil // a second start reuses the running instance
 	}

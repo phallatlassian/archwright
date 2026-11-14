@@ -54,6 +54,10 @@ type Runs struct {
 
 	sched *scheduler // when dispatched Wrights may start (ADR 0008)
 
+	// preflight, when set, must pass before any run starts (ADR 0014): it is
+	// `archwright doctor`. A failure refuses the run with its fixes.
+	preflight func(context.Context) error
+
 	mu   sync.Mutex
 	runs map[string]*run
 	// cancels stops the run of a started dispatch; cancelled marks the
@@ -106,8 +110,23 @@ func (r *Runs) Start(role, root string) (RunEnv, error) {
 	return r.StartFor(role, root, RunContext{})
 }
 
+// SetPreflight makes every run start only while check passes.
+func (r *Runs) SetPreflight(check func(context.Context) error) {
+	r.mu.Lock()
+	r.preflight = check
+	r.mu.Unlock()
+}
+
 // StartFor is Start for a run bound to a Job, Guild or dispatch.
 func (r *Runs) StartFor(role, root string, rc RunContext) (RunEnv, error) {
+	r.mu.Lock()
+	preflight := r.preflight
+	r.mu.Unlock()
+	if preflight != nil {
+		if err := preflight(r.bg); err != nil {
+			return RunEnv{}, err
+		}
+	}
 	switch role {
 	case RoleArchwright, RoleWarden, RoleWright:
 	default:
