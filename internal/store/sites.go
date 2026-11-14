@@ -303,7 +303,7 @@ func (s *Store) CloseJob(jobID, outcome string) error {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec("UPDATE jobs SET outcome = ? WHERE id = ?", outcome, jobID); err != nil {
+	if _, err := tx.Exec("UPDATE jobs SET outcome = ?, ended_at = ? WHERE id = ?", outcome, at, jobID); err != nil {
 		return err
 	}
 	if err := appendEvent(tx, at, jobID, "job."+outcome, map[string]string{}); err != nil {

@@ -113,6 +113,7 @@ func ServeWith(ctx context.Context, d paths.Dirs, ready chan<- struct{}, opts Op
 	}
 	runs.Configure(GuildsFromRegistry(reg, DefaultProfiles()), fake)
 	runs.SetLimits(LimitsFromEnv(os.Getenv))
+	runs.SetRetention(func() (time.Duration, error) { return ReadRetention(d) })
 	if err := runs.Resume(); err != nil {
 		return err
 	}
@@ -127,6 +128,11 @@ func ServeWith(ctx context.Context, d paths.Dirs, ready chan<- struct{}, opts Op
 	}
 	ctx, stop := context.WithCancel(ctx)
 	defer stop()
+	// Prune at start and daily until the Works stops (ADR 0017); the database
+	// stays open until the loop has returned.
+	pruned := make(chan struct{})
+	go func() { defer close(pruned); runs.pruneLoop(ctx) }()
+	defer func() { stop(); <-pruned }()
 	done := make(chan struct{})
 	srv := &http.Server{Handler: newHandler(st, runs, sm, token, os.Getpid(), stop, done)}
 	srv.RegisterOnShutdown(func() { close(done) }) // ends the event streams, which Shutdown would otherwise wait on

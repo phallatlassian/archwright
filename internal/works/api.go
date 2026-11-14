@@ -374,6 +374,32 @@ func newHandler(st *store.Store, runs *Runs, sm *sites.Manager, token string, pi
 		reply(w, 200, ReviewState{Reviews: reviews, Next: runs.reviewNext(j, reviews)})
 	})
 
+	// Retention (ADR 0017): prune raw run content, and what an upgrade would interrupt.
+	mux.HandleFunc("POST /prune", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			DryRun bool `json:"dry_run"`
+			Days   int  `json:"days"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, maxBody)).Decode(&in); err != nil && !errors.Is(err, io.EOF) {
+			fail(w, err)
+			return
+		}
+		rep, err := runs.Prune(in.Days, in.DryRun)
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		reply(w, 200, rep)
+	})
+	mux.HandleFunc("GET /runs/active", func(w http.ResponseWriter, r *http.Request) {
+		n, err := runs.ActiveRuns()
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		reply(w, 200, map[string]int{"active": n})
+	})
+
 	// The dispatch scheduler's running and queued Wrights, and the Needs-you inbox.
 	mux.HandleFunc("GET /queue", func(w http.ResponseWriter, r *http.Request) {
 		reply(w, 200, runs.Queue())

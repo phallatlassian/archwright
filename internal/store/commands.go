@@ -252,10 +252,29 @@ func (s *Store) hasLiveDispatch(q queryer, jobID string) (bool, error) {
 	return n > 0, err
 }
 
+// hasActiveRun says whether anything is running for the Job: a Wright queued
+// or running, a Review, or a gate run.
+func hasActiveRun(q queryer, jobID string) (bool, error) {
+	var n int
+	err := q.QueryRow(`SELECT
+		(SELECT COUNT(*) FROM dispatches WHERE job_id = ?1 AND status IN (?2, ?3)) +
+		(SELECT COUNT(*) FROM reviews WHERE job_id = ?1 AND status = 'running') +
+		(SELECT COUNT(*) FROM gate_runs WHERE job_id = ?1 AND status = 'running')`, jobID, DispatchQueued, DispatchRunning).Scan(&n)
+	return n > 0, err
+}
+
 // PurgeJob removes a Job's raw run content (the briefs as Wrights saw them)
 // at once and keeps its summary: Plan, pieces, handbacks, asks and events
-// (ADR 0017). A Job with Wrights still queued or running is refused.
+// (ADR 0017). A Job with a Wright, Review or gate run still active is refused.
 func (s *Store) PurgeJob(id string) error {
+	return s.purgeJob(id, "developer")
+}
+
+// purgeJob is PurgeJob recording who asked: the developer, or retention. The
+// only raw run content the Works stores so far is the rendered brief; runner
+// events (messages, tool calls, vendor events) are not persisted yet, so there
+// is nothing more to clear (ADR 0017).
+func (s *Store) purgeJob(id, by string) error {
 	j, err := s.GetJob(id)
 	if err != nil {
 		return err
@@ -268,10 +287,10 @@ func (s *Store) PurgeJob(id string) error {
 		return err
 	}
 	defer tx.Rollback()
-	if live, err := s.hasLiveDispatch(tx, id); err != nil {
+	if live, err := hasActiveRun(tx, id); err != nil {
 		return err
 	} else if live {
-		return fmt.Errorf("job %q has active Wrights; cancel it first: %w", id, ErrConflict)
+		return fmt.Errorf("job %q has active runs; cancel it first: %w", id, ErrConflict)
 	}
 	at := s.stamp()
 	res, err := tx.Exec("UPDATE dispatches SET rendered = '' WHERE job_id = ?", id)
@@ -282,7 +301,7 @@ func (s *Store) PurgeJob(id string) error {
 	if _, err := tx.Exec("UPDATE jobs SET purged_at = ? WHERE id = ?", at, id); err != nil {
 		return err
 	}
-	if err := appendEvent(tx, at, id, "job.purged", map[string]int64{"dispatches": n}); err != nil {
+	if err := appendEvent(tx, at, id, "job.purged", map[string]any{"dispatches": n, "by": by}); err != nil {
 		return err
 	}
 	return tx.Commit()
