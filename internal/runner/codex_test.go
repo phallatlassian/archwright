@@ -181,7 +181,7 @@ func TestCodexRefusesWhatClaudeRefuses(t *testing.T) {
 		})
 	}
 	// Flags only codex has.
-	for _, f := range []string{"--dangerously-bypass-hook-trust", "--ignore-rules", "--ignore-user-config", "--enable", "--disable", "-c", "--config=approval_policy=never", "--profile", "--add-dir"} {
+	for _, f := range []string{"--dangerously-bypass-hook-trust", "--ignore-rules", "--ignore-user-config", "--enable", "--disable", "-c", "--config=approval_policy=never", "--profile", "-p", "-sworkspace-write", "-aon-request", "-cfoo=bar", "-pdev", "--add-dir"} {
 		if err := Check(Spawn{ExtraArgs: []string{f}}); !errors.Is(err, ErrForbidden) {
 			t.Errorf("%q: %v", f, err)
 		}
