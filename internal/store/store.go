@@ -156,5 +156,43 @@ func (s *Store) backup(path string, version int) error {
 	if _, err := s.db.Exec("VACUUM INTO ?", dest); err != nil {
 		return err
 	}
-	return os.Chmod(dest, 0o600)
+	if err := os.Chmod(dest, 0o600); err != nil {
+		return err
+	}
+	return pruneBackups(path, KeptBackups)
+}
+
+// KeptBackups is how many pre-migration database copies are kept (ADR 0016, 0017).
+const KeptBackups = 3
+
+// pruneBackups deletes all but the keep most recent pre-migration copies of
+// the database at path. Names end in a fixed-width UTC stamp, so the name
+// order is the age order.
+func pruneBackups(path string, keep int) error {
+	baks, err := Backups(path)
+	if err != nil {
+		return err
+	}
+	for len(baks) > keep {
+		if err := os.Remove(baks[0]); err != nil {
+			return err
+		}
+		baks = baks[1:]
+	}
+	return nil
+}
+
+// Backups lists the pre-migration copies of the database at path, oldest first.
+func Backups(path string) ([]string, error) {
+	baks, err := filepath.Glob(path + ".v*.bak")
+	if err != nil {
+		return nil, err
+	}
+	stamp := func(p string) string { // "<db>.v<N>.<stamp>.bak" -> "<stamp>"
+		rest := strings.TrimPrefix(p, path+".v")
+		_, ts, _ := strings.Cut(rest, ".")
+		return ts
+	}
+	sort.Slice(baks, func(i, j int) bool { return stamp(baks[i]) < stamp(baks[j]) })
+	return baks, nil
 }

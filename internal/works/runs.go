@@ -58,6 +58,8 @@ type Runs struct {
 	// `archwright doctor`. A failure refuses the run with its fixes.
 	preflight func(context.Context) error
 
+	retention func() (time.Duration, error) // how long raw run content is kept (ADR 0017)
+
 	mu   sync.Mutex
 	runs map[string]*run
 	// cancels stops the run of a started dispatch; cancelled marks the

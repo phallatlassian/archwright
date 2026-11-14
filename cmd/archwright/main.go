@@ -47,6 +47,12 @@ const usage = `usage: archwright [command]
   job create --title T [--description D] [--site NAME | --path DIR]
                                            create a Job (on a registered Site; --path matches DIR's git origin)
   job close ID accepted|discarded          end a Job and remove its remaining worktrees
+  job purge ID                             remove a Job's raw run content now, keeping its summary (confirms at a terminal)
+  job delete ID                            remove a Job entirely (confirms at a terminal)
+  prune [--dry-run] [--days N]             remove raw run content of Jobs that ended over retention_days (default 30) ago;
+                                           never a Job with active runs; --dry-run shows what would go and changes nothing
+  upgrade                                  restart the Works on this binary (migrating the database, keeping the three most
+                                           recent pre-migration copies); refuses while runs are active unless you confirm
   worktree create ID integration|wright|readonly [--base-ref REF]
                                            create a Job's worktree from the Works' clone, after a fetch
   worktree list ID                         list a Job's worktrees
@@ -152,6 +158,16 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 			return &exitError{1, fmt.Errorf("doctor: %d check(s) failed; apply the fixes above and run it again", len(rep.Failures()))}
 		}
 		return nil
+	}
+
+	switch args[0] {
+	case "prune":
+		return prune(args[1:], connect, emit)
+	case "upgrade":
+		if len(args) > 1 {
+			return errors.New("upgrade takes no arguments\n" + usage)
+		}
+		return upgrade(dirs, stdin, stdout, connect, emit)
 	}
 
 	switch key(args, 2) {
@@ -326,6 +342,8 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 		return call("GET", "/queue", nil)
 	case "needs-you list":
 		return call("GET", "/needs-you", nil)
+	case "job purge", "job delete":
+		return jobPurgeOrDelete(args[1], args[2:], stdin, stdout, connect, emit)
 	case "job list":
 		return call("GET", "/jobs", nil)
 	case "job show":
