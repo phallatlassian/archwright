@@ -12,7 +12,17 @@ type codexParser struct {
 	lastMessage string // the last agent message
 	result      *Result
 	failure     string // a turn.failed or error message, if any
+
+	noticeList []string // managed-policy notices seen before anything else
+	done       bool     // a line other than a start or a notice was seen
 }
+
+// codexDeniedExit is the exit code `codex exec` reports for a command whose
+// escalation it cannot approve (docs/research/codex-headless-approvals-test.md).
+const codexDeniedExit = -1
+
+func (p *codexParser) settled() bool     { return p.done }
+func (p *codexParser) notices() []string { return p.noticeList }
 
 type codexLine struct {
 	Type    string    `json:"type"`
@@ -57,6 +67,11 @@ func (p *codexParser) feed(line []byte) []Event {
 	var l codexLine
 	if err := json.Unmarshal(line, &l); err != nil {
 		return []Event{{Kind: KindOther, Text: string(line), Raw: quoted(line)}}
+	}
+	if l.Type == "item.completed" && l.Item.Type == "error" && !p.done {
+		p.noticeList = append(p.noticeList, l.Item.Message)
+	} else if l.Type != "thread.started" && l.Type != "turn.started" {
+		p.done = true
 	}
 	switch l.Type {
 	case "thread.started":
@@ -135,7 +150,7 @@ func (p *codexParser) command(typ string, it codexItem, raw json.RawMessage) []E
 	}
 	failed := it.Status == "failed" || (it.ExitCode != nil && *it.ExitCode != 0)
 	out = append(out, Event{Kind: KindToolResult, ToolUseID: it.ID, Text: it.Output, IsError: failed, Raw: raw})
-	if it.Status == "failed" && it.ExitCode != nil && *it.ExitCode == -1 {
+	if it.Status == "failed" && it.ExitCode != nil && *it.ExitCode == codexDeniedExit {
 		d := Denial{Tool: codexShell, Command: it.Command, ToolUseID: it.ID}
 		p.denials = append(p.denials, d)
 		out = append(out, Event{Kind: KindPermissionDenied, Tool: d.Tool, Command: d.Command, ToolUseID: d.ToolUseID, Raw: raw})

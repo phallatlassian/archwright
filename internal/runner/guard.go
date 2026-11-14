@@ -18,6 +18,9 @@ var ErrForbidden = errors.New("forbidden by the never-list")
 // ModeDefault is the runner's own default permission mode.
 const ModeDefault = "default"
 
+// ModeDontAsk denies what would prompt; it only restricts.
+const ModeDontAsk = "dontAsk"
+
 var permittedModes = map[string]bool{"": true, "default": true, "plan": true, "dontAsk": true}
 
 // forbiddenFlags are runner flags refused outright, in any spelling.

@@ -2,9 +2,7 @@ package runner
 
 import (
 	"context"
-	"os/exec"
 	"strconv"
-	"strings"
 	"time"
 )
 
@@ -55,19 +53,7 @@ func (c *Claude) Start(ctx context.Context, req StartRequest) (Run, error) {
 	flags := c.args(req)
 	argv := append(append([]string{"-p"}, flags...), "--", req.Brief) // "--": the brief is never read as a flag
 	return startProc(ctx, procSpec{
-		name: "claude", bin: c.bin(), argv: argv, version: c.version(ctx), flags: flags,
+		name: "claude", bin: c.bin(), argv: argv, version: cliVersion(ctx, c.bin()), postureFlags: flags,
 		grace: c.Grace, parser: &claudeParser{},
 	}, req)
-}
-
-// version asks the CLI for its version; a failure is recorded as "unknown"
-// rather than stopping the run.
-func (c *Claude) version(ctx context.Context) string {
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, c.bin(), "--version").Output()
-	if err != nil {
-		return "unknown"
-	}
-	return strings.TrimSpace(string(out))
 }

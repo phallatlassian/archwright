@@ -3,8 +3,6 @@ package runner
 import (
 	"context"
 	"fmt"
-	"os/exec"
-	"strings"
 	"time"
 )
 
@@ -48,27 +46,15 @@ func (c *Codex) Start(ctx context.Context, req StartRequest) (Run, error) {
 	if err := CheckRequest(req); err != nil {
 		return nil, err
 	}
-	if m := req.Spawn.EffectiveMode(); m != ModeDefault && m != "dontAsk" {
+	if m := req.Spawn.EffectiveMode(); m != ModeDefault && m != ModeDontAsk {
 		// codex has no permission mode flag; "default" and "dontAsk" are both
 		// what `codex exec` does anyway, and nothing else can be honoured.
 		return nil, fmt.Errorf("codex has no %q permission mode", m)
 	}
-	flags := c.args(req)
-	argv := append(append([]string{"exec"}, flags...), "--", req.Brief) // "--": the brief is never read as a flag
+	flags := append([]string{"exec"}, c.args(req)...)
+	argv := append(append([]string(nil), flags...), "--", req.Brief) // "--": the brief is never read as a flag
 	return startProc(ctx, procSpec{
-		name: "codex", bin: c.bin(), argv: argv, version: c.version(ctx), flags: append([]string{"exec"}, flags...),
+		name: "codex", bin: c.bin(), argv: argv, version: cliVersion(ctx, c.bin()), postureFlags: flags,
 		grace: c.Grace, parser: &codexParser{},
 	}, req)
-}
-
-// version asks the CLI for its version; a failure is recorded as "unknown"
-// rather than stopping the run.
-func (c *Codex) version(ctx context.Context) string {
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, c.bin(), "--version").Output()
-	if err != nil {
-		return "unknown"
-	}
-	return strings.TrimSpace(string(out))
 }

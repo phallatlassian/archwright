@@ -27,16 +27,38 @@ type streamParser interface {
 	violation() string
 }
 
+// noticer is implemented by a parser whose vendor reports managed-policy
+// notices at the start of a stream. The run holds its posture event, and what
+// follows it, until the notices have all arrived, so the posture records them
+// and is still the first event.
+type noticer interface {
+	// settled reports that no further notices will arrive.
+	settled() bool
+	notices() []string
+}
+
 // procSpec is what an adapter hands startProc: the command line to spawn and
 // how to read its output.
 type procSpec struct {
-	name    string // the runner's name, e.g. "claude"
-	bin     string
-	argv    []string // arguments after the binary, the brief included
-	version string
-	flags   []string // the flags recorded in the posture; the brief excluded
-	grace   time.Duration
-	parser  streamParser
+	name         string // the runner's name, e.g. "claude"
+	bin          string
+	argv         []string // arguments after the binary, the brief included
+	version      string
+	postureFlags []string // the flags recorded in the posture; the brief excluded
+	grace        time.Duration
+	parser       streamParser
+}
+
+// cliVersion asks a vendor CLI for its version; a failure is recorded as
+// "unknown" rather than stopping the run.
+func cliVersion(ctx context.Context, bin string) string {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, bin, "--version").Output()
+	if err != nil {
+		return "unknown"
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // startProc spawns a vendor CLI as a subprocess with stdin closed, in its own
@@ -58,7 +80,7 @@ func startProc(ctx context.Context, spec procSpec, req StartRequest) (Run, error
 	}
 
 	r := &procRun{log: newLog(), done: make(chan struct{}), name: spec.name}
-	r.log.add(newPosture(spec.name, spec.version, req.Spawn, spec.flags))
+	posture := newPosture(spec.name, spec.version, req.Spawn, spec.postureFlags)
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start %s: %w", spec.name, err)
 	}
@@ -67,7 +89,7 @@ func startProc(ctx context.Context, spec procSpec, req StartRequest) (Run, error
 	if grace == 0 {
 		grace = 5 * time.Second
 	}
-	go r.pump(ctx, out, &stderr, grace, spec.parser)
+	go r.pump(ctx, out, &stderr, grace, spec.parser, posture)
 	return r, nil
 }
 
@@ -103,7 +125,7 @@ func (r *procRun) signal(sig syscall.Signal) {
 	}
 }
 
-func (r *procRun) pump(ctx context.Context, out io.Reader, stderr *bytes.Buffer, grace time.Duration, p streamParser) {
+func (r *procRun) pump(ctx context.Context, out io.Reader, stderr *bytes.Buffer, grace time.Duration, p streamParser, posture Event) {
 	defer close(r.done)
 	defer r.log.close()
 
@@ -122,13 +144,40 @@ func (r *procRun) pump(ctx context.Context, out io.Reader, stderr *bytes.Buffer,
 		}
 	}()
 
+	// A noticer's posture is held back, with the events after it, until settled.
+	var held []Event
+	n, holding := p.(noticer)
+	release := func() {
+		if !holding {
+			return
+		}
+		holding = false
+		posture.Posture.Notices = append(posture.Posture.Notices, n.notices()...)
+		r.log.add(posture)
+		for _, e := range held {
+			r.log.add(e)
+		}
+		held = nil
+	}
+	if !holding {
+		r.log.add(posture)
+	}
+	defer release()
+
 	killed := ""
 	rd := bufio.NewReaderSize(out, 1<<20)
 	for {
 		line, err := rd.ReadBytes('\n')
 		if line = bytes.TrimSpace(line); len(line) > 0 {
 			for _, e := range p.feed(line) {
-				r.log.add(e)
+				if holding {
+					held = append(held, e)
+				} else {
+					r.log.add(e)
+				}
+			}
+			if holding && n.settled() {
+				release()
 			}
 			if v := p.violation(); killed == "" && v != "" {
 				killed = v
@@ -141,6 +190,7 @@ func (r *procRun) pump(ctx context.Context, out io.Reader, stderr *bytes.Buffer,
 	}
 	waitErr := r.cmd.Wait()
 	close(stop)
+	release()
 
 	r.mu.Lock()
 	cancelled := r.cancelled

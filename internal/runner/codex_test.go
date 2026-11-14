@@ -217,3 +217,22 @@ func TestCodexFailsVisiblyWithoutAResult(t *testing.T) {
 		t.Errorf("result = %+v", res)
 	}
 }
+
+func TestCodexPostureRecordsManagedPolicyNotices(t *testing.T) {
+	run, _, err := codexStubRun(t, "codex-success.jsonl", StartRequest{Brief: "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	evs := collect(t, run)
+	if evs[0].Kind != KindPosture || len(evs[0].Posture.Notices) != 1 || !strings.Contains(evs[0].Posture.Notices[0], "falling back to required value OnRequest") {
+		t.Fatalf("posture = %+v", evs[0].Posture)
+	}
+	for i, e := range evs {
+		if e.Seq != i+1 {
+			t.Fatalf("event %d has seq %d", i, e.Seq)
+		}
+	}
+	if evs[1].Kind != KindStarted {
+		t.Errorf("held events out of order: %v", kinds(evs))
+	}
+}
