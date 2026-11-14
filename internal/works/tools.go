@@ -67,9 +67,12 @@ func requireField(name, v string) error {
 // catalogue is the tool API served over the spool, keyed by tool name.
 var catalogue = map[string]tool{
 	"create_job": {roles: []string{RoleArchwright}, call: func(c *callCtx, in json.RawMessage) (any, error) {
-		var a struct{ Title, Description string }
+		var a struct{ Title, Description, Site string }
 		if err := decode(in, &a); err != nil {
 			return nil, err
+		}
+		if a.Site != "" { // the Site the launch hint named (ADR 0010)
+			return c.st.CreateJobOn(a.Site, a.Title, a.Description)
 		}
 		return c.st.CreateJob(a.Title, a.Description)
 	}},

@@ -24,7 +24,11 @@ import (
 	"github.com/phallatlassian/archwright/internal/works"
 )
 
-const usage = `usage: archwright <command>
+const usage = `usage: archwright [command]
+
+  (no command)                             launch the Archwright: your claude or codex (runner in config.toml),
+                                           in the neutral factory home; the current directory is the Site hint
+  hook session-start|prompt|stop           the Archwright's runner hooks (rehydrate, inbox); not for people
 
   site detect URL                          propose Site values and gate commands from a remote's base branch
   site register --url U --typecheck C --lint C --test C [--name N] [--base-branch B] [--cap N]
@@ -100,11 +104,14 @@ func main() {
 }
 
 func run(args []string, stdin io.Reader, stdout io.Writer) error {
-	if len(args) == 0 {
-		return errors.New(usage)
-	}
-	if args[0] == "tool" {
+	if len(args) > 0 && args[0] == "tool" {
 		return tool(args[1:], stdin, stdout)
+	}
+	if len(args) > 0 && args[0] == "hook" {
+		return hook(args[1:], stdout)
+	}
+	if len(args) > 0 && (args[0] == "help" || args[0] == "-h" || args[0] == "--help") {
+		return errors.New(usage)
 	}
 	dirs, err := paths.Resolve(os.Getenv)
 	if err != nil {
@@ -128,6 +135,10 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 			return err
 		}
 		return emit(out)
+	}
+
+	if len(args) == 0 {
+		return launchArchwright(dirs, connect)
 	}
 
 	switch key(args, 2) {

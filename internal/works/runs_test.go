@@ -258,3 +258,20 @@ func TestStartRejectsUnknownRole(t *testing.T) {
 		t.Fatal("expected error")
 	}
 }
+
+func TestCreateJobToolTakesTheLaunchSiteHint(t *testing.T) {
+	r, st := newRuns(t)
+	if _, err := st.AddSite(store.Site{Name: "shop", URL: "https://git.example.com/o/shop.git", ClonePath: "/c/shop", BaseBranch: "main", ConcurrencyCap: 3}); err != nil {
+		t.Fatal(err)
+	}
+	env := startRun(t, r, RoleArchwright)
+	var job store.Job
+	resp := call(t, env, "s1", "create_job", `{"title":"T","site":"shop"}`)
+	json.Unmarshal(resp.Output, &job)
+	if !resp.OK || job.Site != "shop" {
+		t.Fatalf("%+v %+v", resp, job)
+	}
+	if resp := call(t, env, "s2", "create_job", `{"title":"T","site":"nope"}`); resp.OK || resp.Error.Code != "not_found" {
+		t.Fatalf("an unregistered Site must be refused: %+v", resp)
+	}
+}
