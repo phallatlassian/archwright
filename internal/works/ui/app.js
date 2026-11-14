@@ -14,7 +14,7 @@ function h(tag, attrs, ...kids) {
     else if (v === true) el.setAttribute(k, '');
     else if (v !== false && v != null) el.setAttribute(k, v);
   }
-  for (const kid of kids.flat()) if (kid != null && kid !== false) el.append(kid.nodeType ? kid : String(kid));
+  for (const kid of kids.flat(Infinity)) if (kid != null && kid !== false) el.append(kid.nodeType ? kid : String(kid));
   return el;
 }
 
@@ -143,7 +143,7 @@ const views = {
       .sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id)); // oldest first, and never by state, so a lane stays put as its Job moves
     const [full, dispatches, runs, catalogue] = await Promise.all([Promise.all(shown.map((j) => get('/jobs/' + j.id))),
       Promise.all(shown.map((j) => get(`/jobs/${j.id}/dispatches`))), Promise.all(shown.map((j) => get(`/jobs/${j.id}/runs`))), get('/catalogue').catch(() => ({ jigs: [] }))]);
-    const sel = h('select', { onchange: (e) => { sessionStorage.setItem('aw-site', e.target.value); refresh(); } },
+    const sel = h('select', { onchange: (e) => { sessionStorage.setItem('aw-site', e.target.value); e.target.blur(); refresh(); } }, // blur so the redraw is not held back by focus
       h('option', { value: '' }, 'All Sites'),
       sites.map((s) => h('option', { value: s, selected: s === want }, s)));
     const lane = (j, i, columns) => {
@@ -186,7 +186,7 @@ const views = {
         h('summary', {}, h('h2', {}, label(k), ' ', h('span', { class: 'muted' }, members.length), desc[k] ? h('span', { class: 'muted gdesc' }, desc[k]) : null)),
         h('div', { class: 'lanes' }, ordered.length ? jigHeader(ordered) : null, members.map(({ j, i }) => lane(j, i, columns))));
     });
-    return h('div', {}, h('h1', {}, 'Jobs'), h('div', { class: 'row' }, sel, legend()), sections.length ? sections : h('p', { class: 'muted' }, 'No Jobs.'));
+    return h('div', {}, crumbs(), h('h1', {}, 'Jobs'), h('div', { class: 'row' }, sel, legend()), sections.length ? sections : h('p', { class: 'muted' }, 'No Jobs.'));
   },
 
   async needsYou() {
@@ -199,7 +199,7 @@ const views = {
       const plan = await get('/jobs/' + j.id + '/plan');
       out.push(h('div', { class: 'panel attn' },
         h('h3', {}, 'Plan approval · ', jobLink(j.id, title(j.id))),
-        planGraph(plan.steps, []),
+        jigTrack(plan.steps),
         h('div', { class: 'row' },
           h('button', { class: 'primary', onclick: () => act('Approve Plan', 'POST', `/jobs/${j.id}/plan/approve`, { updated_at: plan.updated_at }) }, 'Approve'),
           h('button', { class: 'danger', onclick: () => act('Reject Plan', 'POST', `/jobs/${j.id}/plan/reject`, {}) }, 'Reject'))));
@@ -222,7 +222,7 @@ const views = {
         it.detail && Object.keys(it.detail).length ? h('pre', {}, JSON.stringify(it.detail, null, 2)) : null,
         it.job_id ? instructBox(it.job_id, 'Tell the Archwright what to do about it') : null));
     }
-    return h('div', {}, h('h1', {}, 'Needs you'), out.length ? out : h('p', { class: 'muted' }, 'Nothing is waiting on you.'));
+    return h('div', {}, crumbs('Needs you'), h('h1', {}, 'Needs you'), out.length ? out : h('p', { class: 'muted' }, 'Nothing is waiting on you.'));
   },
 
   async job(id) {
@@ -234,7 +234,6 @@ const views = {
     const closed = !!full.outcome;
     const live = ds.filter((d) => d.status === 'queued' || d.status === 'running');
     const guilds = [...new Set([...(full.plan ? full.plan.steps.map((s) => s.guild) : []), ...ds.map((d) => d.guild)])];
-    const stepState = full.step_states || {};
     const cost = runs.reduce((a, r) => a + r.cost_usd, 0);
     const controls = closed ? [] : [
       full.paused_at
@@ -244,6 +243,7 @@ const views = {
     ];
 
     const parts = [
+      crumbs(full.title),
       h('h1', {}, full.title, ' ', tag(state)),
       h('p', { class: 'muted' }, [full.site || 'no site', id, 'created ' + ago(full.created_at), full.writ ? 'writ ' + full.writ : '', money(cost)].filter(Boolean).join(' · ')),
       full.description ? h('p', {}, full.description) : null,
@@ -254,7 +254,7 @@ const views = {
     if (full.plan) {
       const p = full.plan;
       parts.push(h('h2', {}, 'Plan ', tag(p.approval), p.jig ? h('span', { class: 'muted' }, ' from Jig ' + p.jig) : ' (ad hoc)'));
-      parts.push(planGraph(p.steps, stepState));
+      parts.push(stairTrack(p.steps, stepStatuses(p.steps, ds, full), false, null, { ds, runs }));
       if (p.approval === 'pending') {
         parts.push(h('div', { class: 'row' },
           h('button', { class: 'primary', onclick: () => act('Approve Plan', 'POST', `/jobs/${id}/plan/approve`, { updated_at: p.updated_at }) }, 'Approve Plan'),
@@ -275,8 +275,11 @@ const views = {
     parts.push(ds.length ? table(['Piece', 'Guild', 'Round', 'Status', 'Run', 'Runner', 'Tokens in/out', 'Cost'], ds.map((d) => {
       const r = runs.find((x) => x.dispatch_id === d.id);
       return [d.piece, d.guild, d.round, tag(d.status),
-        r ? h('a', { href: '#/run/' + r.run_id + '/' + id }, r.status) : (d.run_id ? 'run' : ''),
+        r ? r.status : (d.run_id ? 'run' : ''),
         r ? r.runner : '', r ? tokens(r.input_tokens) + ' / ' + tokens(r.output_tokens) : '', r ? money(r.cost_usd) : ''];
+    }), ds.map((d) => { // a row opens its run's timeline
+      const run = (runs.find((x) => x.dispatch_id === d.id) || {}).run_id || d.run_id;
+      return run ? '#/run/' + run + '/' + id : '';
     })) : h('p', { class: 'muted' }, 'No Wrights dispatched.'));
 
     if (reviews.reviews && reviews.reviews.length) {
@@ -295,9 +298,10 @@ const views = {
   },
 
   async run(id) {
-    const evs = await get(`/runs/${id}/events`);
     const jobId = location.hash.split('/')[3] || '';
-    const out = [h('h1', {}, 'Run ', h('span', { class: 'mono' }, id)), jobId ? h('p', {}, jobLink(jobId, '← Job')) : null,
+    const [evs, job] = await Promise.all([get(`/runs/${id}/events`), jobId ? get('/jobs/' + jobId).catch(() => null) : null]);
+    const trail = job ? [[job.title, '#/job/' + jobId], 'Run ' + id] : ['Run ' + id];
+    const out = [crumbs(...trail), h('h1', {}, 'Run ', h('span', { class: 'mono' }, id)),
       h('p', { class: 'muted' }, 'Read-only timeline. Raw vendor events load on demand.')];
     if (!evs.length) out.push(h('p', { class: 'muted' }, 'No events recorded.'));
     for (const e of evs) {
@@ -329,7 +333,7 @@ const views = {
     };
     const head = (first) => [first, 'Runs', 'Tokens in', 'Tokens out', 'Cost'];
     const perJob = group('job_id').map((r) => { r[0] = h('a', { href: '#/job/' + r[0] }, title[r[0]] || r[0]); return r; });
-    return h('div', {}, h('h1', {}, 'Usage and cost'),
+    return h('div', {}, crumbs('Usage'), h('h1', {}, 'Usage and cost'),
       h('p', { class: 'muted' }, `Total ${money(sum(use, 'cost_usd'))} over ${sum(use, 'runs')} runs. A runner that reports no cost (codex) counts $0.`),
       h('h2', {}, 'Per Job'), table(head('Job'), perJob),
       h('h2', {}, 'Per Guild'), table(head('Guild'), group('guild')),
@@ -337,8 +341,8 @@ const views = {
   },
 
   async catalogue() {
-    const [sites, cat, queue] = await Promise.all([get('/sites'), get('/catalogue'), get('/queue')]);
-    const out = [h('h1', {}, 'Catalogue'), h('h2', {}, 'Sites'),
+    const [sites, cat] = await Promise.all([get('/sites'), get('/catalogue')]);
+    const out = [crumbs('Catalogue'), h('h1', {}, 'Catalogue'), h('h2', {}, 'Sites'),
       sites.length ? table(['Name', 'URL', 'Base', 'Cap', 'Typecheck', 'Lint', 'Test'], sites.map((s) => [s.name, s.url, s.base_branch, s.concurrency_cap,
         ...['typecheck', 'lint', 'test'].map((k) => h('code', {}, s.gates[k] || '—'))])) : h('p', { class: 'muted' }, 'No Sites registered.'),
       h('h2', {}, 'Guilds'),
@@ -348,19 +352,63 @@ const views = {
         j.parameters && j.parameters.length ? h('div', { class: 'muted' }, 'Parameters: ' + j.parameters.map((p) => p.name + (p.required ? '*' : '')).join(', ')) : null,
         jigTrack(j.steps.map((s) => ({ id: s.id, guild: s.guild, title: s.task, blocked_by: s.blocked_by, checkpoint: s.checkpoint }))))),
     ];
-    if (cat.errors && cat.errors.length) out.push(h('h2', {}, 'Definitions that failed to load'), cat.errors.map((e) => h('div', { class: 'panel attn' }, `${e.kind} ${e.name}: ${e.error}`)));
-    out.push(h('h2', {}, 'Runner'),
-      h('p', {}, `Running ${queue.running.length}, queued ${queue.queued.length}; caps: total ${queue.limits.total}, per Site ${queue.limits.per_site}, per Warden ${queue.limits.per_warden}.`,
-        queue.paused ? h('span', { class: 'warn' }, ` Paused after rate limits until ${queue.paused.until}.`) : ''),
-      table(['Dispatch', 'Job', 'Piece', 'Guild', 'Waiting'], [...queue.running, ...queue.queued].map((q) => [q.dispatch_id, jobLink(q.job), q.piece, q.guild, q.waiting || 'running'])));
+    if (cat.errors && cat.errors.length) out.push(h('h2', {}, 'Definitions that failed to load'), ...cat.errors.map((e) => h('div', { class: 'panel attn' }, `${e.kind} ${e.name}: ${e.error}`)));
+    return h('div', {}, out);
+  },
+
+  async runner() {
+    const [queue, board, sites] = await Promise.all([get('/queue'), get('/board'), get('/sites')]);
+    const title = Object.fromEntries(board.map((j) => [j.id, j.title]));
+    const job = (id) => jobLink(id, title[id] || id);
+    const count = (key) => queue.running.reduce((m, q) => m.set(q[key], (m.get(q[key]) || 0) + 1), new Map());
+    const perSite = count('site'), perGuild = count('guild');
+    const cap = Object.fromEntries(sites.map((x) => [x.name, x.concurrency_cap]));
+    const out = [crumbs('Runner'), h('h1', {}, 'Runner'),
+      h('p', { class: 'muted' }, 'The scheduler that starts Wrights. Work waits in a queue, oldest first, when a cap is reached.')];
+    if (queue.paused) out.push(h('div', { class: 'panel attn' }, h('strong', {}, 'Paused after rate limits '), `until ${queue.paused.until} (${queue.paused.failures} in a row). Nothing new starts until then.`));
+    out.push(h('h2', {}, 'Capacity'), table(['Cap', 'In use', 'Limit'], [
+      ['Total', queue.running.length, queue.limits.total],
+      ...[...perSite].map(([k, n]) => ['Site ' + (k || '(none)'), n, cap[k] || queue.limits.per_site]),
+      ...[...perGuild].map(([k, n]) => ['Warden ' + k, n, queue.limits.per_warden]),
+    ]));
+    out.push(h('h2', {}, 'Running ', h('span', { class: 'muted' }, queue.running.length)),
+      queue.running.length ? table(['Dispatch', 'Job', 'Piece', 'Guild', 'Site'], queue.running.map((q) => [q.dispatch_id, job(q.job), q.piece, q.guild, q.site || '']))
+        : h('p', { class: 'muted' }, 'Nothing is running.'));
+    out.push(h('h2', {}, 'Queued ', h('span', { class: 'muted' }, queue.queued.length)),
+      queue.queued.length ? table(['#', 'Dispatch', 'Job', 'Piece', 'Guild', 'Site', 'Waiting on'], queue.queued.map((q) => [q.position || '', q.dispatch_id, job(q.job), q.piece, q.guild, q.site || '', q.waiting || '']))
+        : h('p', { class: 'muted' }, 'Nothing is waiting.'));
     return h('div', {}, out);
   },
 };
 
 // ---- shared pieces ----------------------------------------------------------------
-function table(head, rows) {
+// crumbs draws the breadcrumb trail every screen starts with. It begins at Jobs, the home screen; an item is
+// a string (plain text) or [text, href] (a link); the last item is the current page.
+function crumbs(...rest) {
+  const trail = [rest.length ? ['Jobs', '#/board'] : 'Jobs', ...rest];
+  const kids = [];
+  trail.forEach((c, i) => {
+    if (i) kids.push(h('span', {}, '\u203A'));
+    const [text, href] = Array.isArray(c) ? c : [c];
+    kids.push(i < trail.length - 1 && href ? h('a', { href }, text) : h('span', i === trail.length - 1 ? { class: 'cur', 'aria-current': 'page' } : {}, text));
+  });
+  return h('nav', { class: 'crumbs', 'aria-label': 'Breadcrumb' }, kids);
+}
+
+// table draws rows of cells. When hrefs is given, a row with an href opens it on a click or Enter, so the
+// whole row is the target and not only a link inside it; a click on a link or button in the row is left alone.
+function table(head, rows, hrefs) {
   return h('table', {}, h('thead', {}, h('tr', {}, head.map((c) => h('th', {}, c)))),
-    h('tbody', {}, rows.map((r) => h('tr', {}, r.map((c) => h('td', {}, c))))));
+    h('tbody', {}, rows.map((r, i) => {
+      const href = hrefs && hrefs[i];
+      const tr = h('tr', href ? { class: 'click', tabindex: '0' } : {}, r.map((c) => h('td', {}, c)));
+      if (href) {
+        const open = () => { location.hash = href; };
+        tr.addEventListener('click', (e) => { if (!e.target.closest('a, button')) open(); });
+        tr.addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target === tr) open(); });
+      }
+      return tr;
+    })));
 }
 
 // layers groups steps into columns by depth: a step sits one column right of its deepest blocker.
@@ -534,18 +582,6 @@ function jigHeader(ord) {
     ord.map((s) => h('div', { class: 'hcol', style: `min-width:${COLW}px` }, withTip(h('div', { class: 'hname' }, s.id, s.checkpoint ? h('span', { class: 'cpm' }, ' \u25C7') : null), () => stepCard(s))))));
 }
 
-// planGraph lays a Plan's steps out in columns by depth, as boxes.
-function planGraph(steps, state) {
-  const layersOfSteps = layers(steps);
-  return h('div', { class: 'graph' }, layersOfSteps.map((l) => h('div', { class: 'layer' }, l.map((s) => {
-    const st = (state && state[s.id]) || '';
-    return h('div', { class: 'step ' + (st === 'running' ? 'running' : '') + (s.checkpoint ? ' cp' : '') },
-      h('strong', {}, s.id), ' ', st ? h('span', { class: 'tag' + (st === 'running' ? ' running' : '') }, st) : null, s.checkpoint ? h('span', { class: 'tag' }, 'checkpoint') : null,
-      h('div', {}, s.title), h('div', { class: 'muted' }, s.guild),
-      s.blocked_by && s.blocked_by.length ? h('div', { class: 'muted' }, '← ' + s.blocked_by.join(', ')) : null);
-  }))));
-}
-
 function instructBox(jobId, placeholder) {
   const box = h('input', { type: 'text', placeholder });
   return h('div', { class: 'row' }, box,
@@ -587,7 +623,7 @@ function askPanel(a, jobTitle) {
 }
 
 // ---- routing, rendering and live updates -------------------------------------------
-const NAV = [['#/board', 'Jobs'], ['#/needs-you', 'Needs you'], ['#/usage', 'Usage'], ['#/catalogue', 'Catalogue']];
+const NAV = [['#/board', 'Jobs'], ['#/needs-you', 'Needs you'], ['#/runner', 'Runner'], ['#/usage', 'Usage'], ['#/catalogue', 'Catalogue']];
 
 function route() {
   const [, name, arg] = location.hash.split('/');
@@ -595,6 +631,7 @@ function route() {
     case 'needs-you': return ['needsYou'];
     case 'job': return ['job', arg];
     case 'run': return ['run', arg];
+    case 'runner': return ['runner'];
     case 'usage': return ['usage'];
     case 'catalogue': return ['catalogue'];
     default: return ['board'];
@@ -611,7 +648,7 @@ async function refresh() {
     if (!token) throw new Error('No token. Open the dashboard with the URL printed by `archwright dashboard`.');
     // A form being filled must not be lost to a live refresh: skip while a field in the view has focus.
     const el = document.activeElement;
-    const editing = el && ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName) && $('main').contains(el) && el.type !== 'button' && !(el.tagName === 'SELECT' && !el.closest('.panel'));
+    const editing = el && ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName) && $('main').contains(el) && el.type !== 'button';
     if (!editing) {
       const node = await views[name](arg);
       if (node.innerHTML !== $('main').firstElementChild?.innerHTML || $('main').childElementCount !== 1) { $('main').replaceChildren(node); retip(); };
