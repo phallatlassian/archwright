@@ -72,3 +72,7 @@ func (d Dirs) Worktrees() string { return filepath.Join(d.State, "worktrees") }
 
 // Clones is the directory holding the Works' own bare clone of each Site, outside every developer checkout (ADR 0019).
 func (d Dirs) Clones() string { return filepath.Join(d.State, "clones") }
+
+// RunDir is where the Works keeps one run's generated files, such as its git
+// configuration and excludes file; it is outside every worktree (ADR 0018).
+func (d Dirs) RunDir(run string) string { return filepath.Join(d.State, "runs", run) }

@@ -42,6 +42,7 @@ type Runs struct {
 	defs      *defs.Registry // the loaded Guild and Jig catalogue (ADR 0009)
 	runner    Runner
 	reviewer  ReviewRunner // runs Reviews (ADR 0012)
+	skills    *SkillsDelivery
 	spoolRoot string
 	bg        context.Context
 	cancelBg  context.CancelFunc
