@@ -10,6 +10,7 @@ function h(tag, attrs, ...kids) {
   for (const [k, v] of Object.entries(attrs || {})) {
     if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
     else if (k === 'class') el.className = v;
+    else if (k === 'style') el.style.cssText = v; // not setAttribute: the page's CSP forbids inline style attributes
     else if (v === true) el.setAttribute(k, '');
     else if (v !== false && v != null) el.setAttribute(k, v);
   }
@@ -60,6 +61,62 @@ async function act(label, method, path, body, then) {
   }
 }
 
+// ---- step popover -----------------------------------------------------------------
+// One floating card, shown while the pointer (or keyboard focus) is on an element that has a card to show.
+// It ignores the pointer, so it never gets in the way. A redraw replaces the element it was shown for, so
+// afterwards it moves to whatever step is under the pointer, with its up-to-date details.
+let tipEl;
+let pointer = { x: -1, y: -1 };
+document.addEventListener('mousemove', (e) => { pointer = { x: e.clientX, y: e.clientY }; }, { passive: true });
+function hideTip() { if (tipEl) tipEl.className = ''; }
+// retip runs after a redraw: the element the card was for is gone, so if one that has a card is now under
+// the pointer, show its (fresh) card there; otherwise hide it.
+function retip() {
+  const el = tipEl && tipEl.className === 'show' ? document.elementFromPoint(pointer.x, pointer.y) : null;
+  const target = el && el.closest('[data-tip]');
+  if (target) showTip(target, target._tip()); else hideTip();
+}
+function showTip(el, content) {
+  if (!tipEl) { tipEl = h('div', { id: 'tip', role: 'tooltip' }); document.body.append(tipEl); }
+  tipEl.replaceChildren(content);
+  tipEl.className = 'show';
+  const r = el.getBoundingClientRect(), t = tipEl.getBoundingClientRect();
+  const left = Math.min(Math.max(8, r.left + r.width / 2 - t.width / 2), window.innerWidth - t.width - 8);
+  const top = r.bottom + 8 + t.height > window.innerHeight && r.top - 8 - t.height > 0 ? r.top - 8 - t.height : r.bottom + 8;
+  tipEl.style.left = left + 'px';
+  tipEl.style.top = top + 'px';
+}
+// withTip makes el show build() on hover and focus.
+function withTip(el, build) {
+  el.setAttribute('tabindex', '0');
+  el.dataset.tip = '1';
+  el._tip = build;
+  el.addEventListener('mouseenter', () => showTip(el, build()));
+  el.addEventListener('focus', () => showTip(el, build()));
+  el.addEventListener('mouseleave', hideTip);
+  el.addEventListener('blur', hideTip);
+  return el;
+}
+window.addEventListener('scroll', hideTip, true);
+
+// stepCard is what the popover says about a Plan step: what it is, where it stands, and the Wright runs
+// behind it. ctx is the Job's dispatches and runs; without it the card describes the step alone.
+function stepCard(s, status, ctx) {
+  const ds = ctx ? ctx.ds.filter((d) => d.piece === s.id).sort((a, b) => a.round - b.round) : [];
+  return h('div', { class: 'tipc' },
+    h('div', { class: 'tiph' }, h('strong', {}, s.id), s.checkpoint ? h('span', { class: 'cpm' }, ' \u25C7 checkpoint') : null,
+      status ? h('span', { class: 'tag ' + status }, STATUS_LABEL[status]) : null),
+    h('div', { class: 'muted' }, s.guild),
+    h('div', {}, s.title),
+    s.brief ? h('div', { class: 'tipb' }, s.brief) : null,
+    s.blocked_by && s.blocked_by.length ? h('div', { class: 'muted' }, 'Waits on ' + s.blocked_by.join(', ')) : null,
+    ctx ? (ds.length ? h('div', { class: 'tipr' }, ds.map((d) => {
+      const r = ctx.runs.find((x) => x.dispatch_id === d.id);
+      return h('div', {}, h('span', { class: 'muted' }, 'Round ' + d.round + ' '), tag(d.status),
+        r ? h('span', { class: 'muted' }, ` ${r.runner || ''} \u00b7 ${tokens(r.input_tokens)} in / ${tokens(r.output_tokens)} out \u00b7 ${money(r.cost_usd)}`) : null);
+    })) : h('div', { class: 'muted' }, 'No Wright has run for this step.')) : null);
+}
+
 // ---- formatting -------------------------------------------------------------------
 const money = (n) => '$' + (n || 0).toFixed(4);
 const tokens = (n) => (n || 0).toLocaleString();
@@ -74,7 +131,6 @@ const ago = (iso) => {
 const tag = (s) => h('span', { class: 'tag ' + s }, s);
 const jobLink = (id, text) => h('a', { href: '#/job/' + id }, text || id);
 
-const STATES = ['needs-you', 'parked', 'running', 'in-progress', 'paused', 'planning', 'accepted', 'discarded'];
 
 // ---- views ------------------------------------------------------------------------
 // Each view fetches what it shows and returns a node; refresh() re-renders the current one.
@@ -84,9 +140,9 @@ const views = {
     const sites = [...new Set(jobs.map((j) => j.site || '(no site)'))].sort();
     const want = sessionStorage.getItem('aw-site') || '';
     const shown = jobs.filter((j) => !want || (j.site || '(no site)') === want)
-      .sort((a, b) => STATES.indexOf(a.state) - STATES.indexOf(b.state) || b.created_at.localeCompare(a.created_at));
-    const [full, dispatches, catalogue] = await Promise.all([Promise.all(shown.map((j) => get('/jobs/' + j.id))),
-      Promise.all(shown.map((j) => get(`/jobs/${j.id}/dispatches`))), get('/catalogue').catch(() => ({ jigs: [] }))]);
+      .sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id)); // oldest first, and never by state, so a lane stays put as its Job moves
+    const [full, dispatches, runs, catalogue] = await Promise.all([Promise.all(shown.map((j) => get('/jobs/' + j.id))),
+      Promise.all(shown.map((j) => get(`/jobs/${j.id}/dispatches`))), Promise.all(shown.map((j) => get(`/jobs/${j.id}/runs`))), get('/catalogue').catch(() => ({ jigs: [] }))]);
     const sel = h('select', { onchange: (e) => { sessionStorage.setItem('aw-site', e.target.value); refresh(); } },
       h('option', { value: '' }, 'All Sites'),
       sites.map((s) => h('option', { value: s, selected: s === want }, s)));
@@ -101,7 +157,7 @@ const views = {
             j.live_runs ? j.live_runs + ' running · ' : '',
             j.open_asks ? j.open_asks + ' ask(s) · ' : '',
             money(j.cost_usd))),
-        plan && plan.steps.length ? stairTrack(plan.steps, stepStatuses(plan.steps, dispatches[i], full[i]), !!columns, columns) : h('div', { class: 'muted lempty' }, 'No Plan yet.'));
+        plan && plan.steps.length ? stairTrack(plan.steps, stepStatuses(plan.steps, dispatches[i], full[i]), !!columns, columns, { ds: dispatches[i], runs: runs[i] }) : h('div', { class: 'muted lempty' }, 'No Plan yet.'));
     };
     // Group by the Jig each Plan came from: one section per Jig, then ad hoc Plans, then Jobs with no Plan.
     const AD_HOC = '\uffffad hoc', NO_PLAN = '\uffffzno plan'; // sort after every Jig name
@@ -408,7 +464,7 @@ function stairs(steps) {
 // S-curves that run from each blocker into the step it blocks. A compact track is only the dots, for lanes
 // under a jigHeader. Every step has a fixed size so the curves can be placed without measuring the page.
 const LANE_STEP = 26; // px per step in a compact lane: just the dot
-function stairTrack(steps, state, compact, columns) {
+function stairTrack(steps, state, compact, columns, ctx) {
   const ord = layers(steps).flat();
   const ids = columns || ord.map((s) => s.id); // a shared header's columns; a lane without a step leaves its column empty
   const byId = Object.fromEntries(ord.map((s) => [s.id, s]));
@@ -434,16 +490,16 @@ function stairTrack(steps, state, compact, columns) {
     svg.append(path);
   }
   return h('div', { class: 'track' + (compact ? ' compact' : '') }, h('div', { class: 'sinner', style: `min-width:${ids.length * COLW}px;height:${H}px` }, svg,
-    ids.map((id) => h('div', { class: 'scol', style: `min-width:${COLW}px;height:${H}px` }, byId[id] ? stairStep(byId[id], row[id] * unit, cell, state, compact) : null))));
+    ids.map((id) => h('div', { class: 'scol', style: `min-width:${COLW}px;height:${H}px` }, byId[id] ? stairStep(byId[id], row[id] * unit, cell, state, compact, ctx) : null))));
 }
 
-function stairStep(s, top, cell, state, compact) {
-  return h('div', { class: 'sstep', style: `top:${top}px;height:${cell}px` },
+function stairStep(s, top, cell, state, compact, ctx) {
+  const cellEl = h('div', { class: 'sstep', style: `top:${top}px;height:${cell}px` },
     compact ? null : h('div', { class: 'th' }, s.id),
-    h('div', { class: 'rail' }, h('span', { class: 'dot' + (s.checkpoint ? ' cp' : '') + ' ' + ((state && state[s.id]) || 'pending'),
-      title: (compact ? s.id + ' \u00b7 ' + s.guild + ': ' + s.title + ' \u00b7 ' : '') + (state && state[s.id] ? STATUS_LABEL[state[s.id]] : 'pending') + (s.checkpoint ? ' (checkpoint)' : '') })),
+    h('div', { class: 'rail' }, h('span', { class: 'dot' + (s.checkpoint ? ' cp' : '') + ' ' + ((state && state[s.id]) || 'pending') })),
     compact ? null : h('div', { class: 'tg' }, s.guild),
     compact ? null : h('div', { class: 'tt muted' }, s.title));
+  return withTip(cellEl, () => stepCard(s, state && state[s.id], ctx));
 }
 
 // sharedSteps merges several Plans' steps into the columns of one header: a step name keeps one column
@@ -475,7 +531,7 @@ function legend() {
 // same widths as the lanes, so each name sits over its dots.
 function jigHeader(ord) {
   return h('div', { class: 'lane lhrow' }, h('div', { class: 'lhead' }), h('div', { class: 'track' },
-    ord.map((s) => h('div', { class: 'hcol', style: `min-width:${COLW}px` }, h('div', { class: 'hname', title: s.guild + ': ' + s.title }, s.id, s.checkpoint ? h('span', { class: 'cpm' }, ' \u25C7') : null)))));
+    ord.map((s) => h('div', { class: 'hcol', style: `min-width:${COLW}px` }, withTip(h('div', { class: 'hname' }, s.id, s.checkpoint ? h('span', { class: 'cpm' }, ' \u25C7') : null), () => stepCard(s))))));
 }
 
 // planGraph lays a Plan's steps out in columns by depth, as boxes.
@@ -558,7 +614,7 @@ async function refresh() {
     const editing = el && ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName) && $('main').contains(el) && el.type !== 'button' && !(el.tagName === 'SELECT' && !el.closest('.panel'));
     if (!editing) {
       const node = await views[name](arg);
-      if (node.innerHTML !== $('main').firstElementChild?.innerHTML || $('main').childElementCount !== 1) $('main').replaceChildren(node);
+      if (node.innerHTML !== $('main').firstElementChild?.innerHTML || $('main').childElementCount !== 1) { $('main').replaceChildren(node); retip(); };
     }
   } catch (e) {
     $('main').replaceChildren(h('p', { class: 'bad' }, e.message));

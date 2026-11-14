@@ -34,6 +34,7 @@ type mockWorld struct {
 	Events    map[string][]store.RunEvent
 	Catalogue works.Catalogue
 	Queue     works.QueueStatus
+	seq       int // numbers what the simulation creates
 }
 
 func (w *mockWorld) job(id string) *mockJob {

@@ -87,3 +87,12 @@ a { color:var(--accent); }
 .dot.running { animation:pulse 1.6s ease-out infinite; }
 @keyframes pulse { 0% { box-shadow:0 0 0 0 color-mix(in srgb, var(--ok) 65%, transparent); } 70%, 100% { box-shadow:0 0 0 8px transparent; } }
 @media (prefers-reduced-motion: reduce) { .dot.running { animation:none; } }
+.tag.blocked { color:var(--orange); border-color:var(--orange); } .tag.pending { color:var(--accent); border-color:var(--accent); }
+.sstep:focus-visible, .hname:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; border-radius:4px; }
+.sstep, .hname { cursor:default; }
+#tip { position:fixed; z-index:10; max-width:340px; pointer-events:none; opacity:0; visibility:hidden; transition:opacity .1s; background:var(--card); border:1px solid var(--line); border-radius:6px; padding:.6rem .8rem; box-shadow:0 6px 24px rgba(0,0,0,.25); font-size:.85rem; text-align:left; font-weight:400; }
+#tip.show { opacity:1; visibility:visible; }
+.tipc > * + * { margin-top:.35rem; }
+.tiph { display:flex; gap:.5rem; align-items:center; } .tiph .tag { margin:0 0 0 auto; }
+.tipb { white-space:pre-wrap; border-left:2px solid var(--line); padding-left:.5rem; color:var(--muted); }
+.tipr > * + * { margin-top:.2rem; }

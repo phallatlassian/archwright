@@ -23,6 +23,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/phallatlassian/archwright/internal/store"
@@ -31,10 +32,15 @@ import (
 
 const token = "dev"
 
+// csp is the policy the Works sends with the real dashboard (internal/works/ui.go), so a change that the
+// browser would block there, such as an inline style attribute, shows up here too.
+const csp = "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+
 func main() {
 	addr := flag.String("addr", "127.0.0.1:5173", "address to listen on")
 	dir := flag.String("ui", "internal/works/ui", "directory holding the dashboard files")
 	scenario := flag.String("scenario", "full", "mock data set: full or empty")
+	live := flag.Bool("live", true, "play some Jobs through their Plans so the board changes in real time")
 	flag.Parse()
 	if _, err := os.Stat(filepath.Join(*dir, "index.html")); err != nil {
 		log.Fatalf("no dashboard files in %s (run from the repository root, or pass -ui): %v", *dir, err)
@@ -48,6 +54,9 @@ func main() {
 	}
 	s := &server{world: newWorld(*scenario), ui: *dir, reload: newBus(), events: newBus()}
 	go s.watch()
+	if *live && *scenario == "full" {
+		s.simulate()
+	}
 	fmt.Printf("dashboard dev server (%s data)\n  http://%s/#token=%s\n", *scenario, ln.Addr(), token)
 	log.Fatal(http.Serve(ln, s.routes()))
 }
@@ -57,7 +66,11 @@ type server struct {
 	ui     string
 	reload *bus // UI file changes
 	events *bus // mock-state changes, surfaced as the Works' event stream
+	seq    atomic.Int64
 }
+
+// announce tells every open event stream that something changed.
+func (s *server) announce() { s.events.send(strconv.FormatInt(s.seq.Add(1), 10)) }
 
 // bus fans a message out to every subscriber without blocking the sender.
 type bus struct {
@@ -141,6 +154,7 @@ func (s *server) routes() http.Handler {
 		page = bytes.Replace(page, []byte("</body>"), []byte(`<script src="/__dev/reload.js"></script></body>`), 1)
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Content-Security-Policy", csp)
 		w.Write(page)
 	})
 	mux.HandleFunc("GET /ui/", func(w http.ResponseWriter, r *http.Request) {
@@ -188,7 +202,6 @@ func (s *server) api() http.Handler {
 		json.NewEncoder(w).Encode(v)
 	}
 	fail := func(w http.ResponseWriter, code int, msg string) { reply(w, code, map[string]string{"error": msg}) }
-	var n int
 	// read serves a GET under the lock; fn returns the body or an error message.
 	read := func(pattern string, fn func(r *http.Request) (any, string)) {
 		mux.HandleFunc("GET "+pattern, func(w http.ResponseWriter, r *http.Request) {
@@ -220,8 +233,7 @@ func (s *server) api() http.Handler {
 				fail(w, 409, msg)
 				return
 			}
-			n++
-			s.events.send(strconv.Itoa(n))
+			s.announce()
 			reply(w, 200, map[string]any{"ok": true})
 		})
 	}
@@ -335,8 +347,7 @@ func (s *server) api() http.Handler {
 			}
 		}
 		wd.mu.Unlock()
-		n++
-		s.events.send(strconv.Itoa(n))
+		s.announce()
 		reply(w, 200, map[string]any{"ok": true})
 	})
 	closeAsk := func(r *http.Request, discard bool) string {
