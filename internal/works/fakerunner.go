@@ -64,6 +64,8 @@ func (f *FakeRunner) Run(ctx context.Context, req RunRequest) error {
 		res, f.script[req.Piece] = q[0], q[1:]
 	}
 	f.mu.Unlock()
+	req.Trace.Emit("posture", "fake runner: default mode, inherited sandbox", json.RawMessage(`{"runner":"fake","mode":"default","sandbox":"inherited"}`))
+	req.Trace.Emit("message", "Reading the brief for "+req.Piece, json.RawMessage(`{"type":"assistant","text":"Reading the brief for `+req.Piece+`"}`))
 	if f.delay > 0 {
 		select {
 		case <-time.After(f.delay):
@@ -81,6 +83,8 @@ func (f *FakeRunner) Run(ctx context.Context, req RunRequest) error {
 		}
 		return nil
 	}
+	req.Trace.Emit("tool_use", "report_result: "+string(res.Status), json.RawMessage(`{"type":"tool_use","name":"archwright tool report_result"}`))
+	req.Trace.Consumed("fake", 1200, 300, 0.0123)
 	in, err := json.Marshal(res)
 	if err != nil {
 		return err

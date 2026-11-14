@@ -271,9 +271,8 @@ func (s *Store) PurgeJob(id string) error {
 }
 
 // purgeJob is PurgeJob recording who asked: the developer, or retention. The
-// only raw run content the Works stores so far is the rendered brief; runner
-// events (messages, tool calls, vendor events) are not persisted yet, so there
-// is nothing more to clear (ADR 0017).
+// raw run content the Works stores is the rendered brief and the vendor event
+// behind each run timeline entry; the timeline's kind and summary stay (ADR 0017).
 func (s *Store) purgeJob(id, by string) error {
 	j, err := s.GetJob(id)
 	if err != nil {
@@ -298,6 +297,9 @@ func (s *Store) purgeJob(id, by string) error {
 		return err
 	}
 	n, _ := res.RowsAffected()
+	if _, err := tx.Exec("UPDATE run_events SET raw = '' WHERE run_id IN (SELECT run_id FROM run_records WHERE job_id = ?)", id); err != nil {
+		return err
+	}
 	if _, err := tx.Exec("UPDATE jobs SET purged_at = ? WHERE id = ?", at, id); err != nil {
 		return err
 	}
@@ -335,7 +337,10 @@ func (s *Store) DeleteJob(id string) error {
 	if _, err := tx.Exec("INSERT INTO event_deletions (job_id) VALUES (?)", id); err != nil {
 		return err
 	}
-	for _, table := range []string{"gate_runs", "flags", "reviews", "handbacks", "asks", "dispatches", "pieces", "plans", "needs_you", "worktrees", "events"} {
+	if _, err := tx.Exec("DELETE FROM run_events WHERE run_id IN (SELECT run_id FROM run_records WHERE job_id = ?)", id); err != nil {
+		return fmt.Errorf("deleting run_events: %w", err)
+	}
+	for _, table := range []string{"run_records", "gate_runs", "flags", "reviews", "handbacks", "asks", "dispatches", "pieces", "plans", "needs_you", "worktrees", "events"} {
 		if _, err := tx.Exec("DELETE FROM "+table+" WHERE job_id = ?", id); err != nil {
 			return fmt.Errorf("deleting %s: %w", table, err)
 		}
