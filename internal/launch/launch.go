@@ -86,8 +86,7 @@ type Input struct {
 
 // Command is the process to start.
 type Command struct {
-	Bin  string
-	Args []string
+	Args []string // for the runner binary named by Input.Runner
 	Dir  string
 	Env  []string // additions to the developer's own environment
 	// Hooks says whether the inbox is delivered by hooks; otherwise the
@@ -96,7 +95,8 @@ type Command struct {
 }
 
 // Build assembles the launch. The only runner flags are the run's hooks
-// settings and the instructions; both are checked against the never-list.
+// settings and the instructions; the flags are checked against the never-list,
+// except --settings, which ADR 0014 allows for hooks alone (see Settings).
 func Build(in Input) (Command, error) {
 	if in.Runner != RunnerClaude && in.Runner != RunnerCodex {
 		return Command{}, fmt.Errorf("unknown runner %q", in.Runner)
@@ -108,7 +108,7 @@ func Build(in Input) (Command, error) {
 	if err := runner.CheckRequest(runner.StartRequest{Env: env}); err != nil {
 		return Command{}, err
 	}
-	cmd := Command{Bin: in.Runner, Dir: in.Home}
+	cmd := Command{Dir: in.Home}
 	for _, k := range []string{spool.EnvRun, spool.EnvSpool, spool.EnvToken, EnvSite} {
 		if v, ok := env[k]; ok {
 			cmd.Env = append(cmd.Env, k+"="+v)
@@ -128,6 +128,15 @@ func Build(in Input) (Command, error) {
 		// Codex has no per-run settings channel that is not a config override,
 		// so its inbox is polled; the instructions are its first message.
 		cmd.Args = []string{"--", Instructions(in.Site, false)}
+	}
+	var flags []string // the --settings value and the instructions are data, not flags
+	for _, a := range cmd.Args {
+		if strings.HasPrefix(a, "-") && len(a) < 40 && a != "--settings" {
+			flags = append(flags, a)
+		}
+	}
+	if err := runner.Check(runner.Spawn{ExtraArgs: flags}); err != nil {
+		return Command{}, err
 	}
 	return cmd, nil
 }

@@ -58,7 +58,7 @@ func launchArchwright(dirs paths.Dirs, connect func() (*works.Client, error)) er
 		return err
 	}
 	var env works.RunEnv
-	if err := c.Do("POST", "/runs", map[string]string{"role": works.RoleArchwright, "SpoolRoot": launch.SpoolRoot(choice, os.Getuid(), os.TempDir())}, &env); err != nil {
+	if err := c.Do("POST", "/runs", map[string]string{"Role": works.RoleArchwright, "SpoolRoot": launch.SpoolRoot(choice, os.Getuid(), os.TempDir())}, &env); err != nil {
 		return err
 	}
 	defer c.Do("DELETE", "/runs/"+url.PathEscape(env.Run), nil, nil)
