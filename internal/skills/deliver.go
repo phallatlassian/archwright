@@ -71,6 +71,22 @@ func Deliver(req Request) (Delivery, error) {
 	}
 	claude := req.Runner == "claude"
 
+	scopes := []string{"--local"}
+	if out, err := git(req.Worktree, nil, "config", "--local", "--type=bool", "--default", "false", "--get", "extensions.worktreeConfig"); err != nil {
+		return Delivery{}, err
+	} else if strings.TrimSpace(out) == "true" {
+		scopes = append(scopes, "--worktree")
+	}
+	for _, scope := range scopes {
+		out, err := git(req.Worktree, nil, "config", scope, "--default", "", "--get", "core.excludesFile")
+		if err != nil {
+			return Delivery{}, err
+		}
+		if v := strings.TrimSpace(out); v != "" {
+			return Delivery{}, fmt.Errorf("the Site's git configuration sets core.excludesFile (%s), which overrides the Works' excludes so the factory's skills could not be hidden from git: remove it or set it in your global git configuration", v)
+		}
+	}
+
 	agentsTracked, err := tracked(req.Worktree, agentsSkills)
 	if err != nil {
 		return Delivery{}, err

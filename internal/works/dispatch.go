@@ -55,7 +55,8 @@ type RunRequest struct {
 	Job        string
 	Piece      string
 	DispatchID string
-	Brief      string // the rendered brief, Guild standards included
+	Brief      string            // the rendered brief, Guild standards included
+	ExtraEnv   map[string]string // further variables for the runner process, such as GIT_CONFIG_GLOBAL for delivered skills
 }
 
 // Runner carries out one Wright run (ADR 0003). Real adapters spawn a vendor
@@ -501,7 +502,10 @@ func (r *Runs) start(d store.Dispatch) error {
 	go func() {
 		defer r.wg.Done()
 		defer cancel()
-		runErr := runner.Run(ctx, RunRequest{Env: env, Job: d.JobID, Piece: d.Piece, DispatchID: d.ID, Brief: d.Rendered})
+		extra, runErr := r.deliverSkillsFor(d)
+		if runErr == nil {
+			runErr = runner.Run(ctx, RunRequest{Env: env, Job: d.JobID, Piece: d.Piece, DispatchID: d.ID, Brief: d.Rendered, ExtraEnv: extra})
+		}
 		unreported := false
 		if cur, err := r.st.GetDispatch(d.ID); err == nil && cur.Status == store.DispatchRunning {
 			unreported = true

@@ -344,3 +344,22 @@ func TestDeliverWithNoSkillsDoesNothing(t *testing.T) {
 		t.Error("nothing to deliver, nothing written")
 	}
 }
+
+func TestDeliverRefusesASiteExcludesFileOverride(t *testing.T) {
+	for _, scope := range []string{"--local", "--worktree"} {
+		t.Run(scope, func(t *testing.T) {
+			s := newSite(t, nil)
+			if scope == "--worktree" {
+				tgit(t, s.worktree, nil, "config", "extensions.worktreeConfig", "true")
+			}
+			tgit(t, s.worktree, nil, "config", scope, "core.excludesFile", filepath.Join(s.home, "site_excludes"))
+			_, err := s.deliver("claude", "tdd")
+			if err == nil || !strings.Contains(err.Error(), "core.excludesFile") {
+				t.Fatalf("err = %v, want one naming core.excludesFile", err)
+			}
+			if _, err := os.Stat(filepath.Join(s.worktree, ".agents")); err == nil {
+				t.Error("nothing may be written when hiding cannot work")
+			}
+		})
+	}
+}
