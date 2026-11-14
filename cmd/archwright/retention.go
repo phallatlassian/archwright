@@ -17,7 +17,7 @@ import (
 // outright when stdin is not one, so a script or agent cannot confirm for them.
 func confirmed(stdin io.Reader, stdout io.Writer, what, question string) (bool, error) {
 	if !isTerminal(stdin) {
-		return false, fmt.Errorf("%s needs a developer at a terminal to confirm; run this yourself, not from a script or agent", what)
+		return false, fmt.Errorf("%s: a developer must confirm at a terminal; run this yourself, not from a script or agent", what)
 	}
 	_, _ = fmt.Fprint(stdout, question+" [y/N] ")
 	var answer string
@@ -56,7 +56,7 @@ func jobPurgeOrDelete(verb string, args []string, stdin io.Reader, stdout io.Wri
 	}
 	id := args[0]
 	if !isTerminal(stdin) {
-		return fmt.Errorf("%sing a Job needs a developer at a terminal to confirm; run this yourself, not from a script or agent", verb)
+		return fmt.Errorf("%s Job: a developer must confirm at a terminal; run this yourself, not from a script or agent", verb)
 	}
 	c, err := connect()
 	if err != nil {
@@ -77,7 +77,7 @@ func jobPurgeOrDelete(verb string, args []string, stdin io.Reader, stdout io.Wri
 		}
 		q += "\nDelete?"
 	}
-	ok, err := confirmed(stdin, stdout, verb+"ing a Job", q)
+	ok, err := confirmed(stdin, stdout, verb+" Job", q)
 	if err != nil {
 		return err
 	}
@@ -105,13 +105,15 @@ func upgrade(dirs paths.Dirs, stdin io.Reader, stdout io.Writer, connect func() 
 	c, running := works.Running(dirs)
 	active := 0
 	if running {
-		var out struct{ Active int }
+		var out struct {
+			Active int `json:"active"`
+		}
 		if err := c.Do("GET", "/runs/active", nil, &out); err != nil {
 			return err
 		}
 		active = out.Active
 		if active > 0 {
-			ok, err := confirmed(stdin, stdout, "upgrading while runs are active",
+			ok, err := confirmed(stdin, stdout, "upgrade with active runs",
 				fmt.Sprintf("%d run(s) are active; restarting the Works stops them, and each is re-dispatched from its stored brief when the Works starts again.\nRestart anyway?", active))
 			if err != nil {
 				return fmt.Errorf("refusing to restart the Works: %d run(s) are active: %w", active, err)
@@ -135,7 +137,10 @@ func upgrade(dirs paths.Dirs, stdin io.Reader, stdout io.Writer, connect func() 
 	if err := c.Do("GET", "/health", nil, &h); err != nil {
 		return err
 	}
-	baks, _ := store.Backups(dirs.Database())
+	baks, err := store.Backups(dirs.Database())
+	if err != nil {
+		return err
+	}
 	return emit(map[string]any{
 		"restarted":            running,
 		"interrupted_runs":     active,

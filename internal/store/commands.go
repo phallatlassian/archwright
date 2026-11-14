@@ -265,12 +265,15 @@ func hasActiveRun(q queryer, jobID string) (bool, error) {
 
 // PurgeJob removes a Job's raw run content (the briefs as Wrights saw them)
 // at once and keeps its summary: Plan, pieces, handbacks, asks and events
-// (ADR 0017). A Job with Wrights still queued or running is refused.
+// (ADR 0017). A Job with a Wright, Review or gate run still active is refused.
 func (s *Store) PurgeJob(id string) error {
 	return s.purgeJob(id, "developer")
 }
 
-// purgeJob is PurgeJob recording who asked: the developer, or retention.
+// purgeJob is PurgeJob recording who asked: the developer, or retention. The
+// only raw run content the Works stores so far is the rendered brief; runner
+// events (messages, tool calls, vendor events) are not persisted yet, so there
+// is nothing more to clear (ADR 0017).
 func (s *Store) purgeJob(id, by string) error {
 	j, err := s.GetJob(id)
 	if err != nil {
