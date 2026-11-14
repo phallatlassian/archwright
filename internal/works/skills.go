@@ -27,7 +27,7 @@ func (r *Runs) UseSkills(s SkillsDelivery) {
 // deliverSkillsFor gives a dispatch's Wright its Guild's skills before the
 // run starts and returns the extra environment the runner needs. A failure,
 // including a collision with a skill the Site tracks, fails the dispatch.
-func (r *Runs) deliverSkillsFor(d store.Dispatch) (map[string]string, error) {
+func (r *Runs) deliverSkillsFor(d store.Dispatch, run string) (map[string]string, error) {
 	r.mu.Lock()
 	sd, reg := r.skills, r.defs
 	r.mu.Unlock()
@@ -42,7 +42,7 @@ func (r *Runs) deliverSkillsFor(d store.Dispatch) (map[string]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("delivering skills: %w", err)
 	}
-	return DeliverSkills(sd.Catalogue, g, sd.Runner, wt, sd.RunDir(d.RunID))
+	return DeliverSkills(sd.Catalogue, g, sd.Runner, wt, sd.RunDir(run))
 }
 
 // DeliverSkills gives a run its Guild's skills (ADR 0005, 0018): a per-run

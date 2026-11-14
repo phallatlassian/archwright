@@ -502,7 +502,7 @@ func (r *Runs) start(d store.Dispatch) error {
 	go func() {
 		defer r.wg.Done()
 		defer cancel()
-		extra, runErr := r.deliverSkillsFor(d)
+		extra, runErr := r.deliverSkillsFor(d, env.Run)
 		if runErr == nil {
 			runErr = runner.Run(ctx, RunRequest{Env: env, Job: d.JobID, Piece: d.Piece, DispatchID: d.ID, Brief: d.Rendered, ExtraEnv: extra})
 		}

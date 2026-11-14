@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/phallatlassian/archwright/internal/defs"
@@ -85,14 +86,21 @@ func TestDispatchDeliversSkillsAndFailsOnCollision(t *testing.T) {
 	reg := defs.New(defs.Shipped(), "")
 	reg.Reload()
 
+	var mu sync.Mutex
+	var runIDs []string
 	run := func(wt string) (*rig, store.Dispatch) {
 		g := newRig(t, nil)
 		g.r.UseDefinitions(reg)
 		g.r.UseSkills(SkillsDelivery{
 			Catalogue: skills.Vendored(),
 			Runner:    "claude",
-			RunDir:    func(id string) string { return filepath.Join(root, "runs", wt[len(root):], id) },
-			Worktree:  func(store.Dispatch) (string, error) { return wt, nil },
+			RunDir: func(id string) string {
+				mu.Lock()
+				runIDs = append(runIDs, id)
+				mu.Unlock()
+				return filepath.Join(root, "runs", id)
+			},
+			Worktree: func(store.Dispatch) (string, error) { return wt, nil },
 		})
 		g.ok(g.warden, "dispatch_wright", `{"piece":"p","brief":`+goodBrief+`}`, nil)
 		return g, g.waitReported("p")
@@ -117,6 +125,11 @@ func TestDispatchDeliversSkillsAndFailsOnCollision(t *testing.T) {
 	var res WrightResult
 	if err := json.Unmarshal(d.Result, &res); err != nil {
 		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(runIDs) != 2 || runIDs[0] == "" || runIDs[1] == "" || runIDs[0] == runIDs[1] {
+		t.Errorf("each dispatch needs its own run directory, got run ids %q", runIDs)
 	}
 	if res.Status != ResultFailed || !strings.Contains(res.Uncertainty, `skill "tdd" collides`) {
 		t.Errorf("the dispatch did not fail visibly with the collision: %s", d.Result)
