@@ -19,7 +19,7 @@ const (
 
 // cursorOf reads where a reader resumes: Last-Event-ID, as EventSource sends
 // on reconnect, else the after query parameter. Zero starts from the first event.
-func cursorOf(r *http.Request) (int64, error) {
+func cursorOf(st *store.Store, r *http.Request) (int64, error) {
 	// A reconnecting EventSource keeps its URL, so the id it last saw wins over the one it first asked for.
 	raw := r.Header.Get("Last-Event-ID")
 	if raw == "" {
@@ -27,6 +27,9 @@ func cursorOf(r *http.Request) (int64, error) {
 	}
 	if raw == "" {
 		return 0, nil
+	}
+	if raw == "latest" { // a dashboard that loads its state from the API streams only what comes after
+		return st.LastEventID()
 	}
 	n, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil || n < 0 {
@@ -39,7 +42,7 @@ func cursorOf(r *http.Request) (int64, error) {
 // that do not stream.
 func eventsPage(st *store.Store, reply func(http.ResponseWriter, int, any), fail func(http.ResponseWriter, error)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		after, err := cursorOf(r)
+		after, err := cursorOf(st, r)
 		if err != nil {
 			fail(w, err)
 			return
@@ -63,7 +66,7 @@ func eventsPage(st *store.Store, reply func(http.ResponseWriter, int, any), fail
 // reconnects with the last id it saw misses nothing and sees nothing twice.
 func eventsStream(st *store.Store, done <-chan struct{}, fail func(http.ResponseWriter, error)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		after, err := cursorOf(r)
+		after, err := cursorOf(st, r)
 		if err != nil {
 			fail(w, err)
 			return

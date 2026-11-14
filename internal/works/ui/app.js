@@ -1,0 +1,435 @@
+// The Archwright dashboard: plain JavaScript over the Works' API and event stream (ADR 0007).
+// The token arrives in the URL fragment, which a browser never sends to a server.
+'use strict';
+
+const $ = (id) => document.getElementById(id);
+
+// h builds an element; children are text or nodes, so nothing from the API is ever parsed as HTML.
+function h(tag, attrs, ...kids) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
+    else if (k === 'class') el.className = v;
+    else if (v === true) el.setAttribute(k, '');
+    else if (v !== false && v != null) el.setAttribute(k, v);
+  }
+  for (const kid of kids.flat()) if (kid != null && kid !== false) el.append(kid.nodeType ? kid : String(kid));
+  return el;
+}
+
+// ---- token and API ----------------------------------------------------------------
+if (location.hash.startsWith('#token=')) {
+  sessionStorage.setItem('aw-token', decodeURIComponent(location.hash.slice(7)));
+  history.replaceState(null, '', location.pathname);
+}
+const token = sessionStorage.getItem('aw-token') || '';
+
+async function api(method, path, body) {
+  const res = await fetch(path, {
+    method,
+    headers: { Authorization: 'Bearer ' + token, ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}) },
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+  const text = await res.text();
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+  if (!res.ok) throw new Error((data && data.error) || text || res.statusText);
+  return data;
+}
+const get = (p) => api('GET', p);
+
+function toast(msg, err) {
+  const t = $('toast');
+  t.textContent = msg;
+  t.className = err ? 'err' : '';
+  t.style.display = 'block';
+  clearTimeout(toast.t);
+  toast.t = setTimeout(() => { t.style.display = 'none'; }, err ? 6000 : 2500);
+}
+
+// act runs a command through the API, then reports and refreshes.
+async function act(label, method, path, body, then) {
+  try {
+    await api(method, path, body);
+    toast(label + ': done');
+    if (document.activeElement) document.activeElement.blur(); // let the refresh replace the form that was just used
+    if (then) then();
+    else refresh();
+  } catch (e) {
+    toast(label + ': ' + e.message, true);
+  }
+}
+
+// ---- formatting -------------------------------------------------------------------
+const money = (n) => '$' + (n || 0).toFixed(4);
+const tokens = (n) => (n || 0).toLocaleString();
+const ago = (iso) => {
+  if (!iso) return '';
+  const s = Math.max(0, (Date.now() - new Date(iso)) / 1000);
+  if (s < 90) return Math.round(s) + 's ago';
+  if (s < 5400) return Math.round(s / 60) + 'm ago';
+  if (s < 129600) return Math.round(s / 3600) + 'h ago';
+  return Math.round(s / 86400) + 'd ago';
+};
+const tag = (s) => h('span', { class: 'tag ' + s }, s);
+const jobLink = (id, text) => h('a', { href: '#/job/' + id }, text || id);
+
+const STATES = ['needs-you', 'parked', 'running', 'in-progress', 'paused', 'planning', 'accepted', 'discarded'];
+
+// ---- views ------------------------------------------------------------------------
+// Each view fetches what it shows and returns a node; refresh() re-renders the current one.
+const views = {
+  async board() {
+    const jobs = await get('/board');
+    const sites = [...new Set(jobs.map((j) => j.site || '(no site)'))].sort();
+    const want = sessionStorage.getItem('aw-site') || '';
+    const shown = jobs.filter((j) => !want || (j.site || '(no site)') === want);
+    const sel = h('select', { onchange: (e) => { sessionStorage.setItem('aw-site', e.target.value); refresh(); } },
+      h('option', { value: '' }, 'All Sites'),
+      sites.map((s) => h('option', { value: s, selected: s === want }, s)));
+    const cols = STATES.map((st) => {
+      const mine = shown.filter((j) => j.state === st).sort((a, b) => b.created_at.localeCompare(a.created_at));
+      return h('div', { class: 'col' },
+        h('h2', {}, h('span', {}, st), h('span', { class: 'muted' }, mine.length)),
+        mine.map((j) => h('a', { class: 'card', href: '#/job/' + j.id },
+          h('div', { class: 't' }, j.title),
+          h('div', { class: 'm' }, [j.site || 'no site', j.id].join(' · ')),
+          h('div', { class: 'm' },
+            j.steps ? j.steps + ' steps · ' : '',
+            j.live_runs ? j.live_runs + ' running · ' : '',
+            j.open_asks ? j.open_asks + ' ask(s) · ' : '',
+            money(j.cost_usd)))));
+    });
+    return h('div', {}, h('h1', {}, 'Jobs'), h('div', { class: 'row' }, sel), h('div', { class: 'board' }, cols));
+  },
+
+  async needsYou() {
+    const [board, items, asks] = await Promise.all([get('/board'), get('/needs-you'), get('/asks?status=open')]);
+    const byId = Object.fromEntries(board.map((j) => [j.id, j]));
+    const title = (id) => (byId[id] ? byId[id].title : id);
+    const out = [];
+
+    for (const j of board.filter((j) => j.plan_approval === 'pending' && !j.outcome)) {
+      const plan = await get('/jobs/' + j.id + '/plan');
+      out.push(h('div', { class: 'panel attn' },
+        h('h3', {}, 'Plan approval · ', jobLink(j.id, title(j.id))),
+        planGraph(plan.steps, []),
+        h('div', { class: 'row' },
+          h('button', { class: 'primary', onclick: () => act('Approve Plan', 'POST', `/jobs/${j.id}/plan/approve`, { updated_at: plan.updated_at }) }, 'Approve'),
+          h('button', { class: 'danger', onclick: () => act('Reject Plan', 'POST', `/jobs/${j.id}/plan/reject`, {}) }, 'Reject'))));
+    }
+
+    for (const a of asks.filter((a) => a.holder === 'archwright')) out.push(askPanel(a, title(a.job_id)));
+
+    for (const j of board.filter((j) => j.state === 'parked')) {
+      out.push(h('div', { class: 'panel attn' },
+        h('h3', {}, 'Parked · ', jobLink(j.id, title(j.id))),
+        h('p', {}, j.parked_for),
+        instructBox(j.id, 'Tell the Archwright what to do'),
+        h('div', { class: 'row' }, h('button', { class: 'danger', onclick: () => confirm('Cancel and discard this Job?') && act('Cancel Job', 'POST', `/jobs/${j.id}/cancel`, {}) }, 'Cancel Job'))));
+    }
+
+    for (const it of items.filter((it) => it.kind !== 'ask')) { // asks have their own panels above
+      out.push(h('div', { class: 'panel attn' },
+        h('h3', {}, tag(it.kind), ' ', it.job_id ? jobLink(it.job_id, title(it.job_id)) : '', ' ', h('span', { class: 'muted' }, ago(it.created_at))),
+        h('p', {}, it.summary),
+        it.detail && Object.keys(it.detail).length ? h('pre', {}, JSON.stringify(it.detail, null, 2)) : null,
+        it.job_id ? instructBox(it.job_id, 'Tell the Archwright what to do about it') : null));
+    }
+    return h('div', {}, h('h1', {}, 'Needs you'), out.length ? out : h('p', { class: 'muted' }, 'Nothing is waiting on you.'));
+  },
+
+  async job(id) {
+    const [full, ds, reviews, runs, wts] = await Promise.all([
+      get('/jobs/' + id), get(`/jobs/${id}/dispatches`), get(`/jobs/${id}/reviews`), get(`/jobs/${id}/runs`), get(`/jobs/${id}/worktrees`).catch(() => []),
+    ]);
+    const board = (await get('/board')).find((j) => j.id === id);
+    const state = board ? board.state : '';
+    const closed = !!full.outcome;
+    const live = ds.filter((d) => d.status === 'queued' || d.status === 'running');
+    const guilds = [...new Set([...(full.plan ? full.plan.steps.map((s) => s.guild) : []), ...ds.map((d) => d.guild)])];
+    const stepState = {};
+    for (const s of full.plan ? full.plan.steps : []) {
+      const mine = ds.filter((d) => d.guild === s.guild);
+      // The Works does not link a step to its pieces, so only a live Wright of the step's Guild is shown.
+      stepState[s.id] = mine.some((d) => live.includes(d)) ? 'running' : '';
+    }
+    const cost = runs.reduce((a, r) => a + r.cost_usd, 0);
+    const controls = closed ? [] : [
+      full.paused_at
+        ? h('button', { onclick: () => act('Resume', 'POST', `/jobs/${id}/resume`, {}) }, 'Resume')
+        : h('button', { onclick: () => act('Pause', 'POST', `/jobs/${id}/pause`, {}) }, 'Pause'),
+      h('button', { class: 'danger', onclick: () => confirm('Cancel and discard this Job?') && act('Cancel Job', 'POST', `/jobs/${id}/cancel`, {}) }, 'Cancel'),
+    ];
+
+    const parts = [
+      h('h1', {}, full.title, ' ', tag(state)),
+      h('p', { class: 'muted' }, [full.site || 'no site', id, 'created ' + ago(full.created_at), full.writ ? 'writ ' + full.writ : '', money(cost)].filter(Boolean).join(' · ')),
+      full.description ? h('p', {}, full.description) : null,
+      h('div', { class: 'row' }, controls),
+    ];
+    if (full.parked_for) parts.push(h('div', { class: 'panel attn' }, h('strong', {}, 'Parked: '), full.parked_for));
+
+    if (full.plan) {
+      const p = full.plan;
+      parts.push(h('h2', {}, 'Plan ', tag(p.approval), p.jig ? h('span', { class: 'muted' }, ' from Jig ' + p.jig) : ' (ad hoc)'));
+      parts.push(planGraph(p.steps, stepState));
+      if (p.approval === 'pending') {
+        parts.push(h('div', { class: 'row' },
+          h('button', { class: 'primary', onclick: () => act('Approve Plan', 'POST', `/jobs/${id}/plan/approve`, { updated_at: p.updated_at }) }, 'Approve Plan'),
+          h('button', { class: 'danger', onclick: () => act('Reject Plan', 'POST', `/jobs/${id}/plan/reject`, {}) }, 'Reject Plan')));
+      }
+    } else parts.push(h('h2', {}, 'Plan'), h('p', { class: 'muted' }, 'No Plan yet.'));
+
+    if (full.asks.length) parts.push(h('h2', {}, 'Open asks'), full.asks.map((a) => askPanel(a, full.title)));
+
+    parts.push(h('h2', {}, 'Wardens'));
+    parts.push(guilds.length ? table(['Guild (Warden)', 'Pieces', 'Live', 'Cost'], guilds.map((g) => {
+      const mine = ds.filter((d) => d.guild === g);
+      const rs = runs.filter((r) => r.guild === g);
+      return [g, [...new Set(mine.map((d) => d.piece))].length, mine.filter((d) => live.includes(d)).length, money(rs.reduce((a, r) => a + r.cost_usd, 0))];
+    })) : h('p', { class: 'muted' }, 'No Warden has dispatched work.'));
+
+    parts.push(h('h2', {}, 'Tasks and Wright runs'));
+    parts.push(ds.length ? table(['Piece', 'Guild', 'Round', 'Status', 'Run', 'Runner', 'Tokens in/out', 'Cost'], ds.map((d) => {
+      const r = runs.find((x) => x.dispatch_id === d.id);
+      return [d.piece, d.guild, d.round, tag(d.status),
+        r ? h('a', { href: '#/run/' + r.run_id + '/' + id }, r.status) : (d.run_id ? 'run' : ''),
+        r ? r.runner : '', r ? tokens(r.input_tokens) + ' / ' + tokens(r.output_tokens) : '', r ? money(r.cost_usd) : ''];
+    })) : h('p', { class: 'muted' }, 'No Wrights dispatched.'));
+
+    if (reviews.reviews && reviews.reviews.length) {
+      parts.push(h('h2', {}, 'Reviews'));
+      for (const r of reviews.reviews) {
+        parts.push(h('div', { class: 'panel' }, h('strong', {}, '#' + r.seq + ' '), tag(r.status), r.overall ? tag(r.overall) : null,
+          ['standards', 'spec'].filter((k) => r[k]).map((k) => h('div', {}, h('strong', {}, k + ': '), r[k].verdict, r[k].reason ? ' — ' + r[k].reason : '',
+            (r[k].findings || []).map((f) => h('div', { class: 'mono muted' }, `${f.file}:${f.line} [${f.severity}] ${f.reason}`))))));
+      }
+    }
+    if (wts && wts.length) {
+      parts.push(h('h2', {}, 'Worktrees'), table(['Kind', 'Branch', 'Path'], wts.map((w) => [w.kind, w.branch, h('span', { class: 'mono' }, w.path)])));
+    }
+    if (!closed) parts.push(h('h2', {}, 'Instruct the Archwright'), instructBox(id, 'A free-text instruction'));
+    return h('div', {}, parts);
+  },
+
+  async run(id) {
+    const evs = await get(`/runs/${id}/events`);
+    const jobId = location.hash.split('/')[3] || '';
+    const out = [h('h1', {}, 'Run ', h('span', { class: 'mono' }, id)), jobId ? h('p', {}, jobLink(jobId, '← Job')) : null,
+      h('p', { class: 'muted' }, 'Read-only timeline. Raw vendor events load on demand.')];
+    if (!evs.length) out.push(h('p', { class: 'muted' }, 'No events recorded.'));
+    for (const e of evs) {
+      const raw = h('div', {});
+      out.push(h('div', { class: 'panel' },
+        h('span', { class: 'muted mono' }, '#' + e.seq + ' '), tag(e.kind), ' ', e.summary,
+        e.has_raw
+          ? h('div', { class: 'row' }, h('button', { onclick: async (ev) => {
+            ev.target.disabled = true;
+            try { raw.replaceChildren(h('pre', {}, JSON.stringify(await get(`/runs/${id}/events/${e.seq}/raw`), null, 2))); } catch (er) { toast(er.message, true); }
+          } }, 'Show raw event'), raw)
+          : h('div', { class: 'muted' }, 'raw content pruned')));
+    }
+    return h('div', {}, out);
+  },
+
+  async usage() {
+    const [use, board] = await Promise.all([get('/usage'), get('/board')]);
+    const title = Object.fromEntries(board.map((j) => [j.id, j.title]));
+    const sum = (rows, k) => rows.reduce((a, r) => a + r[k], 0);
+    const group = (key) => {
+      const m = new Map();
+      for (const r of use) {
+        const g = m.get(r[key]) || { runs: 0, input_tokens: 0, output_tokens: 0, cost_usd: 0 };
+        for (const k of Object.keys(g)) g[k] += r[k];
+        m.set(r[key], g);
+      }
+      return [...m].map(([k, g]) => [k || '(unknown)', g.runs, tokens(g.input_tokens), tokens(g.output_tokens), money(g.cost_usd)]);
+    };
+    const head = (first) => [first, 'Runs', 'Tokens in', 'Tokens out', 'Cost'];
+    const perJob = group('job_id').map((r, i) => { r[0] = h('a', { href: '#/job/' + r[0] }, title[r[0]] || r[0]); return r; });
+    return h('div', {}, h('h1', {}, 'Usage and cost'),
+      h('p', { class: 'muted' }, `Total ${money(sum(use, 'cost_usd'))} over ${sum(use, 'runs')} runs. A runner that reports no cost (codex) counts $0.`),
+      h('h2', {}, 'Per Job'), table(head('Job'), perJob),
+      h('h2', {}, 'Per Guild'), table(head('Guild'), group('guild')),
+      h('h2', {}, 'Per runner'), table(head('Runner'), group('runner')));
+  },
+
+  async catalogue() {
+    const [sites, cat, queue] = await Promise.all([get('/sites'), get('/catalogue'), get('/queue')]);
+    const out = [h('h1', {}, 'Catalogue'), h('h2', {}, 'Sites'),
+      sites.length ? table(['Name', 'URL', 'Base', 'Cap', 'Typecheck', 'Lint', 'Test'], sites.map((s) => [s.name, s.url, s.base_branch, s.concurrency_cap,
+        ...['typecheck', 'lint', 'test'].map((k) => h('code', {}, s.gates[k] || '—'))])) : h('p', { class: 'muted' }, 'No Sites registered.'),
+      h('h2', {}, 'Guilds'),
+      table(['Name', 'Access', 'Runners', 'Intake', 'Handback', 'Source'], cat.guilds.map((g) => [g.name, g.access, (g.runners || []).join(', ') || 'any', g.intake, g.handback, h('span', { class: 'mono' }, g.source)])),
+      h('h2', {}, 'Jigs'),
+      cat.jigs.map((j) => h('div', { class: 'panel' }, h('strong', {}, j.name), ' ', h('span', { class: 'muted' }, j.description),
+        j.parameters && j.parameters.length ? h('div', { class: 'muted' }, 'Parameters: ' + j.parameters.map((p) => p.name + (p.required ? '*' : '')).join(', ')) : null,
+        planGraph(j.steps.map((s) => ({ id: s.id, guild: s.guild, title: s.task, blocked_by: s.blocked_by, checkpoint: s.checkpoint })), {}))),
+    ];
+    if (cat.errors && cat.errors.length) out.push(h('h2', {}, 'Definitions that failed to load'), cat.errors.map((e) => h('div', { class: 'panel attn' }, `${e.kind} ${e.name}: ${e.error}`)));
+    out.push(h('h2', {}, 'Runner'),
+      h('p', {}, `Running ${queue.running.length}, queued ${queue.queued.length}; caps: total ${queue.limits.total}, per Site ${queue.limits.per_site}, per Warden ${queue.limits.per_warden}.`,
+        queue.paused ? h('span', { class: 'warn' }, ` Paused after rate limits until ${queue.paused.until}.`) : ''),
+      table(['Dispatch', 'Job', 'Piece', 'Guild', 'Waiting'], [...queue.running, ...queue.queued].map((q) => [q.dispatch_id, jobLink(q.job), q.piece, q.guild, q.waiting || 'running'])));
+    return h('div', {}, out);
+  },
+};
+
+// ---- shared pieces ----------------------------------------------------------------
+function table(head, rows) {
+  return h('table', {}, h('thead', {}, h('tr', {}, head.map((c) => h('th', {}, c)))),
+    h('tbody', {}, rows.map((r) => h('tr', {}, r.map((c) => h('td', {}, c))))));
+}
+
+// planGraph lays steps out in columns by depth: a step sits one column right of its deepest blocker.
+function planGraph(steps, state) {
+  const by = Object.fromEntries(steps.map((s) => [s.id, s]));
+  const depth = {};
+  const of = (s, seen = new Set()) => {
+    if (depth[s.id] != null) return depth[s.id];
+    if (seen.has(s.id)) return 0;
+    seen.add(s.id);
+    return (depth[s.id] = Math.max(-1, ...(s.blocked_by || []).filter((b) => by[b]).map((b) => of(by[b], seen))) + 1);
+  };
+  steps.forEach((s) => of(s));
+  const layers = [];
+  steps.forEach((s) => (layers[depth[s.id]] = layers[depth[s.id]] || []).push(s));
+  return h('div', { class: 'graph' }, layers.filter(Boolean).map((l) => h('div', { class: 'layer' }, l.map((s) => {
+    const st = (state && state[s.id]) || '';
+    return h('div', { class: 'step ' + st + (s.checkpoint ? ' cp' : '') },
+      h('strong', {}, s.id), ' ', st ? tag(st) : null, s.checkpoint ? h('span', { class: 'tag' }, 'checkpoint') : null,
+      h('div', {}, s.title), h('div', { class: 'muted' }, s.guild),
+      s.blocked_by && s.blocked_by.length ? h('div', { class: 'muted' }, '← ' + s.blocked_by.join(', ')) : null);
+  }))));
+}
+
+function instructBox(jobId, placeholder) {
+  const box = h('input', { type: 'text', placeholder });
+  return h('div', { class: 'row' }, box,
+    h('button', { onclick: () => {
+      if (!box.value.trim()) return;
+      act('Instruction sent to the Archwright', 'POST', `/jobs/${jobId}/instruct`, { text: box.value }, () => { box.value = ''; });
+    } }, 'Send'));
+}
+
+// askPanel answers an ask through the same API path the Archwright's tools use; the first answer wins.
+function askPanel(a, jobTitle) {
+  const inputs = {};
+  const qs = a.questions.map((q) => {
+    let field;
+    if (q.options && q.options.length) {
+      const multi = q.multiple;
+      const name = a.id + q.id;
+      field = h('div', {}, q.options.map((o) => h('label', {},
+        h('input', { type: multi ? 'checkbox' : 'radio', name, value: o, checked: o === q.default }), ' ', o, o === q.default ? h('span', { class: 'muted' }, ' (recommended)') : '')));
+      inputs[q.id] = () => [...field.querySelectorAll('input:checked')].map((i) => i.value);
+    } else {
+      field = h('input', { type: 'text', value: q.default || '' });
+      inputs[q.id] = () => (field.value.trim() ? [field.value.trim()] : []);
+    }
+    return h('div', { class: 'q' }, h('div', {}, h('strong', {}, q.text)), field);
+  });
+  const answers = () => a.questions.map((q) => {
+    const values = inputs[q.id]();
+    return values.length ? { question_id: q.id, values } : { question_id: q.id, skipped: true };
+  });
+  return h('div', { class: 'panel attn' },
+    h('h3', {}, 'Ask · ', tag(a.kind), a.blocking ? tag('blocking') : null, ' ', jobLink(a.job_id, jobTitle), ' ', h('span', { class: 'muted' }, `${a.asker}${a.guild ? ' (' + a.guild + ')' : ''} ${ago(a.created_at)}`)),
+    a.why ? h('p', { class: 'muted' }, a.why) : null, qs,
+    h('div', { class: 'row' },
+      h('button', { class: 'primary', onclick: () => act('Answer', 'POST', `/asks/${a.id}/answer`, { answers: answers() }) }, 'Answer'),
+      h('button', { onclick: () => act('Accept defaults', 'POST', `/asks/${a.id}/accept-default`, {}) }, 'Accept recommended'),
+      h('button', { onclick: () => act('Skip', 'POST', `/asks/${a.id}/skip`, {}) }, 'Skip'),
+      h('button', { class: 'danger', onclick: () => confirm('Cancel this ask and its Job?') && act('Cancel', 'POST', `/asks/${a.id}/cancel`, {}) }, 'Cancel Job')));
+}
+
+// ---- routing, rendering and live updates -------------------------------------------
+const NAV = [['#/board', 'Jobs'], ['#/needs-you', 'Needs you'], ['#/usage', 'Usage'], ['#/catalogue', 'Catalogue']];
+
+function route() {
+  const [, name, arg] = location.hash.split('/');
+  switch (name) {
+    case 'needs-you': return ['needsYou'];
+    case 'job': return ['job', arg];
+    case 'run': return ['run', arg];
+    case 'usage': return ['usage'];
+    case 'catalogue': return ['catalogue'];
+    default: return ['board'];
+  }
+}
+
+let rendering = false;
+let again = false;
+async function refresh() {
+  if (rendering) { again = true; return; }
+  rendering = true;
+  const [name, arg] = route();
+  try {
+    if (!token) throw new Error('No token. Open the dashboard with the URL printed by `archwright dashboard`.');
+    // A form being filled must not be lost to a live refresh: skip while a field in the view has focus.
+    const el = document.activeElement;
+    const editing = el && ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName) && $('main').contains(el) && el.type !== 'button' && !(el.tagName === 'SELECT' && !el.closest('.panel'));
+    if (!editing) {
+      const node = await views[name](arg);
+      if (node.innerHTML !== $('main').firstElementChild?.innerHTML || $('main').childElementCount !== 1) $('main').replaceChildren(node);
+    }
+  } catch (e) {
+    $('main').replaceChildren(h('p', { class: 'bad' }, e.message));
+  }
+  rendering = false;
+  if (again) { again = false; refresh(); }
+  renderNav();
+}
+
+let badge = 0;
+async function renderNav() {
+  try { if (token) { const [items, board] = await Promise.all([get('/needs-you'), get('/board')]); badge = items.filter((it) => it.kind !== 'ask').length + board.filter((j) => j.state === 'needs-you' || j.state === 'parked').length; } } catch { /* shown by the view */ }
+  const cur = '#/' + (location.hash.split('/')[1] || 'board');
+  const nav = h('nav', {}, ...NAV.map(([href, label]) => h('a', { href, class: href === cur ? 'on' : '' }, label,
+    href === '#/needs-you' && badge ? h('span', { class: 'badge' }, badge) : null)));
+  if (nav.innerHTML !== $('nav').innerHTML) $('nav').replaceChildren(...nav.childNodes);
+}
+
+let timer;
+function schedule() { clearTimeout(timer); timer = setTimeout(refresh, 250); }
+
+// connect follows the event stream with fetch, so the token travels in a header and every
+// event type, named or not, triggers a refresh. It resumes from the last id it saw.
+async function connect() {
+  if (!token) return;
+  let last = 'latest';
+  for (;;) {
+    try {
+      const res = await fetch('/events/stream?after=' + last, { headers: { Authorization: 'Bearer ' + token } });
+      if (!res.ok || !res.body) throw new Error('stream ' + res.status);
+      $('live').className = 'live on';
+      $('live').textContent = '● live';
+      schedule();
+      const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
+      let buf = '';
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += value;
+        let i;
+        while ((i = buf.indexOf('\n\n')) >= 0) {
+          const frame = buf.slice(0, i);
+          buf = buf.slice(i + 2);
+          const id = /^id: (\d+)$/m.exec(frame);
+          if (id) { last = id[1]; schedule(); }
+        }
+      }
+    } catch { /* reconnect below */ }
+    $('live').className = 'live off';
+    $('live').textContent = '● reconnecting';
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+}
+
+window.addEventListener('hashchange', refresh);
+connect();
+renderNav();
+refresh();
+// A safety net for event types not listed above, and for relative times.
+setInterval(refresh, 5000);

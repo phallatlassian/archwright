@@ -57,6 +57,29 @@ type RunRequest struct {
 	DispatchID string
 	Brief      string            // the rendered brief, Guild standards included
 	ExtraEnv   map[string]string // further variables for the runner process, such as GIT_CONFIG_GLOBAL for delivered skills
+	Trace      Trace             // where a runner reports its timeline and usage for the dashboard
+}
+
+// Trace is how a run shows itself on the dashboard (ADR 0007): timeline
+// entries, each with the vendor event behind it kept as raw run content
+// (ADR 0017), and what the run consumed. A nil Trace, or either func nil, is a no-op.
+type Trace struct {
+	Event func(kind, summary string, raw json.RawMessage)
+	Usage func(runner string, inputTokens, outputTokens int, costUSD float64)
+}
+
+// Emit adds a timeline entry.
+func (t Trace) Emit(kind, summary string, raw json.RawMessage) {
+	if t.Event != nil {
+		t.Event(kind, summary, raw)
+	}
+}
+
+// Consumed reports what the run used and which runner ran it.
+func (t Trace) Consumed(runner string, inputTokens, outputTokens int, costUSD float64) {
+	if t.Usage != nil {
+		t.Usage(runner, inputTokens, outputTokens, costUSD)
+	}
 }
 
 // Runner carries out one Wright run (ADR 0003). Real adapters spawn a vendor
@@ -491,6 +514,21 @@ func (r *Runs) start(d store.Dispatch) error {
 		r.wg.Done()
 		return err
 	}
+	if err := r.st.StartRunRecord(env.Run, d.JobID, d.ID, d.Guild, ""); err != nil {
+		log.Printf("run %s: recording it for the dashboard: %v", env.Run, err)
+	}
+	trace := Trace{
+		Event: func(kind, summary string, raw json.RawMessage) {
+			if _, err := r.st.AddRunEvent(env.Run, kind, summary, raw); err != nil {
+				log.Printf("run %s: recording an event: %v", env.Run, err)
+			}
+		},
+		Usage: func(runner string, in, out int, cost float64) {
+			if err := r.st.SetRunUsage(env.Run, runner, in, out, cost); err != nil {
+				log.Printf("run %s: recording usage: %v", env.Run, err)
+			}
+		},
+	}
 	// Each run has its own context so the developer can cancel one Wright.
 	ctx, cancel := context.WithCancel(r.bg)
 	r.mu.Lock()
@@ -504,7 +542,7 @@ func (r *Runs) start(d store.Dispatch) error {
 		defer cancel()
 		extra, runErr := r.deliverSkillsFor(d, env.Run)
 		if runErr == nil {
-			runErr = runner.Run(ctx, RunRequest{Env: env, Job: d.JobID, Piece: d.Piece, DispatchID: d.ID, Brief: d.Rendered, ExtraEnv: extra})
+			runErr = runner.Run(ctx, RunRequest{Env: env, Job: d.JobID, Piece: d.Piece, DispatchID: d.ID, Brief: d.Rendered, ExtraEnv: extra, Trace: trace})
 		}
 		unreported := false
 		if cur, err := r.st.GetDispatch(d.ID); err == nil && cur.Status == store.DispatchRunning {
@@ -516,6 +554,16 @@ func (r *Runs) start(d store.Dispatch) error {
 		delete(r.cancels, d.ID)
 		delete(r.cancelled, d.ID)
 		r.mu.Unlock()
+		ended := "done"
+		switch {
+		case wasCancelled && unreported:
+			ended = "cancelled"
+		case unreported || runErr != nil:
+			ended = "failed"
+		}
+		if err := r.st.EndRunRecord(env.Run, ended); err != nil {
+			log.Printf("run %s: recording its end: %v", env.Run, err)
+		}
 		if wasCancelled && unreported {
 			r.failDispatch(d.ID, cancelledByDeveloper)
 			r.sched.finished(d.ID, false)

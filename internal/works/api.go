@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -204,6 +205,57 @@ func newHandler(st *store.Store, runs *Runs, sm *sites.Manager, token string, pi
 			return
 		}
 		reply(w, 200, jobs)
+	})
+	// What the dashboard's views read beyond the Job itself (ADR 0007).
+	mux.HandleFunc("GET /board", func(w http.ResponseWriter, r *http.Request) {
+		b, err := Board(st)
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		reply(w, 200, b)
+	})
+	mux.HandleFunc("GET /usage", func(w http.ResponseWriter, r *http.Request) {
+		u, err := st.Usage()
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		reply(w, 200, u)
+	})
+	mux.HandleFunc("GET /jobs/{id}/runs", func(w http.ResponseWriter, r *http.Request) {
+		if _, err := st.GetJob(r.PathValue("id")); err != nil {
+			fail(w, err)
+			return
+		}
+		recs, err := st.RunRecords(r.PathValue("id"))
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		reply(w, 200, recs)
+	})
+	// A run's timeline is read-only; the raw vendor event behind an entry comes only when asked for.
+	mux.HandleFunc("GET /runs/{id}/events", func(w http.ResponseWriter, r *http.Request) {
+		evs, err := st.RunEvents(r.PathValue("id"))
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		reply(w, 200, evs)
+	})
+	mux.HandleFunc("GET /runs/{id}/events/{seq}/raw", func(w http.ResponseWriter, r *http.Request) {
+		seq, err := strconv.Atoi(r.PathValue("seq"))
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		raw, err := st.RunEventRaw(r.PathValue("id"), seq)
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		reply(w, 200, raw)
 	})
 	mux.HandleFunc("GET /jobs/{id}", func(w http.ResponseWriter, r *http.Request) {
 		out, err := jobWithPlan(st, r.PathValue("id"))
@@ -620,7 +672,7 @@ func newHandler(st *store.Store, runs *Runs, sm *sites.Manager, token string, pi
 		reply(w, 200, map[string]bool{"ok": true})
 	})
 
-	return guard(token, mux)
+	return withUI(guard(token, mux))
 }
 
 // maxBody caps a request body; commands are small.

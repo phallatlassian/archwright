@@ -84,6 +84,8 @@ const usage = `usage: archwright [command]
                                            (exit 75 if the Works does not answer within D, default 60s)
   doctor                                   check everything a run depends on, read-only; prints the exact fix for
                                            anything wrong (exit 1 if a check fails; runs refuse to start until none does)
+  dashboard                                print the dashboard's URL (the token rides in the fragment, which browsers
+                                           never send); open it in a browser. The Works starts on demand
   works status                             report whether the Works is running
   stop                                     stop the Works
 
@@ -161,6 +163,12 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 	}
 
 	switch args[0] {
+	case "dashboard":
+		c, err := connect()
+		if err != nil {
+			return err
+		}
+		return emit(map[string]string{"url": fmt.Sprintf("http://127.0.0.1:%d/#token=%s", c.Info.Port, url.QueryEscape(c.Info.Token))})
 	case "prune":
 		return prune(args[1:], connect, emit)
 	case "upgrade":

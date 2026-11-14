@@ -298,6 +298,9 @@ func (s *Store) purgeJob(id, by string) error {
 		return err
 	}
 	n, _ := res.RowsAffected()
+	if _, err := tx.Exec("UPDATE run_events SET raw = '' WHERE run_id IN (SELECT run_id FROM run_records WHERE job_id = ?)", id); err != nil {
+		return err
+	}
 	if _, err := tx.Exec("UPDATE jobs SET purged_at = ? WHERE id = ?", at, id); err != nil {
 		return err
 	}
@@ -335,7 +338,10 @@ func (s *Store) DeleteJob(id string) error {
 	if _, err := tx.Exec("INSERT INTO event_deletions (job_id) VALUES (?)", id); err != nil {
 		return err
 	}
-	for _, table := range []string{"gate_runs", "flags", "reviews", "handbacks", "asks", "dispatches", "pieces", "plans", "needs_you", "worktrees", "events"} {
+	if _, err := tx.Exec("DELETE FROM run_events WHERE run_id IN (SELECT run_id FROM run_records WHERE job_id = ?)", id); err != nil {
+		return fmt.Errorf("deleting run_events: %w", err)
+	}
+	for _, table := range []string{"run_records", "gate_runs", "flags", "reviews", "handbacks", "asks", "dispatches", "pieces", "plans", "needs_you", "worktrees", "events"} {
 		if _, err := tx.Exec("DELETE FROM "+table+" WHERE job_id = ?", id); err != nil {
 			return fmt.Errorf("deleting %s: %w", table, err)
 		}
