@@ -49,10 +49,65 @@ func sessionStart(call Call, out io.Writer) error {
 		return emitContext(out, "SessionStart", b.String())
 	}
 	fmt.Fprintf(&b, "Jobs in the store (from list_jobs): %s\n", jobs)
+	b.WriteString(catalogueContext(call))
 	if text, err := inbox(call); err == nil && text != "" {
 		b.WriteString(text)
 	}
 	return emitContext(out, "SessionStart", b.String())
+}
+
+// catalogueContext is the trimmed roster: each Guild's name, intake, handback
+// and access, and each Jig's name, description and parameters, never the
+// charters or the Jig step lists. When the Works cannot supply it, it says how
+// to ask.
+func catalogueContext(call Call) string {
+	raw, err := call("show_catalogue", nil)
+	var cat struct {
+		Guilds []struct{ Name, Intake, Handback, Access string }
+		Jigs   []struct {
+			Name, Description string
+			Parameters        []struct {
+				Name     string
+				Required bool
+				Default  string
+			}
+		}
+		Errors []struct{ Kind, Name, Error string }
+	}
+	if err == nil {
+		err = json.Unmarshal(raw, &cat)
+	}
+	if err != nil {
+		return fmt.Sprintf("The catalogue is not available (%v): run `archwright tool show_catalogue` before you write a Plan.\n", err)
+	}
+	one := func(s string) string { return strings.Join(strings.Fields(s), " ") }
+	var b strings.Builder
+	b.WriteString("Guilds loaded (from show_catalogue); a Plan step's guild must be one of these names, never another:\n")
+	for _, g := range cat.Guilds {
+		fmt.Fprintf(&b, "- %s (%s). Intake: %s Handback: %s\n", g.Name, g.Access, one(g.Intake), one(g.Handback))
+	}
+	b.WriteString("Jigs loaded (prebuilt Plans; when one fits, start it with `archwright tool start_jig` {\"job\", \"jig\", \"params\"} rather than hand-building a Plan):\n")
+	for _, j := range cat.Jigs {
+		var params []string
+		for _, p := range j.Parameters {
+			switch {
+			case p.Required:
+				params = append(params, p.Name+" (required)")
+			case p.Default != "":
+				params = append(params, p.Name+" (default "+p.Default+")")
+			default:
+				params = append(params, p.Name)
+			}
+		}
+		if len(params) == 0 {
+			params = []string{"none"}
+		}
+		fmt.Fprintf(&b, "- %s: %s Parameters: %s\n", j.Name, one(j.Description), strings.Join(params, ", "))
+	}
+	for _, e := range cat.Errors {
+		fmt.Fprintf(&b, "Definition not loaded: %s %s: %s\n", e.Kind, e.Name, e.Error)
+	}
+	return b.String()
 }
 
 // inbox reads the unread items, each delivered once, and renders them; "" if none.
