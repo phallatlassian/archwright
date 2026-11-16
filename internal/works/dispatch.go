@@ -533,18 +533,7 @@ func (r *Runs) start(d store.Dispatch) error {
 	if err := r.st.StartRunRecord(env.Run, d.JobID, d.ID, d.Guild, ""); err != nil {
 		log.Printf("run %s: recording it for the dashboard: %v", env.Run, err)
 	}
-	trace := Trace{
-		Event: func(kind, summary string, raw json.RawMessage) {
-			if _, err := r.st.AddRunEvent(env.Run, kind, summary, raw); err != nil {
-				log.Printf("run %s: recording an event: %v", env.Run, err)
-			}
-		},
-		Usage: func(runner string, in, out int, cost float64) {
-			if err := r.st.SetRunUsage(env.Run, runner, in, out, cost); err != nil {
-				log.Printf("run %s: recording usage: %v", env.Run, err)
-			}
-		},
-	}
+	trace := r.traceFor(env.Run)
 	// Each run has its own context so the developer can cancel one Wright.
 	ctx, cancel := context.WithCancel(r.bg)
 	r.mu.Lock()
@@ -606,6 +595,22 @@ func (r *Runs) start(d store.Dispatch) error {
 		r.sched.finished(d.ID, runErr == nil)
 	}()
 	return nil
+}
+
+// traceFor is where a run's timeline and usage are recorded for the dashboard.
+func (r *Runs) traceFor(run string) Trace {
+	return Trace{
+		Event: func(kind, summary string, raw json.RawMessage) {
+			if _, err := r.st.AddRunEvent(run, kind, summary, raw); err != nil {
+				log.Printf("run %s: recording an event: %v", run, err)
+			}
+		},
+		Usage: func(runner string, in, out int, cost float64) {
+			if err := r.st.SetRunUsage(run, runner, in, out, cost); err != nil {
+				log.Printf("run %s: recording usage: %v", run, err)
+			}
+		},
+	}
 }
 
 // wrightWorktree gives a dispatch's Wright its own worktree on its own branch

@@ -8,10 +8,10 @@ import (
 	"github.com/phallatlassian/archwright/internal/store"
 )
 
-// Environment variables that choose how dispatched Wrights run. They are the
+// Environment variables that choose how dispatched Wrights and Wardens run. They are the
 // developer's or a test's, never an agent's.
 const (
-	EnvWrightRunner  = "ARCHWRIGHT_WRIGHT_RUNNER" // "fake" runs the scripted fake runner instead of real agents
+	EnvWrightRunner  = "ARCHWRIGHT_WRIGHT_RUNNER" // "fake" runs the scripted fakes instead of real agents
 	EnvFakeRunDelay  = "ARCHWRIGHT_FAKE_RUN_DELAY"
 	EnvClaudeBinary  = "ARCHWRIGHT_CLAUDE_BIN" // the claude CLI to run, for tests and live checks with a stub
 	EnvCodexBinary   = "ARCHWRIGHT_CODEX_BIN"
@@ -30,6 +30,22 @@ func WrightRunnerFrom(getenv func(string) string, guilds GuildSource, st *store.
 		}
 		return fake
 	}
+	return agentRunnerFrom(getenv, guilds, st)
+}
+
+// WardenRunnersFrom builds what task Wardens and review Wardens run on: real
+// agents on the runner their Guild is bound to, like Wrights, or, when the
+// environment asks for the fake runner, the scripted fake Warden with no
+// review runner. The posture, never-list and preflight are the Wrights'.
+func WardenRunnersFrom(getenv func(string) string, guilds GuildSource, st *store.Store) (WardenRunner, ReviewRunner) {
+	if getenv(EnvWrightRunner) == wrightRunnerFake {
+		return NewFakeWarden(), nil
+	}
+	w := &AgentWarden{Agent: agentRunnerFrom(getenv, guilds, st)}
+	return w, w
+}
+
+func agentRunnerFrom(getenv func(string) string, guilds GuildSource, st *store.Store) *AgentRunner {
 	return &AgentRunner{
 		Runners: map[string]runner.Runner{
 			"claude": &runner.Claude{Binary: getenv(EnvClaudeBinary)},

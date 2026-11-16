@@ -27,6 +27,9 @@ type ReviewRequest struct {
 	ReviewID string
 	Worktree string // a detached, read-only checkout of the code under review
 	Brief    string
+
+	ExtraEnv map[string]string // further variables for the runner process, such as GIT_CONFIG_GLOBAL for delivered skills
+	Trace    Trace             // where a runner reports its timeline and usage for the dashboard
 }
 
 // ReviewRunner carries out one review run (ADR 0003). An error, or returning
@@ -254,10 +257,17 @@ func (r *Runs) startReview(jobID string) (store.Review, error) {
 		r.errorReview(rev.ID, "the Works is shutting down")
 		return store.Review{}, fmt.Errorf("%w: the Works is shutting down", errInvalidInput)
 	}
+	if err := r.st.StartRunRecord(env.Run, jobID, "", g.Name, ""); err != nil {
+		log.Printf("run %s: recording it for the dashboard: %v", env.Run, err)
+	}
 	go func() {
 		defer r.wg.Done()
-		runErr := reviewer.RunReview(r.bg, ReviewRequest{Env: env, Job: jobID, ReviewID: rev.ID, Worktree: wt.Path, Brief: brief})
+		extra, runErr := r.deliverGuildSkills(g.Name, env.Run, wt.Path, nil)
+		if runErr == nil {
+			runErr = reviewer.RunReview(r.bg, ReviewRequest{Env: env, Job: jobID, ReviewID: rev.ID, Worktree: wt.Path, Brief: brief, ExtraEnv: extra, Trace: r.traceFor(env.Run)})
+		}
 		r.End(env.Run)
+		r.endRunRecord(env.Run, runErr)
 		msg := "the run ended without reporting a verdict"
 		if runErr != nil {
 			msg = "the run failed: " + runErr.Error()

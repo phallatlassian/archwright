@@ -20,6 +20,10 @@ type WardenRequest struct {
 	Step    string
 	Brief   string // the task brief stored with the step, plus a resume note after a restart
 	Resumed bool   // the Works restarted while the step was running
+
+	Worktree string            // a read-only checkout of the Job's code to run in; empty when the Job has no Site
+	ExtraEnv map[string]string // further variables for the runner process, such as GIT_CONFIG_GLOBAL for delivered skills
+	Trace    Trace             // where a runner reports its timeline and usage for the dashboard
 }
 
 // WardenRunner carries out one task Warden run (ADR 0020). An error, or
@@ -229,10 +233,21 @@ func (r *Runs) summon(sr store.StepRun, resumed bool) error {
 		r.End(env.Run)
 		return fail(fmt.Errorf("%w: the Works is shutting down", errInvalidInput))
 	}
+	if err := r.st.StartRunRecord(env.Run, sr.JobID, "", sr.Guild, ""); err != nil {
+		log.Printf("run %s: recording it for the dashboard: %v", env.Run, err)
+	}
 	go func() {
 		defer r.wg.Done()
-		runErr := warden.RunWarden(r.bg, WardenRequest{Env: env, Job: sr.JobID, Guild: sr.Guild, Step: sr.Step, Brief: brief, Resumed: resumed})
+		wt, runErr := r.wardenWorkspace(sr.JobID)
+		var extra map[string]string
+		if runErr == nil {
+			extra, runErr = r.deliverGuildSkills(sr.Guild, env.Run, wt, nil)
+		}
+		if runErr == nil {
+			runErr = warden.RunWarden(r.bg, WardenRequest{Env: env, Job: sr.JobID, Guild: sr.Guild, Step: sr.Step, Brief: brief, Resumed: resumed, Worktree: wt, ExtraEnv: extra, Trace: r.traceFor(env.Run)})
+		}
 		r.End(env.Run)
+		r.endRunRecord(env.Run, runErr)
 		if r.bg.Err() != nil {
 			return // the Works is stopping: the step stays running and its Warden is re-summoned on the next start
 		}
@@ -245,6 +260,42 @@ func (r *Runs) summon(sr store.StepRun, resumed bool) error {
 		}
 	}()
 	return nil
+}
+
+// wardenWorkspace is the checkout a Warden of a Job works in: a detached
+// read-only worktree of the Job's code (ADR 0008, 0012), since a Warden leads
+// through the Archwright tools and never changes the Site. It is empty when
+// the Works has no Sites or the Job has no Site.
+func (r *Runs) wardenWorkspace(jobID string) (string, error) {
+	r.mu.Lock()
+	sm := r.sites
+	r.mu.Unlock()
+	if sm == nil {
+		return "", nil
+	}
+	job, err := r.st.GetJob(jobID)
+	if err != nil || job.Site == "" {
+		return "", err
+	}
+	wt, err := sm.CreateWorktree(jobID, store.KindReadOnly, "")
+	if err != nil {
+		return "", fmt.Errorf("preparing the Warden's workspace: %w", err)
+	}
+	return wt.Path, nil
+}
+
+// endRunRecord notes how a Warden or reviewer run ended; a failure to record it is logged.
+func (r *Runs) endRunRecord(run string, runErr error) {
+	ended := "done"
+	switch {
+	case r.bg.Err() != nil:
+		ended = "cancelled"
+	case runErr != nil:
+		ended = "failed"
+	}
+	if err := r.st.EndRunRecord(run, ended); err != nil {
+		log.Printf("run %s: recording its end: %v", run, err)
+	}
 }
 
 // resumeSteps re-summons a Warden for every step a stopped Works left running (ADR 0004).

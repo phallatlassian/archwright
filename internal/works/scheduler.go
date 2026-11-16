@@ -81,6 +81,16 @@ type QueueStatus struct {
 	Running []QueueEntry `json:"running"`
 	Queued  []QueueEntry `json:"queued"` // FIFO
 	Paused  *Pause       `json:"paused,omitempty"`
+	// Wardens are the running Warden runs of Plan steps. They are active runs
+	// but sit outside the per-Site cap, which is about Wrights (ADR 0021).
+	Wardens []WardenEntry `json:"wardens"`
+}
+
+// WardenEntry is one running Plan step's Warden as the queue shows it.
+type WardenEntry struct {
+	Job   string `json:"job"`
+	Step  string `json:"step"`
+	Guild string `json:"guild"`
 }
 
 type entry struct {
@@ -158,7 +168,18 @@ func (r *Runs) SetLimits(l Limits) {
 }
 
 // Queue reports the scheduler's state: running and queued dispatches, in order.
-func (r *Runs) Queue() QueueStatus { return r.sched.status() }
+func (r *Runs) Queue() QueueStatus {
+	st := r.sched.status()
+	st.Wardens = []WardenEntry{}
+	running, err := r.st.RunningSteps()
+	if err != nil {
+		log.Printf("queue: listing the running steps: %v", err)
+	}
+	for _, sr := range running {
+		st.Wardens = append(st.Wardens, WardenEntry{Job: sr.JobID, Step: sr.Step, Guild: sr.Guild})
+	}
+	return st
+}
 
 func (s *scheduler) entryFor(d store.Dispatch) (entry, error) {
 	job, err := s.r.st.GetJob(d.JobID)
