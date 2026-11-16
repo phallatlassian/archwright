@@ -40,6 +40,10 @@ _Avoid_: task, run, ticket
 The task graph the Archwright holds for one Job: steps for Guilds, with blocking edges and human checkpoints.
 _Avoid_: workflow, pipeline
 
+**Step**:
+One unit of a Plan: work for a named Guild that the Archwright starts and a fresh Warden carries out, with blockers, an optional human checkpoint, and a status. A Job has no stage that is not a step. A step sent back for rework is run again as another attempt, and the Plan stays as approved (ADR 0021).
+_Avoid_: stage, phase, task
+
 **Jig**:
 A predescribed, reusable template for a recurring kind of Job (fix, build, specify), instantiated into a Job's Plan. A Jig is a prebuilt Plan; an arbitrary Job gets an ad hoc Plan.
 _Avoid_: flow, route, playbook, recipe
@@ -65,7 +69,7 @@ The one inspected result a Warden returns to the Archwright: done, partial or fa
 _Avoid_: report, response
 
 **Review**:
-A separate, read-only task issued by the Archwright after Masonry's handback and run by a fresh Warden that shares no context with the builder. It reports Standards and Spec independently as pass, fail or not evaluated, with findings tied to file and line. One fail sends the Job back to Masonry once, automatically; a second parks it. The PR go-ahead needs an overall pass (ADR 0012).
+A Plan step, started by the Archwright after Masonry's handback and run by a fresh read-only Warden that shares no context with the builder. It reports Standards and Spec independently as pass, fail or not evaluated, with findings tied to file and line. One fail sends the Job back to Masonry once, automatically; a second parks it. The PR go-ahead needs an overall pass (ADR 0012).
 _Avoid_: code review, QA, approval
 
 **Ask**:
