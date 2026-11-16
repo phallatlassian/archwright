@@ -247,3 +247,32 @@ func indexOf(s []string, v string) int {
 }
 
 func contains(s []string, v string) bool { return indexOf(s, v) >= 0 }
+
+func TestInstructionsRenderEachSiteAndHooksCombination(t *testing.T) {
+	cases := []struct {
+		site         string
+		hooks        bool
+		want, reject []string
+	}{
+		{"shop", true, []string{`registered Site "shop"`, `create_job {"site": "shop"}`, "Hooks deliver it", HooksMarker, InboxMarker}, []string{"not a registered Site", "Nothing delivers it"}},
+		{"", true, []string{"not a registered Site", "Hooks deliver it", HooksMarker}, []string{"registered Site \"", "Nothing delivers it"}},
+		{"shop", false, []string{`registered Site "shop"`, "Nothing delivers it", "read_inbox"}, []string{"Hooks deliver it", HooksMarker, "not a registered Site"}},
+		{"", false, []string{"not a registered Site", "Nothing delivers it"}, []string{"Hooks deliver it", HooksMarker, "registered Site \""}},
+	}
+	for _, c := range cases {
+		got := Instructions(c.site, c.hooks)
+		for _, w := range c.want {
+			if !strings.Contains(got, w) {
+				t.Errorf("site=%q hooks=%v: missing %q in %s", c.site, c.hooks, w, got)
+			}
+		}
+		for _, w := range c.reject {
+			if strings.Contains(got, w) {
+				t.Errorf("site=%q hooks=%v: unexpected %q in %s", c.site, c.hooks, w, got)
+			}
+		}
+		if strings.Contains(got, "<!--") || strings.Contains(got, "{{") || !strings.HasPrefix(got, "You are the Archwright") {
+			t.Errorf("site=%q hooks=%v: template leaked or header not stripped: %s", c.site, c.hooks, got)
+		}
+	}
+}
