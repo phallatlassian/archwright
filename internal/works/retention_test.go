@@ -2,41 +2,10 @@ package works
 
 import (
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"testing"
-	"time"
 
-	"github.com/phallatlassian/archwright/internal/paths"
 	"github.com/phallatlassian/archwright/internal/store"
 )
-
-func TestReadRetention(t *testing.T) {
-	cases := []struct {
-		file    string
-		want    time.Duration
-		wantErr bool
-	}{
-		{"", store.DefaultRetention, false},
-		{"runner = \"claude\"\n", store.DefaultRetention, false},
-		{"retention_days = 7 # a week\n", 7 * 24 * time.Hour, false},
-		{"retention_days = \"90\"\n", 90 * 24 * time.Hour, false},
-		{"retention_days = 0\n", 0, true},
-		{"retention_days = soon\n", 0, true},
-	}
-	for _, c := range cases {
-		d := paths.Dirs{Config: t.TempDir()}
-		if c.file != "" {
-			if err := os.WriteFile(filepath.Join(d.Config, "config.toml"), []byte(c.file), 0o600); err != nil {
-				t.Fatal(err)
-			}
-		}
-		got, err := ReadRetention(d)
-		if (err != nil) != c.wantErr || got != c.want {
-			t.Errorf("%q: got %v, %v", c.file, got, err)
-		}
-	}
-}
 
 func TestPruneRouteDryRunsAndReportsActiveRuns(t *testing.T) {
 	d := newDash(t, Limits{})

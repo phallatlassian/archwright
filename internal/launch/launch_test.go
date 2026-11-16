@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -15,21 +14,6 @@ import (
 )
 
 var run = spool.Env{Run: "run-1", Dir: "/tmp/s", Token: "tok"}
-
-func TestReadRunnerDefaultsToClaudeAndReadsConfig(t *testing.T) {
-	d := paths.Dirs{Config: t.TempDir()}
-	if got, err := ReadRunner(d); err != nil || got != RunnerClaude {
-		t.Fatalf("absent config = %q, %v", got, err)
-	}
-	os.WriteFile(ConfigFile(d), []byte("# install\nrunner = \"codex\" # chosen\n"), 0o600)
-	if got, err := ReadRunner(d); err != nil || got != RunnerCodex {
-		t.Fatalf("got %q, %v", got, err)
-	}
-	os.WriteFile(ConfigFile(d), []byte("runner = \"grok\"\n"), 0o600)
-	if _, err := ReadRunner(d); err == nil {
-		t.Fatal("an unknown runner must be refused")
-	}
-}
 
 func TestBuildClaudeSuppliesOnlyHooksInSettings(t *testing.T) {
 	cmd, err := Build(Input{Runner: RunnerClaude, Exe: "/opt/it's/archwright", Home: "/home/neutral", Site: "shop", Run: run})

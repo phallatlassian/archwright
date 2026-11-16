@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/phallatlassian/archwright/internal/config"
 	"github.com/phallatlassian/archwright/internal/defs"
 	"github.com/phallatlassian/archwright/internal/paths"
 	"github.com/phallatlassian/archwright/internal/sites"
@@ -113,7 +114,7 @@ func ServeWith(ctx context.Context, d paths.Dirs, ready chan<- struct{}, opts Op
 	}
 	runs.Configure(GuildsFromRegistry(reg, DefaultProfiles()), fake)
 	runs.SetLimits(LimitsFromEnv(os.Getenv))
-	runs.SetRetention(func() (time.Duration, error) { return ReadRetention(d) })
+	runs.SetRetention(func() (time.Duration, error) { return config.Retention(d) })
 	if err := runs.Resume(); err != nil {
 		return err
 	}
