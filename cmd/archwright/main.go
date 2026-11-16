@@ -526,11 +526,27 @@ func promptSecret(stdin io.Reader, stdout io.Writer, prompt string) (string, err
 	if err := off.Run(); err != nil {
 		return "", fmt.Errorf("cannot turn off terminal echo: %w", err)
 	}
-	defer func() {
+	restore := func() {
 		on := exec.Command("stty", "echo")
 		on.Stdin = f
 		_ = on.Run()
 		_, _ = fmt.Fprintln(stdout)
+	}
+	interrupted := make(chan os.Signal, 1)
+	signal.Notify(interrupted, os.Interrupt, syscall.SIGTERM)
+	done := make(chan struct{})
+	defer func() {
+		signal.Stop(interrupted)
+		close(done)
+		restore()
+	}()
+	go func() {
+		select {
+		case <-interrupted:
+			restore()
+			os.Exit(130)
+		case <-done:
+		}
 	}()
 	_, _ = fmt.Fprint(stdout, prompt)
 	var line []byte
