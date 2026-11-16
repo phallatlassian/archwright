@@ -571,7 +571,7 @@ func (r *Runs) start(d store.Dispatch) error {
 		r.End(env.Run)
 		r.mu.Lock()
 		wasCancelled := r.cancelled[d.ID]
-		if _, limited := asRateLimit(runErr); !(limited && unreported) {
+		if _, limited := asRateLimit(runErr); !limited || !unreported {
 			delete(r.wrightWts, d.ID) // only a requeued dispatch runs in it again
 		}
 		delete(r.cancels, d.ID)
