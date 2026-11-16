@@ -187,10 +187,12 @@ func (s *Store) setPlan(jobID, jig string, steps []Step) (Plan, error) {
 }
 
 // GetPlan reads the Job's Plan.
-func (s *Store) GetPlan(jobID string) (Plan, error) {
+func (s *Store) GetPlan(jobID string) (Plan, error) { return getPlan(s.db, jobID) }
+
+func getPlan(q queryer, jobID string) (Plan, error) {
 	p := Plan{JobID: jobID}
 	var raw, at string
-	err := s.db.QueryRow("SELECT steps, jig, approval, updated_at FROM plans WHERE job_id = ?", jobID).Scan(&raw, &p.Jig, &p.Approval, &at)
+	err := q.QueryRow("SELECT steps, jig, approval, updated_at FROM plans WHERE job_id = ?", jobID).Scan(&raw, &p.Jig, &p.Approval, &at)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Plan{}, fmt.Errorf("plan for job %q: %w", jobID, ErrNotFound)
 	}

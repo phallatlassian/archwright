@@ -274,6 +274,14 @@ func newHandler(st *store.Store, runs *Runs, sm *sites.Manager, token string, pi
 				return
 			}
 			resp.StepStates = StepStates(out.Plan.Steps, ds)
+			runs, err := st.StepRuns(out.ID)
+			if err != nil {
+				fail(w, err)
+				return
+			}
+			for _, sr := range runs { // a started step's own status beats what its Guild's dispatches suggest
+				resp.StepStates[sr.Step] = sr.Status
+			}
 		}
 		reply(w, 200, resp)
 	})

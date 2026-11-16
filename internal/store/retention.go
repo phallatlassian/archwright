@@ -109,6 +109,7 @@ func (s *Store) ActiveRuns() (int, error) {
 	err := s.db.QueryRow(`SELECT
 		(SELECT COUNT(*) FROM dispatches WHERE status IN (?, ?)) +
 		(SELECT COUNT(*) FROM reviews WHERE status = 'running') +
+		(SELECT COUNT(*) FROM steps WHERE status = 'running') +
 		(SELECT COUNT(*) FROM gate_runs WHERE status = 'running')`, DispatchQueued, DispatchRunning).Scan(&n)
 	return n, err
 }

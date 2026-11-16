@@ -42,6 +42,7 @@ type Runs struct {
 	defs      *defs.Registry // the loaded Guild and Jig catalogue (ADR 0009)
 	runner    Runner
 	reviewer  ReviewRunner // runs Reviews (ADR 0012)
+	warden    WardenRunner // runs the Wardens of started Plan steps (ADR 0020)
 	skills    *SkillsDelivery
 	spoolRoot string
 	bg        context.Context
@@ -96,6 +97,7 @@ type RunContext struct {
 	Guild      string // the Guild a Warden leads, or the Wright's Warden's
 	DispatchID string // the dispatch a Wright carries out
 	Review     string // the review a fresh Warden carries out
+	Task       string // the Plan step a Warden carries out (ADR 0020)
 }
 
 // Configure sets where Guild definitions come from and which Runner carries
