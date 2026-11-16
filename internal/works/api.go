@@ -58,7 +58,7 @@ func newHandler(st *store.Store, runs *Runs, sm *sites.Manager, token string, pi
 			code = http.StatusNotFound
 		case errors.Is(err, store.ErrExists), errors.Is(err, store.ErrConflict):
 			code = http.StatusConflict
-		case errors.Is(err, sites.ErrUnregistered):
+		case errors.Is(err, sites.ErrUnregistered), errors.Is(err, store.ErrApprovalRefused):
 			code = http.StatusForbidden
 		}
 		reply(w, code, map[string]string{"error": err.Error()})
@@ -578,12 +578,39 @@ func newHandler(st *store.Store, runs *Runs, sm *sites.Manager, token string, pi
 		reply(w, 200, list)
 	})
 	mux.HandleFunc("POST /gate-changes/{id}/approve", func(w http.ResponseWriter, r *http.Request) {
-		site, err := st.ApproveGateChange(r.PathValue("id"))
+		// The token alone never approves: the developer's approval credential
+		// travels in the body (ADR 0010).
+		var in struct{ Credential string }
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBody)).Decode(&in); err != nil {
+			fail(w, errors.New("approving needs the approval credential in the body: "+err.Error()))
+			return
+		}
+		site, err := st.ApproveGateChange(r.PathValue("id"), in.Credential)
 		if err != nil {
 			fail(w, err)
 			return
 		}
 		reply(w, 200, site)
+	})
+	mux.HandleFunc("POST /approval-credential", func(w http.ResponseWriter, r *http.Request) {
+		var in struct{ Credential, Current string }
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBody)).Decode(&in); err != nil {
+			fail(w, err)
+			return
+		}
+		if err := st.SetApprovalCredential(in.Credential, in.Current); err != nil {
+			fail(w, err)
+			return
+		}
+		reply(w, 200, map[string]bool{"ok": true})
+	})
+	mux.HandleFunc("GET /approval-credential", func(w http.ResponseWriter, r *http.Request) {
+		set, err := st.HasApprovalCredential()
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		reply(w, 200, map[string]bool{"set": set})
 	})
 	mux.HandleFunc("POST /gate-changes/{id}/reject", func(w http.ResponseWriter, r *http.Request) {
 		if err := st.RejectGateChange(r.PathValue("id")); err != nil {
