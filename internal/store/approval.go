@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 )
 
 // ErrApprovalRefused means the developer's approval credential is unset or
@@ -17,6 +18,13 @@ var ErrApprovalRefused = errors.New("approval refused")
 // approvalIterations makes each guess at the credential cost a noticeable
 // fraction of a second, which is all the rate limit a loopback API gets.
 const approvalIterations = 600_000
+
+// Five wrong guesses in a row lock every check for a minute, so a token holder
+// cannot guess the credential online. The count lives in the Works process.
+const (
+	approvalMaxFailures = 5
+	approvalLockout     = time.Minute
+)
 
 func hashApproval(secret string, salt []byte, iterations int) ([]byte, error) {
 	return pbkdf2.Key(sha256.New, secret, salt, iterations, sha256.Size)
@@ -35,6 +43,11 @@ func (s *Store) HasApprovalCredential() (bool, error) {
 // CheckApprovalCredential returns ErrApprovalRefused unless secret matches
 // the credential the developer set.
 func (s *Store) CheckApprovalCredential(secret string) error {
+	s.approvalMu.Lock()
+	defer s.approvalMu.Unlock()
+	if now := s.now(); now.Before(s.approvalLockedUntil) {
+		return fmt.Errorf("too many wrong approval credentials; try again in %s: %w", s.approvalLockedUntil.Sub(now).Round(time.Second), ErrApprovalRefused)
+	}
 	var salt, want []byte
 	var iterations int
 	err := s.db.QueryRow("SELECT salt, hash, iterations FROM approval_credential").Scan(&salt, &want, &iterations)
@@ -49,14 +62,23 @@ func (s *Store) CheckApprovalCredential(secret string) error {
 		return err
 	}
 	if secret == "" || subtle.ConstantTimeCompare(got, want) != 1 {
+		s.approvalFailures++
+		if s.approvalFailures >= approvalMaxFailures {
+			s.approvalFailures = 0
+			s.approvalLockedUntil = s.now().Add(approvalLockout)
+		}
+		if err := appendEvent(s.db, s.stamp(), "", "approval.attempt_failed", map[string]bool{"locked": !s.approvalLockedUntil.IsZero() && s.now().Before(s.approvalLockedUntil)}); err != nil {
+			return err
+		}
 		return fmt.Errorf("the approval credential is wrong: %w", ErrApprovalRefused)
 	}
+	s.approvalFailures = 0
 	return nil
 }
 
 // SetApprovalCredential sets the credential, or replaces it when current
-// matches the one already set. Setting the first one needs nothing, so the
-// developer should do it before an agent could.
+// matches the one already set. Only the terminal CLI calls it, straight on the
+// database; the Works API never sets or replaces the credential (ADR 0010).
 func (s *Store) SetApprovalCredential(secret, current string) error {
 	if secret == "" {
 		return errors.New("the approval credential cannot be empty")

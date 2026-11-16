@@ -253,11 +253,18 @@ func TestGateChangesOverAPIRequireApproval(t *testing.T) {
 	if err := approve(ch.ID, "pw"); err == nil || !strings.Contains(err.Error(), "archwright approval set") {
 		t.Fatalf("approved with no credential set: %v", err)
 	}
-	if err := c.Do("POST", "/approval-credential", map[string]string{"credential": "pw"}, nil); err != nil {
+	for _, m := range []string{"POST", "GET"} {
+		if err := c.Do(m, "/approval-credential", map[string]string{"credential": "pw"}, nil); err == nil {
+			t.Fatalf("%s /approval-credential exists: the token alone could set the credential", m)
+		}
+	}
+	cli, err := store.Open(d.Database())
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Do("POST", "/approval-credential", map[string]string{"credential": "evil"}, nil); err == nil {
-		t.Fatal("replaced the credential with only the token")
+	defer cli.Close()
+	if err := cli.SetApprovalCredential("pw", ""); err != nil {
+		t.Fatal(err)
 	}
 	for _, bad := range []error{c.Do("POST", "/gate-changes/"+ch.ID+"/approve", nil, nil), approve(ch.ID, ""), approve(ch.ID, "evil")} {
 		if bad == nil {

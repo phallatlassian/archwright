@@ -392,3 +392,32 @@ func TestGateChangeApprovalNeedsTheDevelopersCredential(t *testing.T) {
 		t.Fatalf("%+v %v", got, err)
 	}
 }
+
+func TestWrongApprovalCredentialsAreAuditedAndLockOut(t *testing.T) {
+	st, _ := open(t)
+	now := time.Now()
+	st.now = func() time.Time { return now }
+	if _, err := st.AddSite(Site{Name: "s", URL: "https://git.example.com/o/s.git", ClonePath: "/s", BaseBranch: "main", ConcurrencyCap: 1, Gates: Gates{Test: "a"}}); err != nil {
+		t.Fatal(err)
+	}
+	c, _ := st.ProposeGates("s", Gates{Test: "b"})
+	if err := st.SetApprovalCredential("pw", ""); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < approvalMaxFailures; i++ {
+		if _, err := st.ApproveGateChange(c.ID, "bad"); !errors.Is(err, ErrApprovalRefused) {
+			t.Fatal(err)
+		}
+	}
+	var n int
+	if err := st.db.QueryRow("SELECT COUNT(*) FROM events WHERE type = 'approval.attempt_failed'").Scan(&n); err != nil || n != approvalMaxFailures {
+		t.Fatalf("%d failed-attempt events, %v", n, err)
+	}
+	if _, err := st.ApproveGateChange(c.ID, "pw"); !errors.Is(err, ErrApprovalRefused) {
+		t.Fatalf("the right credential worked while locked out: %v", err)
+	}
+	now = now.Add(approvalLockout + time.Second)
+	if got, err := st.ApproveGateChange(c.ID, "pw"); err != nil || got.Gates.Test != "b" {
+		t.Fatalf("%+v %v", got, err)
+	}
+}

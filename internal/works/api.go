@@ -592,26 +592,6 @@ func newHandler(st *store.Store, runs *Runs, sm *sites.Manager, token string, pi
 		}
 		reply(w, 200, site)
 	})
-	mux.HandleFunc("POST /approval-credential", func(w http.ResponseWriter, r *http.Request) {
-		var in struct{ Credential, Current string }
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBody)).Decode(&in); err != nil {
-			fail(w, err)
-			return
-		}
-		if err := st.SetApprovalCredential(in.Credential, in.Current); err != nil {
-			fail(w, err)
-			return
-		}
-		reply(w, 200, map[string]bool{"ok": true})
-	})
-	mux.HandleFunc("GET /approval-credential", func(w http.ResponseWriter, r *http.Request) {
-		set, err := st.HasApprovalCredential()
-		if err != nil {
-			fail(w, err)
-			return
-		}
-		reply(w, 200, map[string]bool{"set": set})
-	})
 	mux.HandleFunc("POST /gate-changes/{id}/reject", func(w http.ResponseWriter, r *http.Request) {
 		if err := st.RejectGateChange(r.PathValue("id")); err != nil {
 			fail(w, err)

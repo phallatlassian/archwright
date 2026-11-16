@@ -318,31 +318,33 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 		if !isTerminal(stdin) {
 			return errors.New("setting the approval credential needs a developer at a terminal; run this yourself, not from a script or agent")
 		}
-		c, err := connect()
+		st, err := store.Open(dirs.Database())
 		if err != nil {
 			return err
 		}
-		var state struct{ Set bool }
-		if err := c.Do("GET", "/approval-credential", nil, &state); err != nil {
+		defer st.Close()
+		set, err := st.HasApprovalCredential()
+		if err != nil {
 			return err
 		}
-		in := map[string]string{}
-		if state.Set {
-			if in["current"], err = promptSecret(stdin, stdout, "Current approval credential: "); err != nil {
+		var current string
+		if set {
+			if current, err = promptSecret(stdin, stdout, "Current approval credential: "); err != nil {
 				return err
 			}
 		}
-		if in["credential"], err = promptSecret(stdin, stdout, "New approval credential: "); err != nil {
+		credential, err := promptSecret(stdin, stdout, "New approval credential: ")
+		if err != nil {
 			return err
 		}
 		again, err := promptSecret(stdin, stdout, "Repeat it: ")
 		if err != nil {
 			return err
 		}
-		if again != in["credential"] {
+		if again != credential {
 			return errors.New("the two entries differ; nothing changed")
 		}
-		if err := c.Do("POST", "/approval-credential", in, nil); err != nil {
+		if err := st.SetApprovalCredential(credential, current); err != nil {
 			return err
 		}
 		return emit(map[string]bool{"ok": true})
