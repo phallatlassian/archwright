@@ -321,3 +321,20 @@ func TestHandbackFromANonStepWardenLeavesStepsAlone(t *testing.T) {
 		t.Fatalf("steps: %+v", runs)
 	}
 }
+
+func TestResumeEndsTheRunningStepOfAClosedJob(t *testing.T) {
+	g := newStepRig(t, true)
+	g.r.ConfigureWarden(NewFakeWarden().HoldUntil(make(chan struct{})))
+	if !g.start("a").OK {
+		t.Fatal("a should start")
+	}
+	if err := g.st.CloseJob(g.job.ID, "discarded"); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.r.resumeSteps(); err != nil {
+		t.Fatal(err)
+	}
+	if sr, _ := g.st.GetStepRun(g.job.ID, "a"); sr.Status != store.StepFailed {
+		t.Fatalf("step: %+v", sr)
+	}
+}

@@ -343,6 +343,13 @@ func handback(c *callCtx, in json.RawMessage) (any, error) {
 	if _, err := c.warden(); err != nil {
 		return nil, err
 	}
+	if step := c.run.ctx.Task; step != "" { // before anything is saved: a step that is not running takes no handback
+		if sr, err := c.st.GetStepRun(c.run.ctx.Job, step); err != nil {
+			return nil, err
+		} else if sr.Status != store.StepRunning {
+			return nil, fmt.Errorf("step %q is %s, not running: %w", step, sr.Status, store.ErrConflict)
+		}
+	}
 	pieces, err := c.st.Pieces(c.run.ctx.Job)
 	if err != nil {
 		return nil, err

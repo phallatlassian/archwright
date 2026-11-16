@@ -258,8 +258,14 @@ func (r *Runs) resumeSteps() error {
 	r.mu.Unlock()
 	for _, sr := range running {
 		job, err := r.st.GetJob(sr.JobID)
-		if err != nil || job.Outcome != "" {
-			continue // a closed Job's step has no Warden to resume
+		if err != nil {
+			continue
+		}
+		if job.Outcome != "" { // a closed Job's step has no Warden to resume; end it so it stops counting as active
+			if err := r.st.FailStep(sr.JobID, sr.Step, "the Job closed while the step was running"); err != nil {
+				log.Printf("step %s/%s: recording the failure: %v", sr.JobID, sr.Step, err)
+			}
+			continue
 		}
 		if warden == nil {
 			log.Printf("step %s/%s: running, but no Warden runner is configured to resume it", sr.JobID, sr.Step)
