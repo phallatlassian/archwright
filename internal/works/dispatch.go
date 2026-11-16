@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 
 	"github.com/phallatlassian/archwright/internal/defs"
 	"github.com/phallatlassian/archwright/internal/store"
@@ -570,6 +571,9 @@ func (r *Runs) start(d store.Dispatch) error {
 		r.End(env.Run)
 		r.mu.Lock()
 		wasCancelled := r.cancelled[d.ID]
+		if _, limited := asRateLimit(runErr); !(limited && unreported) {
+			delete(r.wrightWts, d.ID) // only a requeued dispatch runs in it again
+		}
 		delete(r.cancels, d.ID)
 		delete(r.cancelled, d.ID)
 		r.mu.Unlock()
@@ -608,14 +612,20 @@ func (r *Runs) start(d store.Dispatch) error {
 // from the Job's integration branch (ADR 0008). Without Sites there is none.
 func (r *Runs) wrightWorktree(d store.Dispatch) (string, error) {
 	r.mu.Lock()
-	sm := r.sites
+	sm, kept := r.sites, r.wrightWts[d.ID]
 	r.mu.Unlock()
 	if sm == nil {
 		return "", nil
+	}
+	if _, err := os.Stat(kept); kept != "" && err == nil {
+		return kept, nil // requeued after a rate limit: the same worktree, not another
 	}
 	wt, err := sm.CreateWorktree(d.JobID, store.KindWright, "")
 	if err != nil {
 		return "", fmt.Errorf("creating the Wright's worktree: %w", err)
 	}
+	r.mu.Lock()
+	r.wrightWts[d.ID] = wt.Path
+	r.mu.Unlock()
 	return wt.Path, nil
 }

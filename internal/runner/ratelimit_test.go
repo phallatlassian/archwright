@@ -35,3 +35,12 @@ func TestOrdinaryFailuresAreNotRateLimits(t *testing.T) {
 		t.Error("a dropped stream is not a rate limit")
 	}
 }
+
+func TestStatus429MustBeAWordOfItsOwn(t *testing.T) {
+	if hit, _ := rateLimitText("API Error: 429 too fast"); !hit {
+		t.Error("a 429 is a rate limit")
+	}
+	if hit, _ := rateLimitText("wrote 14290 bytes to port 14291"); hit {
+		t.Error("digits inside a number are not a 429")
+	}
+}

@@ -127,8 +127,8 @@ func summarize(e runner.Event) string {
 		s = e.Text
 	}
 	s, _, _ = strings.Cut(strings.TrimSpace(s), "\n")
-	if len(s) > summaryMax {
-		s = s[:summaryMax] + "…"
+	if r := []rune(s); len(r) > summaryMax {
+		s = string(r[:summaryMax]) + "…"
 	}
 	return s
 }
