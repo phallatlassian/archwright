@@ -103,6 +103,9 @@ var catalogue = map[string]tool{
 		if err := requireField("job_id", a.JobID); err != nil {
 			return nil, err
 		}
+		if err := checkStepGuilds(c.runs.Definitions(), a.Steps); err != nil {
+			return nil, err
+		}
 		return c.st.SetPlan(a.JobID, a.Steps)
 	}},
 	"show_plan": {roles: []string{RoleArchwright}, call: func(c *callCtx, in json.RawMessage) (any, error) {
