@@ -68,7 +68,7 @@ func (g *wardenRig) stepEnds(step string) store.StepRun {
 	return sr
 }
 
-// stepRun finds the run record of a Job's only Warden run.
+// runRecord finds the run record of a Job's only Warden run.
 func (g *wardenRig) runRecord() store.RunRecord {
 	g.t.Helper()
 	var recs []store.RunRecord
@@ -79,7 +79,7 @@ func (g *wardenRig) runRecord() store.RunRecord {
 	return recs[0]
 }
 
-func TestTaskWardenRunsOnClaudeInAReadOnlyWorktreeAndTheRunIsRecorded(t *testing.T) {
+func TestTaskWardenRunsOnClaudeInAPerRunDirectoryAndTheRunIsRecorded(t *testing.T) {
 	g := newWardenRig(t, "success.jsonl")
 	if resp := g.startStep("a"); !resp.OK {
 		t.Fatalf("start_step: %+v", resp.Error)
@@ -88,17 +88,13 @@ func TestTaskWardenRunsOnClaudeInAReadOnlyWorktreeAndTheRunIsRecorded(t *testing
 	if sr.Status != store.StepFailed || !strings.Contains(sr.Reason, "ended without handing back") {
 		t.Fatalf("a Warden that never hands back must fail its step visibly: %+v", sr)
 	}
-	// It ran in a read-only worktree of the Job, not the integration one.
+	// It ran in a per-run directory outside any Site, not in a worktree.
 	pwd := strings.TrimSpace(g.file("pwd"))
-	wts, _ := g.st.Worktrees(g.job.ID)
-	found := false
-	for _, w := range wts {
-		if real, _ := filepath.EvalSymlinks(w.Path); w.Kind == store.KindReadOnly && (real == pwd || w.Path == pwd) {
-			found = true
-		}
+	if wts, _ := g.st.Worktrees(g.job.ID); len(wts) != 1 || strings.HasPrefix(pwd, filepath.Dir(wts[0].Path)) {
+		t.Errorf("ran in %q beside the Site worktrees %+v", pwd, wts)
 	}
-	if !found {
-		t.Errorf("ran in %q, want a read-only worktree of %+v", pwd, wts)
+	if !strings.Contains(pwd, "warden-") {
+		t.Errorf("ran in %q, want a per-run directory", pwd)
 	}
 	args := g.file("args")
 	if !strings.Contains(args, "stream-json") || !strings.Contains(args, "--permission-mode\ndefault") || strings.Contains(args, "bypass") {
@@ -188,7 +184,7 @@ func TestAWardenRequestThatWouldWidenPermissionsIsRefusedBeforeSpawn(t *testing.
 	}
 }
 
-func TestStepFailsVisiblyWhenItsJobHasNoSiteToWorkIn(t *testing.T) {
+func TestTaskWardenRunsForAJobWithNoSite(t *testing.T) {
 	g := newWardenRig(t, "success.jsonl")
 	job, _ := g.st.CreateJob("No site", "")
 	g.st.SetPlan(job.ID, []store.Step{{ID: "a", Guild: "masonry", Title: "Build it"}})
@@ -197,9 +193,9 @@ func TestStepFailsVisiblyWhenItsJobHasNoSiteToWorkIn(t *testing.T) {
 		t.Fatalf("start_step: %+v", resp.Error)
 	}
 	var sr store.StepRun
-	eventually(t, "the step to fail", func() bool { sr, _ = g.st.GetStepRun(job.ID, "a"); return sr.Status == store.StepFailed })
-	if !strings.Contains(sr.Reason, "no worktree") || g.file("args") != "" {
-		t.Fatalf("step = %+v", sr)
+	eventually(t, "the step to end", func() bool { sr, _ = g.st.GetStepRun(job.ID, "a"); return sr.Status != store.StepRunning })
+	if !strings.Contains(sr.Reason, "ended without handing back") || g.file("args") == "" {
+		t.Fatalf("the Warden should have run: %+v", sr)
 	}
 }
 
@@ -208,12 +204,8 @@ func TestTaskWardenGetsItsGuildsSkills(t *testing.T) {
 	reg := defs.New(defs.Shipped(), "")
 	reg.Reload()
 	g.r.UseDefinitions(reg)
-	var runDirs []string
-	g.r.UseSkills(SkillsDelivery{Catalogue: skills.Vendored(), RunDir: func(run string) string {
-		d := filepath.Join(t.TempDir(), run)
-		runDirs = append(runDirs, d)
-		return d
-	}})
+	runs, _ := filepath.EvalSymlinks(t.TempDir())
+	g.r.UseSkills(SkillsDelivery{Catalogue: skills.Vendored(), RunDir: func(run string) string { return filepath.Join(runs, run) }})
 	g.startStep("a")
 	g.stepEnds("a")
 	pwd := strings.TrimSpace(g.file("pwd"))
@@ -223,26 +215,26 @@ func TestTaskWardenGetsItsGuildsSkills(t *testing.T) {
 	if env := g.file("env"); !strings.Contains(env, "GIT_CONFIG_GLOBAL=") {
 		t.Errorf("the Warden did not get the run's git configuration: %q", env)
 	}
-	if len(runDirs) != 1 {
-		t.Errorf("run dirs = %v", runDirs)
+	if !strings.HasPrefix(pwd, runs) {
+		t.Errorf("the Warden ran in %q, not under its run directory", pwd)
 	}
 }
 
-func TestSkillsCollisionFailsTheStepBeforeTheWardenSpawns(t *testing.T) {
+func TestWardenThatCannotBePreparedFailsTheStepBeforeSpawning(t *testing.T) {
 	g := newWardenRig(t, "success.jsonl")
 	reg := defs.New(defs.Shipped(), "")
 	reg.Reload()
 	g.r.UseDefinitions(reg)
-	g.r.UseSkills(SkillsDelivery{Catalogue: skills.Vendored(), RunDir: func(run string) string { return filepath.Join(t.TempDir(), run) }})
-	// The Site tracks a skill the Guild would deliver.
-	g.commit(".agents/skills/tdd/SKILL.md", "the Site's own")
+	blocker := filepath.Join(t.TempDir(), "file")
+	os.WriteFile(blocker, nil, 0o600)
+	g.r.UseSkills(SkillsDelivery{Catalogue: skills.Vendored(), RunDir: func(run string) string { return filepath.Join(blocker, run) }})
 	g.startStep("a")
 	sr := g.stepEnds("a")
-	if sr.Status != store.StepFailed || !strings.Contains(sr.Reason, "collides") {
+	if sr.Status != store.StepFailed || !strings.Contains(sr.Reason, "preparing the Warden's directory") {
 		t.Fatalf("step = %+v", sr)
 	}
 	if g.file("args") != "" {
-		t.Error("the Warden spawned despite the collision")
+		t.Error("the Warden spawned anyway")
 	}
 }
 

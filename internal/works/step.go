@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/phallatlassian/archwright/internal/store"
@@ -238,7 +241,7 @@ func (r *Runs) summon(sr store.StepRun, resumed bool) error {
 	}
 	go func() {
 		defer r.wg.Done()
-		wt, runErr := r.wardenWorkspace(sr.JobID)
+		wt, runErr := r.wardenWorkspace(env.Run)
 		var extra map[string]string
 		if runErr == nil {
 			extra, runErr = r.deliverGuildSkills(sr.Guild, env.Run, wt, nil)
@@ -262,26 +265,27 @@ func (r *Runs) summon(sr store.StepRun, resumed bool) error {
 	return nil
 }
 
-// wardenWorkspace is the checkout a Warden of a Job works in: a detached
-// read-only worktree of the Job's code (ADR 0008, 0012), since a Warden leads
-// through the Archwright tools and never changes the Site. It is empty when
-// the Works has no Sites or the Job has no Site.
-func (r *Runs) wardenWorkspace(jobID string) (string, error) {
+// wardenWorkspace is the directory a task Warden works in: a per-run
+// directory the Works creates outside any Site, since a Warden leads through
+// the Archwright tools and never touches code. It is a bare git repository
+// root so Guild skills can be delivered into it and hidden from git like in
+// a Wright's worktree.
+func (r *Runs) wardenWorkspace(run string) (string, error) {
 	r.mu.Lock()
-	sm := r.sites
+	sd, root := r.skills, r.spoolRoot
 	r.mu.Unlock()
-	if sm == nil {
-		return "", nil
+	base := filepath.Join(root, "warden-"+run)
+	if sd != nil && sd.RunDir != nil {
+		base = sd.RunDir(run)
 	}
-	job, err := r.st.GetJob(jobID)
-	if err != nil || job.Site == "" {
-		return "", err
+	dir := filepath.Join(base, "work")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", fmt.Errorf("preparing the Warden's directory: %w", err)
 	}
-	wt, err := sm.CreateWorktree(jobID, store.KindReadOnly, "")
-	if err != nil {
-		return "", fmt.Errorf("preparing the Warden's workspace: %w", err)
+	if out, err := exec.Command("git", "-C", dir, "init", "-q").CombinedOutput(); err != nil {
+		return "", fmt.Errorf("preparing the Warden's directory: git init: %v: %s", err, strings.TrimSpace(string(out)))
 	}
-	return wt.Path, nil
+	return dir, nil
 }
 
 // endRunRecord notes how a Warden or reviewer run ended; a failure to record it is logged.

@@ -8,9 +8,9 @@ import (
 	"github.com/phallatlassian/archwright/internal/store"
 )
 
-// SkillsDelivery is how runs get their Guild's skills: dispatched Wrights, and
-// the task and review Wardens in the worktree they work in. Without
-// it, runs start with none.
+// SkillsDelivery is how runs get their Guild's skills: dispatched Wrights in
+// their worktrees, and task and review Wardens in the directory they work in.
+// Without it, runs start with none.
 type SkillsDelivery struct {
 	Catalogue *skills.Catalogue
 	Runner    string                               // claude or codex; empty means the runner each Guild is bound to
