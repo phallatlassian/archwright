@@ -112,7 +112,73 @@ func fakeCall(items string, err error) Call {
 		if tool == "list_jobs" {
 			return json.RawMessage(`[{"id":"j1","title":"Fix login"}]`), nil
 		}
+		if tool == "show_catalogue" {
+			return json.RawMessage(catalogueJSON), nil
+		}
 		return json.RawMessage(items), nil
+	}
+}
+
+const catalogueJSON = `{"guilds":[
+ {"name":"survey","intake":"A question whose answer changes what gets built.","handback":"Findings with\nevidence.","access":"read-only","runners":["claude"],"source":"shipped"},
+ {"name":"masonry","intake":"A specified change.","handback":"A pull request.","access":"read-write","runners":["claude"],"source":"shipped"}],
+ "jigs":[{"name":"investigate","description":"Answer a question with cited evidence.","parameters":[{"name":"question","required":true},{"name":"depth","default":"shallow"}],
+  "steps":[{"id":"investigate","guild":"survey","task":"LONG STEP TASK TEXT"}]}],
+ "errors":[{"kind":"guild","name":"broken","error":"bad access"}]}`
+
+func TestSessionStartCarriesTheCatalogueTrimmed(t *testing.T) {
+	var out bytes.Buffer
+	if err := Hook("session-start", fakeCall(`{"items":[]}`, nil), &out); err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		HookSpecificOutput struct{ AdditionalContext string }
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	ctx := got.HookSpecificOutput.AdditionalContext
+	for _, want := range []string{
+		"survey", "read-only", "A question whose answer changes what gets built.", "Findings with evidence.",
+		"masonry", "read-write",
+		"investigate", "Answer a question with cited evidence.", "question (required)", "depth (default shallow)",
+		"start_jig", "broken", "bad access",
+	} {
+		if !strings.Contains(ctx, want) {
+			t.Fatalf("start context lacks %q:\n%s", want, ctx)
+		}
+	}
+	if strings.Contains(ctx, "LONG STEP TASK TEXT") {
+		t.Fatalf("Jig steps must be trimmed:\n%s", ctx)
+	}
+}
+
+func TestSessionStartSurvivesAnUnavailableCatalogue(t *testing.T) {
+	var out bytes.Buffer
+	call := func(tool string, in json.RawMessage) (json.RawMessage, error) {
+		if tool == "show_catalogue" {
+			return nil, errors.New("no definitions are loaded")
+		}
+		return fakeCall(`{"items":[]}`, nil)(tool, in)
+	}
+	if err := Hook("session-start", call, &out); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{HooksMarker, "Fix login", "show_catalogue", "no definitions are loaded"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("missing %q in %s", want, out.String())
+		}
+	}
+}
+
+func TestInstructionsNameTheCatalogueTools(t *testing.T) {
+	for _, hooks := range []bool{true, false} {
+		got := Instructions("", hooks)
+		for _, want := range []string{"show_catalogue", "start_jig", "Guild name"} {
+			if !strings.Contains(got, want) {
+				t.Fatalf("hooks=%v: instructions lack %q: %s", hooks, want, got)
+			}
+		}
 	}
 }
 

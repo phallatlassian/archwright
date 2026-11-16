@@ -130,6 +130,11 @@ func TestLaunchStartsRunnerInNeutralHomeWithSiteHintRehydrationAndInbox(t *testi
 	if !strings.Contains(start, "Fix login") || !strings.Contains(start, "hurry up") {
 		t.Fatalf("session start context: %s", start)
 	}
+	for _, want := range []string{"survey", "investigate", "start_jig"} {
+		if !strings.Contains(start, want) {
+			t.Fatalf("session start context lacks the catalogue entry %q: %s", want, start)
+		}
+	}
 	if le.read("prompt1") != "" || le.read("prompt2") != "" {
 		t.Fatal("the inbox item was delivered at session start and must not repeat")
 	}
