@@ -42,16 +42,20 @@ var forbiddenFlags = []string{
 // forbiddenValues are values refused wherever they appear in an argument.
 var forbiddenValues = []string{"bypasspermissions", "danger-full-access", "dangerouslydisablesandbox"}
 
-// EnvPrefix is the only prefix a run's extra environment may carry (ADR 0018).
-// Anything else could point the runner at other settings or managed keys.
+// EnvPrefix is the only prefix a run's extra environment may carry (ADR 0018),
+// besides EnvGitConfig. Anything else could point the runner at other settings or managed keys.
 const EnvPrefix = "ARCHWRIGHT_"
+
+// EnvGitConfig is the one variable outside EnvPrefix a run may carry: the
+// Works' own git configuration that hides delivered skills from git (ADR 0018).
+const EnvGitConfig = "GIT_CONFIG_GLOBAL"
 
 // CheckRequest refuses a request the never-list forbids. An adapter calls it
 // before spawning anything.
 func CheckRequest(req StartRequest) error {
 	for k := range req.Env {
-		if !strings.HasPrefix(k, EnvPrefix) {
-			return refuse("environment variable %q may not be set; only %s* is allowed", k, EnvPrefix)
+		if !strings.HasPrefix(k, EnvPrefix) && k != EnvGitConfig {
+			return refuse("environment variable %q may not be set; only %s* and %s are allowed", k, EnvPrefix, EnvGitConfig)
 		}
 	}
 	return Check(req.Spawn)
