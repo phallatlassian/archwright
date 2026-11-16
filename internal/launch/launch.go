@@ -7,11 +7,13 @@ package launch
 
 import (
 	"bufio"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"text/template"
 
 	"github.com/phallatlassian/archwright/internal/paths"
 	"github.com/phallatlassian/archwright/internal/runner"
@@ -164,25 +166,26 @@ const HooksMarker = "[archwright hooks active]"
 // InboxMarker opens every inbox delivery.
 const InboxMarker = "[archwright inbox]"
 
-// Instructions is what the Archwright is told about itself at launch.
+//go:embed archwright.md
+var instructionsMD string
+
+var instructionsTmpl = template.Must(template.New("archwright.md").Parse(instructionsMD))
+
+// Instructions is what the Archwright is told about itself at launch: the
+// embedded archwright.md, a Go text/template (like the Guilds' shipped
+// markdown, it ships in the binary and needs nothing on disk) whose only
+// variation is the current Site and whether hooks deliver the inbox.
 func Instructions(site string, hooks bool) string {
 	var b strings.Builder
-	b.WriteString("You are the Archwright: the one agent the developer talks to for the whole software factory. ")
-	b.WriteString("You run in a neutral factory home, never in a repository. You never read or edit a Site's files and never run git in one; work on a Site happens only through Jobs, Plans and Guilds. ")
-	b.WriteString("You keep no state of your own: the Works' store is the memory. Rehydrate now by running `archwright tool list_jobs`, then `archwright tool show_job` with {\"id\": ...} for the Jobs that matter, and `archwright tool show_catalogue` for the Guilds and Jigs that exist. ")
-	b.WriteString("Every Plan step names a Guild from that catalogue: never invent a Guild name, and when a Jig fits the work, start it with start_jig instead of hand-building a Plan. ")
-	b.WriteString("Call every factory tool as `archwright tool NAME` with JSON on stdin and JSON on stdout (create_job, list_jobs, show_job, set_plan, show_plan, show_catalogue, start_jig, read_inbox). ")
-	if site != "" {
-		fmt.Fprintf(&b, "The developer launched you from the registered Site %q: treat it as the current Site, and give create_job {\"site\": %q} for new work unless they say otherwise. ", site, site)
-	} else {
-		b.WriteString("The developer's launch directory is not a registered Site, so there is no current Site; ask which Site a Job belongs to. ")
+	err := instructionsTmpl.Execute(&b, map[string]any{
+		"Site": site, "Hooks": hooks, "HooksMarker": HooksMarker, "InboxMarker": InboxMarker,
+	})
+	if err != nil {
+		panic(err) // the template is embedded and covered by tests
 	}
-	b.WriteString("Your inbox holds the developer's dashboard commands and reports of ones the Works already ran. ")
-	if hooks {
-		fmt.Fprintf(&b, "Hooks deliver it: items arrive as context beginning %q, and the session's start context, which also lists the catalogue, begins %q. ", InboxMarker, HooksMarker)
-		fmt.Fprintf(&b, "If you do not see %q in your start context, hooks are blocked here: run `archwright tool read_inbox` at the start of every turn and act on what it returns.", HooksMarker)
-	} else {
-		b.WriteString("Nothing delivers it for you: run `archwright tool read_inbox` at the start of every turn and act on what it returns.")
+	out := b.String()
+	if i := strings.Index(out, "-->"); strings.HasPrefix(out, "<!--") && i >= 0 {
+		out = out[i+len("-->"):]
 	}
-	return b.String()
+	return strings.TrimSpace(out)
 }
