@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/phallatlassian/archwright/internal/config"
 	"github.com/phallatlassian/archwright/internal/launch"
 	"github.com/phallatlassian/archwright/internal/paths"
 	"github.com/phallatlassian/archwright/internal/spool"
@@ -27,7 +28,7 @@ const hookWait = 10 * time.Second
 // returns once it ends. It runs the developer's own claude or codex, under
 // their own permissions, in the neutral factory home.
 func launchArchwright(dirs paths.Dirs, connect func() (*works.Client, error)) error {
-	choice, err := launch.ReadRunner(dirs)
+	choice, err := config.Runner(dirs)
 	if err != nil {
 		return err
 	}

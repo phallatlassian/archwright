@@ -5,25 +5,24 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/phallatlassian/archwright/internal/config"
 	"github.com/phallatlassian/archwright/internal/defs"
-	"github.com/phallatlassian/archwright/internal/launch"
 	"github.com/phallatlassian/archwright/internal/skills"
 	"github.com/phallatlassian/archwright/internal/store"
-	"github.com/phallatlassian/archwright/internal/works"
 )
 
 // checkConfig reads config.toml and returns the chosen runner for the Archwright.
 func checkConfig(r *collector, d Deps) string {
-	chosen, err := launch.ReadRunner(d.Dirs)
+	chosen, err := config.Runner(d.Dirs)
 	if err != nil {
-		r.fail("config", err.Error(), fmt.Sprintf(`edit %s so it says: runner = "claude" (or "codex")`, launch.ConfigFile(d.Dirs)))
-		return launch.RunnerClaude
+		r.fail("config", err.Error(), fmt.Sprintf(`edit %s so it says: runner = "claude" (or "codex")`, config.File(d.Dirs)))
+		return config.RunnerClaude
 	}
-	if _, err := works.ReadRetention(d.Dirs); err != nil {
-		r.fail("config", err.Error(), fmt.Sprintf("edit %s so it says: retention_days = 30 (or another whole number of days)", launch.ConfigFile(d.Dirs)))
+	if _, err := config.Retention(d.Dirs); err != nil {
+		r.fail("config", err.Error(), fmt.Sprintf("edit %s so it says: retention_days = 30 (or another whole number of days)", config.File(d.Dirs)))
 		return chosen
 	}
-	r.pass("config", "the Archwright runs on %s (%s)", chosen, launch.ConfigFile(d.Dirs))
+	r.pass("config", "the Archwright runs on %s (%s)", chosen, config.File(d.Dirs))
 	return chosen
 }
 

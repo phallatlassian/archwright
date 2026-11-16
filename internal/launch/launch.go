@@ -6,15 +6,14 @@
 package launch
 
 import (
-	"bufio"
 	_ "embed"
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"text/template"
 
+	"github.com/phallatlassian/archwright/internal/config"
 	"github.com/phallatlassian/archwright/internal/paths"
 	"github.com/phallatlassian/archwright/internal/runner"
 	"github.com/phallatlassian/archwright/internal/spool"
@@ -22,8 +21,8 @@ import (
 
 // Runner names the per-install choice.
 const (
-	RunnerClaude = "claude"
-	RunnerCodex  = "codex"
+	RunnerClaude = config.RunnerClaude
+	RunnerCodex  = config.RunnerCodex
 )
 
 // EnvSite carries the Site hint (the registered Site's name) into the session.
@@ -32,42 +31,6 @@ const EnvSite = "ARCHWRIGHT_SITE"
 // Home is the neutral factory home the Archwright runs in: under the state
 // directory, outside every Site, empty of project settings and instructions.
 func Home(d paths.Dirs) string { return filepath.Join(d.State, "home") }
-
-// ConfigFile is the per-install configuration the developer edits.
-func ConfigFile(d paths.Dirs) string { return filepath.Join(d.Config, "config.toml") }
-
-// ReadRunner returns the install's runner choice: `runner = "claude"` or
-// `"codex"` in config.toml, claude when the file or key is absent.
-func ReadRunner(d paths.Dirs) (string, error) {
-	f, err := os.Open(ConfigFile(d))
-	if os.IsNotExist(err) {
-		return RunnerClaude, nil
-	}
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-	choice := RunnerClaude
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if i := strings.Index(line, "#"); i >= 0 {
-			line = strings.TrimSpace(line[:i])
-		}
-		k, v, ok := strings.Cut(line, "=")
-		if !ok || strings.TrimSpace(k) != "runner" {
-			continue
-		}
-		choice = strings.Trim(strings.TrimSpace(v), `"'`)
-	}
-	if err := sc.Err(); err != nil {
-		return "", err
-	}
-	if choice != RunnerClaude && choice != RunnerCodex {
-		return "", fmt.Errorf("%s: runner %q must be %q or %q", ConfigFile(d), choice, RunnerClaude, RunnerCodex)
-	}
-	return choice, nil
-}
 
 // SpoolRoot is where the runner's own sandbox can write (ADR 0018).
 func SpoolRoot(runnerName string, uid int, tmp string) string {

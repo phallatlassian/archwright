@@ -1,54 +1,15 @@
 package works
 
 import (
-	"bufio"
 	"context"
-	"fmt"
 	"log"
-	"os"
-	"strconv"
-	"strings"
 	"time"
 
-	"github.com/phallatlassian/archwright/internal/launch"
-	"github.com/phallatlassian/archwright/internal/paths"
 	"github.com/phallatlassian/archwright/internal/store"
 )
 
 // pruneEvery is how often the running Works prunes (ADR 0017); it also prunes at start.
 const pruneEvery = 24 * time.Hour
-
-// ReadRetention returns how long after a Job ends its raw run content is
-// kept: `retention_days = N` in config.toml, 30 days when the file or key is
-// absent. N must be a whole number of days, 1 or more.
-func ReadRetention(d paths.Dirs) (time.Duration, error) {
-	f, err := os.Open(launch.ConfigFile(d))
-	if os.IsNotExist(err) {
-		return store.DefaultRetention, nil
-	}
-	if err != nil {
-		return 0, err
-	}
-	defer f.Close()
-	keep := store.DefaultRetention
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if i := strings.Index(line, "#"); i >= 0 {
-			line = strings.TrimSpace(line[:i])
-		}
-		k, v, ok := strings.Cut(line, "=")
-		if !ok || strings.TrimSpace(k) != "retention_days" {
-			continue
-		}
-		n, err := strconv.Atoi(strings.Trim(strings.TrimSpace(v), `"'`))
-		if err != nil || n < 1 {
-			return 0, fmt.Errorf("%s: retention_days %q must be a whole number of days, 1 or more", launch.ConfigFile(d), strings.TrimSpace(v))
-		}
-		keep = time.Duration(n) * 24 * time.Hour
-	}
-	return keep, sc.Err()
-}
 
 // SetRetention sets where the retention period comes from; it is read at each
 // prune, so editing config.toml takes effect without a restart.
