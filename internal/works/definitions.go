@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 
 	"github.com/phallatlassian/archwright/internal/defs"
 	"github.com/phallatlassian/archwright/internal/store"
@@ -80,6 +81,26 @@ func instantiateJig(st *store.Store, reg *defs.Registry, jobID, jig string, para
 		return store.Plan{}, fmt.Errorf("%w: %v", errInvalidInput, err)
 	}
 	return st.SetJigPlan(jobID, jig, steps)
+}
+
+// checkStepGuilds rejects a Plan whose step names a Guild that is not loaded,
+// listing the valid names so the Archwright can correct itself. With no
+// definitions loaded there is nothing to check against.
+func checkStepGuilds(reg *defs.Registry, steps []store.Step) error {
+	if reg == nil {
+		return nil
+	}
+	for _, s := range steps {
+		if _, ok := reg.Guild(s.Guild); ok || s.Guild == "" { // an empty guild is the store's to reject
+			continue
+		}
+		var names []string
+		for _, g := range reg.Guilds() {
+			names = append(names, g.Name)
+		}
+		return fmt.Errorf("%w: step %q names unknown guild %q; valid guilds: %s", errInvalidInput, s.ID, s.Guild, strings.Join(names, ", "))
+	}
+	return nil
 }
 
 func showCatalogue(c *callCtx, in json.RawMessage) (any, error) {
