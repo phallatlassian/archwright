@@ -378,6 +378,12 @@ func handback(c *callCtx, in json.RawMessage) (any, error) {
 		return nil, err
 	}
 	c.runs.startGates(c.run.ctx.Job, h.ID)
+	if step := c.run.ctx.Task; step != "" {
+		summary := fmt.Sprintf("Step %s handed back %s by the %s Warden", step, h.Status, c.run.ctx.Guild)
+		if err := c.st.HandBackStep(c.run.ctx.Job, step, h.ID, h.Status, summary, json.RawMessage(body)); err != nil {
+			return nil, err
+		}
+	}
 	// The Warden is told how many flags were taken, not shown them back.
 	return map[string]any{"handback_id": h.ID, "status": h.Status, "flags_recorded": len(flags), "parked": park != "", "gates": store.GateRunRunning}, nil
 }

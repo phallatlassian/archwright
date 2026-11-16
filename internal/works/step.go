@@ -1,0 +1,273 @@
+package works
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log"
+	"strings"
+
+	"github.com/phallatlassian/archwright/internal/store"
+)
+
+// WardenRequest is what a WardenRunner is given to carry out one Plan step: a
+// fresh Warden run that works through the spool in Env and ends by calling
+// handback.
+type WardenRequest struct {
+	Env     RunEnv
+	Job     string
+	Guild   string
+	Step    string
+	Brief   string // the task brief stored with the step, plus a resume note after a restart
+	Resumed bool   // the Works restarted while the step was running
+}
+
+// WardenRunner carries out one task Warden run (ADR 0020). An error, or
+// returning without a handback, fails the step.
+type WardenRunner interface {
+	RunWarden(ctx context.Context, req WardenRequest) error
+}
+
+// ConfigureWarden sets the Runner Plan-step Wardens run on. Without one
+// start_step fails closed.
+func (r *Runs) ConfigureWarden(w WardenRunner) {
+	r.mu.Lock()
+	r.warden = w
+	r.mu.Unlock()
+}
+
+func init() {
+	catalogue["start_step"] = tool{roles: []string{RoleArchwright}, call: startStepTool}
+}
+
+// StepInfo is the answer to start_step.
+type StepInfo struct {
+	Job    string `json:"job"`
+	Step   string `json:"step"`
+	Guild  string `json:"guild"`
+	Status string `json:"status"`
+}
+
+func startStepTool(c *callCtx, in json.RawMessage) (any, error) {
+	var a struct {
+		Job  string `json:"job"`
+		Step string `json:"step"`
+	}
+	if err := decode(in, &a); err != nil {
+		return nil, err
+	}
+	if err := requireField("job", a.Job); err != nil {
+		return nil, err
+	}
+	if err := requireField("step", a.Step); err != nil {
+		return nil, err
+	}
+	sr, err := c.runs.startStep(a.Job, a.Step)
+	if err != nil {
+		return nil, err
+	}
+	return StepInfo{Job: sr.JobID, Step: sr.Step, Guild: sr.Guild, Status: sr.Status}, nil
+}
+
+// jobStartable refuses a step for a Job the developer paused, that is closed
+// or that is parked for the Archwright.
+func jobStartable(job store.Job) error {
+	switch {
+	case job.Outcome != "":
+		return fmt.Errorf("job %q is %s: no more work is started for it: %w", job.ID, job.Outcome, store.ErrConflict)
+	case job.PausedAt != "":
+		return fmt.Errorf("job %q is paused by the developer: no step starts until it is resumed: %w", job.ID, store.ErrConflict)
+	case job.ParkedFor != "":
+		return fmt.Errorf("job %q is parked for the Archwright (%s): decide what to do before starting a step: %w", job.ID, job.ParkedFor, store.ErrConflict)
+	}
+	return nil
+}
+
+// startStep starts a Plan step by summoning a Warden for its Guild (ADR 0020).
+func (r *Runs) startStep(jobID, stepID string) (store.StepRun, error) {
+	job, err := r.st.GetJob(jobID)
+	if err != nil {
+		return store.StepRun{}, err
+	}
+	if err := jobStartable(job); err != nil {
+		return store.StepRun{}, err
+	}
+	r.mu.Lock()
+	warden, src, closed := r.warden, r.guilds, r.bg.Err() != nil
+	reg := r.defs
+	r.mu.Unlock()
+	switch {
+	case closed:
+		return store.StepRun{}, fmt.Errorf("%w: the Works is shutting down", errInvalidInput)
+	case warden == nil:
+		return store.StepRun{}, fmt.Errorf("%w: no Warden runner is configured", errInvalidInput)
+	case src == nil:
+		return store.StepRun{}, fmt.Errorf("%w: no guilds are configured", errInvalidInput)
+	}
+	sr, err := r.st.StartStep(jobID, stepID, func(plan store.Plan, runs []store.StepRun) (string, string, error) {
+		if !plan.Cleared() {
+			return "", "", fmt.Errorf("the Plan of job %q is %s: the developer must approve an ad hoc Plan before a step starts: %w", jobID, plan.Approval, store.ErrConflict)
+		}
+		var step *store.Step
+		for i := range plan.Steps {
+			if plan.Steps[i].ID == stepID {
+				step = &plan.Steps[i]
+			}
+		}
+		if step == nil {
+			return "", "", fmt.Errorf("job %q has no step %q: %w", jobID, stepID, store.ErrNotFound)
+		}
+		done := map[string]bool{}
+		for _, sr := range runs {
+			done[sr.Step] = sr.Status == store.StepHandedBack
+		}
+		var waiting []string
+		for _, b := range step.BlockedBy {
+			if !done[b] {
+				waiting = append(waiting, b)
+			}
+		}
+		if len(waiting) > 0 {
+			return "", "", fmt.Errorf("step %q waits for %s to hand back: %w", stepID, strings.Join(waiting, ", "), store.ErrConflict)
+		}
+		g, err := src(step.Guild)
+		if err != nil {
+			return "", "", err
+		}
+		charter := ""
+		if reg != nil {
+			if dg, ok := reg.Guild(g.Name); ok {
+				charter = dg.Charter
+			}
+		}
+		return g.Name, renderStepBrief(job, *step, g, charter), nil
+	})
+	if err != nil {
+		return store.StepRun{}, err
+	}
+	if err := r.summon(sr, false); err != nil {
+		return store.StepRun{}, err
+	}
+	return sr, nil
+}
+
+// renderStepBrief is the task brief a step's Warden starts from: the step, the
+// Job's request and the Guild's charter and standards.
+func renderStepBrief(job store.Job, step store.Step, g Guild, charter string) string {
+	var w strings.Builder
+	fmt.Fprintf(&w, "# Task: %s\n\nYou are the %s Warden for step %q of job %s. Work only through the Archwright tools: dispatch_wright, inspect_wright, rework_wright, accept_piece and finally handback.\n", step.Title, g.Name, step.ID, job.ID)
+	w.WriteString("\n## The Job's request\n\n" + strings.TrimSpace(job.Title))
+	if d := strings.TrimSpace(job.Description); d != "" {
+		w.WriteString("\n\n" + d)
+	}
+	w.WriteString("\n\n## This step\n\n" + step.Title)
+	if b := strings.TrimSpace(step.Brief); b != "" {
+		w.WriteString("\n\n" + b)
+	}
+	if c := strings.TrimSpace(charter); c != "" {
+		fmt.Fprintf(&w, "\n\n## %s Guild charter\n\n%s", g.Name, c)
+	}
+	if s := strings.TrimSpace(g.Standards); s != "" {
+		fmt.Fprintf(&w, "\n\n## %s Guild standards\n\n%s", g.Name, s)
+	}
+	w.WriteString("\n")
+	return w.String()
+}
+
+// resumeNote tells a re-summoned Warden what the Wrights recorded so far.
+func (r *Runs) resumeNote(sr store.StepRun) string {
+	var w strings.Builder
+	w.WriteString("\n## Resumed\n\nThe Works restarted while this step was running. Wrights still in flight are re-dispatched from their stored briefs; do not dispatch their pieces again. Pieces so far:\n")
+	pieces, err := r.st.Pieces(sr.JobID)
+	n := 0
+	if err == nil {
+		for _, p := range pieces {
+			if p.Guild != sr.Guild {
+				continue
+			}
+			n++
+			state := "no dispatch"
+			if d, err := r.st.LatestDispatch(p.JobID, p.Piece); err == nil {
+				state = "latest dispatch " + d.Status
+			}
+			fmt.Fprintf(&w, "- %s: %s, %s\n", p.Piece, p.Status, state)
+		}
+	}
+	if n == 0 {
+		w.WriteString("- none\n")
+	}
+	return w.String()
+}
+
+// summon starts the Warden run for a running step. A step whose run cannot
+// start is failed, so the Archwright can start it again.
+func (r *Runs) summon(sr store.StepRun, resumed bool) error {
+	r.mu.Lock()
+	warden, root := r.warden, r.spoolRoot
+	r.mu.Unlock()
+	fail := func(cause error) error {
+		if err := r.st.FailStep(sr.JobID, sr.Step, "starting the run: "+cause.Error()); err != nil {
+			log.Printf("step %s/%s: recording the failure: %v", sr.JobID, sr.Step, err)
+		}
+		return cause
+	}
+	brief := sr.Brief
+	if resumed {
+		brief += r.resumeNote(sr)
+	}
+	env, err := r.StartFor(RoleWarden, root, RunContext{Job: sr.JobID, Guild: sr.Guild, Task: sr.Step})
+	if err != nil {
+		return fail(err)
+	}
+	r.mu.Lock()
+	closed := r.bg.Err() != nil
+	if !closed {
+		r.wg.Add(1) // under mu, so Close cannot Wait between the check and the Add
+	}
+	r.mu.Unlock()
+	if closed {
+		r.End(env.Run)
+		return fail(fmt.Errorf("%w: the Works is shutting down", errInvalidInput))
+	}
+	go func() {
+		defer r.wg.Done()
+		runErr := warden.RunWarden(r.bg, WardenRequest{Env: env, Job: sr.JobID, Guild: sr.Guild, Step: sr.Step, Brief: brief, Resumed: resumed})
+		r.End(env.Run)
+		if r.bg.Err() != nil {
+			return // the Works is stopping: the step stays running and its Warden is re-summoned on the next start
+		}
+		msg := "the Warden ended without handing back"
+		if runErr != nil {
+			msg = "the Warden failed: " + runErr.Error()
+		}
+		if err := r.st.FailStep(sr.JobID, sr.Step, msg); err != nil { // a no-op once it handed back
+			log.Printf("step %s/%s: recording the failure: %v", sr.JobID, sr.Step, err)
+		}
+	}()
+	return nil
+}
+
+// resumeSteps re-summons a Warden for every step a stopped Works left running (ADR 0004).
+func (r *Runs) resumeSteps() error {
+	running, err := r.st.RunningSteps()
+	if err != nil {
+		return err
+	}
+	r.mu.Lock()
+	warden := r.warden
+	r.mu.Unlock()
+	for _, sr := range running {
+		job, err := r.st.GetJob(sr.JobID)
+		if err != nil || job.Outcome != "" {
+			continue // a closed Job's step has no Warden to resume
+		}
+		if warden == nil {
+			log.Printf("step %s/%s: running, but no Warden runner is configured to resume it", sr.JobID, sr.Step)
+			continue
+		}
+		if err := r.summon(sr, true); err != nil {
+			log.Printf("step %s/%s: resuming: %v", sr.JobID, sr.Step, err)
+		}
+	}
+	return nil
+}

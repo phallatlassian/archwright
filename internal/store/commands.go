@@ -259,6 +259,7 @@ func hasActiveRun(q queryer, jobID string) (bool, error) {
 	err := q.QueryRow(`SELECT
 		(SELECT COUNT(*) FROM dispatches WHERE job_id = ?1 AND status IN (?2, ?3)) +
 		(SELECT COUNT(*) FROM reviews WHERE job_id = ?1 AND status = 'running') +
+		(SELECT COUNT(*) FROM steps WHERE job_id = ?1 AND status = 'running') +
 		(SELECT COUNT(*) FROM gate_runs WHERE job_id = ?1 AND status = 'running')`, jobID, DispatchQueued, DispatchRunning).Scan(&n)
 	return n > 0, err
 }
@@ -340,7 +341,7 @@ func (s *Store) DeleteJob(id string) error {
 	if _, err := tx.Exec("DELETE FROM run_events WHERE run_id IN (SELECT run_id FROM run_records WHERE job_id = ?)", id); err != nil {
 		return fmt.Errorf("deleting run_events: %w", err)
 	}
-	for _, table := range []string{"run_records", "gate_runs", "flags", "reviews", "handbacks", "asks", "dispatches", "pieces", "plans", "needs_you", "worktrees", "events"} {
+	for _, table := range []string{"run_records", "gate_runs", "flags", "steps", "reviews", "handbacks", "asks", "dispatches", "pieces", "plans", "needs_you", "worktrees", "events"} {
 		if _, err := tx.Exec("DELETE FROM "+table+" WHERE job_id = ?", id); err != nil {
 			return fmt.Errorf("deleting %s: %w", table, err)
 		}

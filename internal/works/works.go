@@ -113,6 +113,7 @@ func ServeWith(ctx context.Context, d paths.Dirs, ready chan<- struct{}, opts Op
 		fake.WithDelay(d) // lets a live check kill the Works while a Wright is in flight
 	}
 	runs.Configure(GuildsFromRegistry(reg, DefaultProfiles()), fake)
+	runs.ConfigureWarden(NewFakeWarden()) // likewise for the Wardens of started Plan steps
 	runs.SetLimits(LimitsFromEnv(os.Getenv))
 	runs.SetRetention(func() (time.Duration, error) { return config.Retention(d) })
 	if err := runs.Resume(); err != nil {

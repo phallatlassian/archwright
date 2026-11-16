@@ -145,7 +145,7 @@ func (r *Runs) Resume() error {
 			log.Printf("dispatch %s: resuming: %v", d.ID, err)
 		}
 	}
-	return nil
+	return r.resumeSteps()
 }
 
 // SetLimits replaces the caps; a zero field keeps its default.
