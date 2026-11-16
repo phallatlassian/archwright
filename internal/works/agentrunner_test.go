@@ -28,6 +28,7 @@ type agentRig struct {
 var agentGuilds = map[string]Guild{
 	"masonry":   {Name: "masonry", Binding: defs.Binding{Guild: "masonry", Runner: "claude", Access: defs.ReadWrite}},
 	"carvers":   {Name: "carvers", Binding: defs.Binding{Guild: "carvers", Runner: "codex", Access: defs.ReadWrite}},
+	"surveyors": {Name: "surveyors", Binding: defs.Binding{Guild: "surveyors", Runner: "claude", Access: defs.ReadOnly}},
 	"lockedout": {Name: "lockedout", Binding: defs.Binding{Guild: "lockedout", Runner: "codex", Access: defs.ReadWrite, DeniedTools: []string{"Bash"}}},
 }
 
@@ -73,7 +74,10 @@ func (g *agentRig) file(name string) string {
 // agentCalls plays the agent's tool calls from outside the stub CLI: once the
 // stub is up and has recorded its environment, it calls report_result through
 // the spool with it, then lets the stub exit.
-func (g *agentRig) agentReports(result string) {
+func (g *agentRig) agentReports(result string) { g.agentCalls("report_result", result) }
+
+// agentCalls is agentReports for any tool the agent's role has.
+func (g *agentRig) agentCalls(tool, input string) {
 	waitFor := filepath.Join(g.dir, "release")
 	g.t.Setenv("ARCHWRIGHT_STUB_WAITFOR", waitFor)
 	go func() {
@@ -94,7 +98,7 @@ func (g *agentRig) agentReports(result string) {
 		if env.Run == "" {
 			return
 		}
-		spool.Call(context.Background(), env, "rep-1", "report_result", json.RawMessage(result), 5*time.Second)
+		spool.Call(context.Background(), env, "rep-1", tool, json.RawMessage(input), 5*time.Second)
 	}()
 }
 

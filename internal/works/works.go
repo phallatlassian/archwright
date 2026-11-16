@@ -19,6 +19,7 @@ import (
 	"github.com/phallatlassian/archwright/internal/defs"
 	"github.com/phallatlassian/archwright/internal/paths"
 	"github.com/phallatlassian/archwright/internal/sites"
+	"github.com/phallatlassian/archwright/internal/skills"
 	"github.com/phallatlassian/archwright/internal/store"
 )
 
@@ -109,7 +110,12 @@ func ServeWith(ctx context.Context, d paths.Dirs, ready chan<- struct{}, opts Op
 	runs.UseDefinitions(reg)
 	guilds := GuildsFromRegistry(reg, DefaultProfiles())
 	runs.Configure(guilds, WrightRunnerFrom(os.Getenv, guilds, st))
-	runs.ConfigureWarden(NewFakeWarden()) // likewise for the Wardens of started Plan steps
+	warden, reviewer := WardenRunnersFrom(os.Getenv, guilds, st)
+	runs.ConfigureWarden(warden)
+	if reviewer != nil {
+		runs.ConfigureReview(reviewer)
+	}
+	runs.UseSkills(SkillsDelivery{Catalogue: skills.Vendored(), RunDir: d.RunDir})
 	runs.SetLimits(LimitsFromEnv(os.Getenv))
 	runs.SetRetention(func() (time.Duration, error) { return config.Retention(d) })
 	if err := runs.Resume(); err != nil {

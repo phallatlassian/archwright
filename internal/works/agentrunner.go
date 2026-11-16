@@ -10,9 +10,9 @@ import (
 	"github.com/phallatlassian/archwright/internal/runner"
 )
 
-// AgentRunner is the Runner that runs a Wright as a real agent process on the
-// vendor CLI its Guild is bound to (ADR 0003): claude or codex, picked per
-// dispatch, in the Wright's own worktree. The agent reports through the spool
+// AgentRunner is the Runner that runs a Wright, Warden or reviewer as a real
+// agent process on the vendor CLI its Guild is bound to (ADR 0003): claude or
+// codex, picked per run, in the worktree the run is given. The agent reports through the spool
 // tools like any Wright; this only starts it, mirrors its events to the
 // dashboard and turns how it ended into the error the dispatch needs.
 type AgentRunner struct {
@@ -37,7 +37,7 @@ func (a *AgentRunner) Run(ctx context.Context, req RunRequest) error {
 		return fmt.Errorf("guild %q is bound to runner %q, which is not available", g.Name, g.Binding.Runner)
 	}
 	if req.Worktree == "" {
-		return fmt.Errorf("the Wright has no worktree to work in")
+		return fmt.Errorf("the run has no worktree to work in")
 	}
 	spawn, err := spawnFor(g.Binding.Runner, g)
 	if err != nil {
