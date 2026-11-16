@@ -104,15 +104,11 @@ func ServeWith(ctx context.Context, d paths.Dirs, ready chan<- struct{}, opts Op
 	defer runs.Close()
 	runs.UseSites(sm)
 	runs.SetPreflight(opts.Preflight)
-	// Until the vendor adapters land, dispatched Wrights run on the fake runner.
 	reg := defs.New(defs.Shipped(), d.Config)
 	ReloadDefinitions(reg)
 	runs.UseDefinitions(reg)
-	fake := NewFakeRunner(nil)
-	if d, err := time.ParseDuration(os.Getenv("ARCHWRIGHT_FAKE_RUN_DELAY")); err == nil {
-		fake.WithDelay(d) // lets a live check kill the Works while a Wright is in flight
-	}
-	runs.Configure(GuildsFromRegistry(reg, DefaultProfiles()), fake)
+	guilds := GuildsFromRegistry(reg, DefaultProfiles())
+	runs.Configure(guilds, WrightRunnerFrom(os.Getenv, guilds, st))
 	runs.ConfigureWarden(NewFakeWarden()) // likewise for the Wardens of started Plan steps
 	runs.SetLimits(LimitsFromEnv(os.Getenv))
 	runs.SetRetention(func() (time.Duration, error) { return config.Retention(d) })

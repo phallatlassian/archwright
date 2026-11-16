@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 
 	"github.com/phallatlassian/archwright/internal/defs"
 	"github.com/phallatlassian/archwright/internal/store"
@@ -53,8 +54,10 @@ func GuildsFromRegistry(reg *defs.Registry, profiles map[string]defs.Profile) Gu
 type RunRequest struct {
 	Env        RunEnv // the Wright's run: it reports through the spool in Env
 	Job        string
+	Guild      string // the Guild whose binding picks the runner
 	Piece      string
 	DispatchID string
+	Worktree   string            // the Wright's own worktree; empty when the Works has no Sites
 	Brief      string            // the rendered brief, Guild standards included
 	ExtraEnv   map[string]string // further variables for the runner process, such as GIT_CONFIG_GLOBAL for delivered skills
 	Trace      Trace             // where a runner reports its timeline and usage for the dashboard
@@ -553,9 +556,13 @@ func (r *Runs) start(d store.Dispatch) error {
 	go func() {
 		defer r.wg.Done()
 		defer cancel()
-		extra, runErr := r.deliverSkillsFor(d, env.Run)
+		wt, runErr := r.wrightWorktree(d)
+		var extra map[string]string
 		if runErr == nil {
-			runErr = runner.Run(ctx, RunRequest{Env: env, Job: d.JobID, Piece: d.Piece, DispatchID: d.ID, Brief: d.Rendered, ExtraEnv: extra, Trace: trace})
+			extra, runErr = r.deliverSkillsFor(d, env.Run, wt)
+		}
+		if runErr == nil {
+			runErr = runner.Run(ctx, RunRequest{Env: env, Job: d.JobID, Guild: d.Guild, Piece: d.Piece, DispatchID: d.ID, Worktree: wt, Brief: d.Rendered, ExtraEnv: extra, Trace: trace})
 		}
 		unreported := false
 		if cur, err := r.st.GetDispatch(d.ID); err == nil && cur.Status == store.DispatchRunning {
@@ -564,6 +571,9 @@ func (r *Runs) start(d store.Dispatch) error {
 		r.End(env.Run)
 		r.mu.Lock()
 		wasCancelled := r.cancelled[d.ID]
+		if _, limited := asRateLimit(runErr); !limited || !unreported {
+			delete(r.wrightWts, d.ID) // only a requeued dispatch runs in it again
+		}
 		delete(r.cancels, d.ID)
 		delete(r.cancelled, d.ID)
 		r.mu.Unlock()
@@ -596,4 +606,26 @@ func (r *Runs) start(d store.Dispatch) error {
 		r.sched.finished(d.ID, runErr == nil)
 	}()
 	return nil
+}
+
+// wrightWorktree gives a dispatch's Wright its own worktree on its own branch
+// from the Job's integration branch (ADR 0008). Without Sites there is none.
+func (r *Runs) wrightWorktree(d store.Dispatch) (string, error) {
+	r.mu.Lock()
+	sm, kept := r.sites, r.wrightWts[d.ID]
+	r.mu.Unlock()
+	if sm == nil {
+		return "", nil
+	}
+	if _, err := os.Stat(kept); kept != "" && err == nil {
+		return kept, nil // requeued after a rate limit: the same worktree, not another
+	}
+	wt, err := sm.CreateWorktree(d.JobID, store.KindWright, "")
+	if err != nil {
+		return "", fmt.Errorf("creating the Wright's worktree: %w", err)
+	}
+	r.mu.Lock()
+	r.wrightWts[d.ID] = wt.Path
+	r.mu.Unlock()
+	return wt.Path, nil
 }

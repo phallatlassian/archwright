@@ -170,6 +170,7 @@ func (p *codexParser) complete(l codexLine, raw json.RawMessage) []Event {
 
 func (p *codexParser) fail(raw json.RawMessage) Event {
 	p.result = &Result{Status: StatusFailed, Final: p.lastMessage, Error: p.failure, Denials: p.denials}
+	p.result.RateLimited, p.result.RetryAfter = rateLimitText(p.failure)
 	return Event{Kind: KindResult, Text: p.failure, IsError: true, Raw: raw}
 }
 

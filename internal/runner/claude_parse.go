@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // claudeParser normalizes `claude -p --output-format stream-json` lines into
@@ -14,6 +15,9 @@ type claudeParser struct {
 	seen    map[string]bool // denials already emitted, by tool use id
 	result  *Result
 	sawInit bool
+
+	limited bool          // a rate_limit_event reported the run rejected
+	resets  time.Duration // how long until the limit resets, if it said
 }
 
 type claudeLine struct {
@@ -78,6 +82,8 @@ func (p *claudeParser) feed(line []byte) []Event {
 		return p.blocks(l, raw)
 	case "result":
 		return p.finish(l, raw)
+	case "rate_limit_event":
+		p.rateLimitEvent(line)
 	}
 	return []Event{{Kind: KindOther, Raw: raw}}
 }
@@ -145,6 +151,15 @@ func (p *claudeParser) finish(l claudeLine, raw json.RawMessage) []Event {
 			res.Error = l.Subtype + ": " + l.Result
 		}
 	}
+	if res.Status == StatusFailed {
+		res.RateLimited, res.RetryAfter = p.limited, p.resets
+		if hit, wait := rateLimitText(res.Error); hit {
+			res.RateLimited = true
+			if res.RetryAfter == 0 {
+				res.RetryAfter = wait
+			}
+		}
+	}
 	p.result = &res
 	return append(out, Event{Kind: KindResult, Text: l.Result, IsError: res.Status == StatusFailed, Raw: raw})
 }
@@ -198,4 +213,22 @@ func (p *claudeParser) violation() string {
 		return fmt.Sprintf("session reported permission mode %q, which the never-list refuses", p.mode)
 	}
 	return ""
+}
+
+// rateLimitEvent notes a rate_limit_event the vendor rejected the run with;
+// an allowed one is ordinary status.
+func (p *claudeParser) rateLimitEvent(line []byte) {
+	var e struct {
+		Info struct {
+			Status   string `json:"status"`
+			ResetsAt int64  `json:"resetsAt"`
+		} `json:"rate_limit_info"`
+	}
+	if json.Unmarshal(line, &e) != nil || e.Info.Status != "rejected" {
+		return
+	}
+	p.limited = true
+	if e.Info.ResetsAt > 0 {
+		p.resets = untilEpoch(e.Info.ResetsAt)
+	}
 }

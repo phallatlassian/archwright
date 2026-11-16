@@ -276,7 +276,7 @@ func TestCheckRefusesForeignEnvironment(t *testing.T) {
 			t.Errorf("env %s: %v", k, err)
 		}
 	}
-	if err := CheckRequest(StartRequest{Env: map[string]string{"ARCHWRIGHT_RUN": "r"}}); err != nil {
+	if err := CheckRequest(StartRequest{Env: map[string]string{"ARCHWRIGHT_RUN": "r", "GIT_CONFIG_GLOBAL": "/run/gitconfig"}}); err != nil {
 		t.Error(err)
 	}
 }

@@ -27,20 +27,22 @@ func (r *Runs) UseSkills(s SkillsDelivery) {
 // deliverSkillsFor gives a dispatch's Wright its Guild's skills before the
 // run starts and returns the extra environment the runner needs. A failure,
 // including a collision with a skill the Site tracks, fails the dispatch.
-func (r *Runs) deliverSkillsFor(d store.Dispatch, run string) (map[string]string, error) {
+func (r *Runs) deliverSkillsFor(d store.Dispatch, run, wt string) (map[string]string, error) {
 	r.mu.Lock()
 	sd, reg := r.skills, r.defs
 	r.mu.Unlock()
-	if sd == nil || sd.Catalogue == nil || sd.Worktree == nil || sd.RunDir == nil || reg == nil {
+	if sd == nil || sd.Catalogue == nil || (sd.Worktree == nil && wt == "") || sd.RunDir == nil || reg == nil {
 		return nil, nil
 	}
 	g, ok := reg.Guild(d.Guild)
 	if !ok {
 		return nil, fmt.Errorf("delivering skills: no guild %q", d.Guild)
 	}
-	wt, err := sd.Worktree(d)
-	if err != nil {
-		return nil, fmt.Errorf("delivering skills: %w", err)
+	if wt == "" { // the Wright's own worktree, if it has one
+		var err error
+		if wt, err = sd.Worktree(d); err != nil {
+			return nil, fmt.Errorf("delivering skills: %w", err)
+		}
 	}
 	return DeliverSkills(sd.Catalogue, g, sd.Runner, wt, sd.RunDir(run))
 }

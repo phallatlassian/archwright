@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"sync"
+	"time"
 )
 
 // Kind is a normalized event kind. The set is deliberately small; anything an
@@ -81,6 +82,11 @@ type Result struct {
 	Usage      Usage           `json:"usage"`
 	Denials    []Denial        `json:"denials,omitempty"`
 	Error      string          `json:"error,omitempty"`
+	// RateLimited marks a failure that is the vendor refusing the run for rate
+	// or usage limits; the caller pauses the runner and retries rather than
+	// failing the work. RetryAfter is the vendor's hint, zero if it gave none.
+	RateLimited bool          `json:"rate_limited,omitempty"`
+	RetryAfter  time.Duration `json:"retry_after,omitempty"`
 }
 
 // Capabilities are the flags an adapter reports; a Guild may require some
