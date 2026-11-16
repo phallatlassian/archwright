@@ -205,8 +205,12 @@ func (s *Store) GateChanges(status string) ([]GateChange, error) {
 
 // ApproveGateChange applies a pending change to the Site's gates and rejects
 // the Site's other pending changes, which were proposed against the old gates.
-// It is the only way a Site's gates change after registration.
-func (s *Store) ApproveGateChange(id string) (Site, error) {
+// It is the only way a Site's gates change after registration, and it needs
+// the developer's approval credential, which an API token alone does not carry.
+func (s *Store) ApproveGateChange(id, credential string) (Site, error) {
+	if err := s.CheckApprovalCredential(credential); err != nil {
+		return Site{}, err
+	}
 	return s.decideGateChange(id, ChangeApproved)
 }
 

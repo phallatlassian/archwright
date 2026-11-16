@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -57,6 +58,10 @@ func loadMigrations() ([]migration, error) {
 type Store struct {
 	db  *sql.DB
 	now func() time.Time
+
+	approvalMu          sync.Mutex
+	approvalFailures    int
+	approvalLockedUntil time.Time
 }
 
 // SchemaVersion is the schema version this binary writes.

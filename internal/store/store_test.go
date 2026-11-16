@@ -175,6 +175,9 @@ func TestMigratesForwardAfterBackup(t *testing.T) {
 
 func TestGateChangesApplyOnlyOnApproval(t *testing.T) {
 	st, _ := open(t)
+	if err := st.SetApprovalCredential("pw", ""); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := st.AddSite(Site{Name: "s", URL: "https://git.example.com/o/s.git", ClonePath: "/s", BaseBranch: "main", ConcurrencyCap: 1, Gates: Gates{Test: "a"}}); err != nil {
 		t.Fatal(err)
 	}
@@ -191,18 +194,18 @@ func TestGateChangesApplyOnlyOnApproval(t *testing.T) {
 	if got, _ := st.GetSite("s"); got.Gates.Test != "a" {
 		t.Fatal("proposal applied")
 	}
-	got, err := st.ApproveGateChange(c.ID)
+	got, err := st.ApproveGateChange(c.ID, "pw")
 	if err != nil || got.Gates.Test != "b" {
 		t.Fatalf("%+v %v", got, err)
 	}
-	if _, err := st.ApproveGateChange(c.ID); !errors.Is(err, ErrConflict) {
+	if _, err := st.ApproveGateChange(c.ID, "pw"); !errors.Is(err, ErrConflict) {
 		t.Fatalf("approved twice: %v", err)
 	}
 	r, _ := st.ProposeGates("s", Gates{Test: "c"})
 	if err := st.RejectGateChange(r.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.ApproveGateChange(r.ID); !errors.Is(err, ErrConflict) {
+	if _, err := st.ApproveGateChange(r.ID, "pw"); !errors.Is(err, ErrConflict) {
 		t.Fatalf("approved a rejected change: %v", err)
 	}
 	if got, _ := st.GetSite("s"); got.Gates.Test != "b" {
@@ -212,15 +215,18 @@ func TestGateChangesApplyOnlyOnApproval(t *testing.T) {
 
 func TestApprovingGateChangeRejectsStalePendingChanges(t *testing.T) {
 	st, _ := open(t)
+	if err := st.SetApprovalCredential("pw", ""); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := st.AddSite(Site{Name: "s", URL: "https://git.example.com/o/s.git", ClonePath: "/s", BaseBranch: "main", ConcurrencyCap: 1, Gates: Gates{Test: "a"}}); err != nil {
 		t.Fatal(err)
 	}
 	c1, _ := st.ProposeGates("s", Gates{Lint: "x", Test: "a"})
 	c2, _ := st.ProposeGates("s", Gates{Lint: "", Test: "y"})
-	if _, err := st.ApproveGateChange(c1.ID); err != nil {
+	if _, err := st.ApproveGateChange(c1.ID, "pw"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.ApproveGateChange(c2.ID); !errors.Is(err, ErrConflict) {
+	if _, err := st.ApproveGateChange(c2.ID, "pw"); !errors.Is(err, ErrConflict) {
 		t.Fatalf("approved a stale change: %v", err)
 	}
 	if got, _ := st.GetSite("s"); got.Gates.Lint != "x" || got.Gates.Test != "a" {
@@ -346,5 +352,72 @@ func TestInterruptDispatchesRequeuesRunningFromStoredBrief(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("no wright.interrupted event: %+v", evs)
+	}
+}
+
+func TestGateChangeApprovalNeedsTheDevelopersCredential(t *testing.T) {
+	st, _ := open(t)
+	if _, err := st.AddSite(Site{Name: "s", URL: "https://git.example.com/o/s.git", ClonePath: "/s", BaseBranch: "main", ConcurrencyCap: 1, Gates: Gates{Test: "a"}}); err != nil {
+		t.Fatal(err)
+	}
+	c, _ := st.ProposeGates("s", Gates{Test: "b"})
+	if _, err := st.ApproveGateChange(c.ID, "anything"); !errors.Is(err, ErrApprovalRefused) {
+		t.Fatalf("approved with no credential set: %v", err)
+	}
+	if err := st.SetApprovalCredential("", ""); err == nil {
+		t.Fatal("set an empty credential")
+	}
+	if err := st.SetApprovalCredential("pw", ""); err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []string{"", "nope"} {
+		if _, err := st.ApproveGateChange(c.ID, bad); !errors.Is(err, ErrApprovalRefused) {
+			t.Fatalf("approved with %q: %v", bad, err)
+		}
+	}
+	if got, _ := st.GetSite("s"); got.Gates.Test != "a" {
+		t.Fatal("a refused approval changed the gates")
+	}
+	// the credential changes only with the current one
+	if err := st.SetApprovalCredential("evil", ""); !errors.Is(err, ErrApprovalRefused) {
+		t.Fatalf("replaced without the current credential: %v", err)
+	}
+	if err := st.SetApprovalCredential("pw2", "pw"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.ApproveGateChange(c.ID, "pw"); !errors.Is(err, ErrApprovalRefused) {
+		t.Fatalf("the old credential still works: %v", err)
+	}
+	if got, err := st.ApproveGateChange(c.ID, "pw2"); err != nil || got.Gates.Test != "b" {
+		t.Fatalf("%+v %v", got, err)
+	}
+}
+
+func TestWrongApprovalCredentialsAreAuditedAndLockOut(t *testing.T) {
+	st, _ := open(t)
+	now := time.Now()
+	st.now = func() time.Time { return now }
+	if _, err := st.AddSite(Site{Name: "s", URL: "https://git.example.com/o/s.git", ClonePath: "/s", BaseBranch: "main", ConcurrencyCap: 1, Gates: Gates{Test: "a"}}); err != nil {
+		t.Fatal(err)
+	}
+	c, _ := st.ProposeGates("s", Gates{Test: "b"})
+	if err := st.SetApprovalCredential("pw", ""); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < approvalMaxFailures; i++ {
+		if _, err := st.ApproveGateChange(c.ID, "bad"); !errors.Is(err, ErrApprovalRefused) {
+			t.Fatal(err)
+		}
+	}
+	var n int
+	if err := st.db.QueryRow("SELECT COUNT(*) FROM events WHERE type = 'approval.attempt_failed'").Scan(&n); err != nil || n != approvalMaxFailures {
+		t.Fatalf("%d failed-attempt events, %v", n, err)
+	}
+	if _, err := st.ApproveGateChange(c.ID, "pw"); !errors.Is(err, ErrApprovalRefused) {
+		t.Fatalf("the right credential worked while locked out: %v", err)
+	}
+	now = now.Add(approvalLockout + time.Second)
+	if got, err := st.ApproveGateChange(c.ID, "pw"); err != nil || got.Gates.Test != "b" {
+		t.Fatalf("%+v %v", got, err)
 	}
 }

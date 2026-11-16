@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -39,8 +40,10 @@ const usage = `usage: archwright [command]
                                            propose new gate commands (unset ones stay); takes effect only once approved
   site gate-changes [--status pending|approved|rejected]
                                            list proposed gate changes
-  site gate-approve ID                     approve a proposed change (asks you to confirm at a terminal)
+  site gate-approve ID                     approve a proposed change (confirms at a terminal and asks for your approval credential)
   site gate-reject ID                      reject a proposed change
+  approval set                             set (or change) your approval credential, a secret only you know, at a terminal;
+                                           gate changes cannot be approved until you have set one
   site list                                list Sites
   site remove NAME                         unregister a Site and delete its clone (Job history is kept)
   site resolve DIR                         show the Site whose remote is DIR's git origin; refused if unregistered
@@ -300,13 +303,51 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 			if answer != "y" && answer != "Y" && answer != "yes" {
 				return errors.New("not approved")
 			}
+			credential, err := promptSecret(stdin, stdout, "Approval credential: ")
+			if err != nil {
+				return err
+			}
 			var site json.RawMessage
-			if err := c.Do("POST", "/gate-changes/"+url.PathEscape(id)+"/approve", nil, &site); err != nil {
+			if err := c.Do("POST", "/gate-changes/"+url.PathEscape(id)+"/approve", map[string]string{"credential": credential}, &site); err != nil {
 				return err
 			}
 			return emit(site)
 		}
 		return fmt.Errorf("no pending gate change %q", id)
+	case "approval set":
+		if !isTerminal(stdin) {
+			return errors.New("setting the approval credential needs a developer at a terminal; run this yourself, not from a script or agent")
+		}
+		st, err := store.Open(dirs.Database())
+		if err != nil {
+			return err
+		}
+		defer st.Close()
+		set, err := st.HasApprovalCredential()
+		if err != nil {
+			return err
+		}
+		var current string
+		if set {
+			if current, err = promptSecret(stdin, stdout, "Current approval credential: "); err != nil {
+				return err
+			}
+		}
+		credential, err := promptSecret(stdin, stdout, "New approval credential: ")
+		if err != nil {
+			return err
+		}
+		again, err := promptSecret(stdin, stdout, "Repeat it: ")
+		if err != nil {
+			return err
+		}
+		if again != credential {
+			return errors.New("the two entries differ; nothing changed")
+		}
+		if err := st.SetApprovalCredential(credential, current); err != nil {
+			return err
+		}
+		return emit(map[string]bool{"ok": true})
 	case "worktree create":
 		id, err := arg(args, 2)
 		if err != nil {
@@ -471,6 +512,61 @@ func isTerminal(r io.Reader) bool {
 	}
 	fi, err := f.Stat()
 	return err == nil && fi.Mode()&os.ModeCharDevice != 0 && fi.Mode()&os.ModeDevice != 0
+}
+
+// promptSecret reads one line from the terminal on stdin with echo off, so the
+// credential never appears on screen or in scrollback.
+func promptSecret(stdin io.Reader, stdout io.Writer, prompt string) (string, error) {
+	f, ok := stdin.(*os.File)
+	if !ok {
+		return "", errors.New("the approval credential must be typed at a terminal")
+	}
+	off := exec.Command("stty", "-echo")
+	off.Stdin = f
+	if err := off.Run(); err != nil {
+		return "", fmt.Errorf("cannot turn off terminal echo: %w", err)
+	}
+	restore := func() {
+		on := exec.Command("stty", "echo")
+		on.Stdin = f
+		_ = on.Run()
+		_, _ = fmt.Fprintln(stdout)
+	}
+	interrupted := make(chan os.Signal, 1)
+	signal.Notify(interrupted, os.Interrupt, syscall.SIGTERM)
+	done := make(chan struct{})
+	defer func() {
+		signal.Stop(interrupted)
+		close(done)
+		restore()
+	}()
+	go func() {
+		select {
+		case <-interrupted:
+			restore()
+			os.Exit(130)
+		case <-done:
+		}
+	}()
+	_, _ = fmt.Fprint(stdout, prompt)
+	var line []byte
+	var b [1]byte
+	for {
+		n, err := f.Read(b[:])
+		if n == 1 {
+			if b[0] == '\n' {
+				break
+			}
+			line = append(line, b[0])
+		}
+		if err != nil {
+			if err == io.EOF && len(line) > 0 {
+				break
+			}
+			return "", err
+		}
+	}
+	return strings.TrimRight(string(line), "\r"), nil
 }
 
 // absPath makes a CLI path absolute against the working directory; "" stays "".

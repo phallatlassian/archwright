@@ -172,7 +172,10 @@ func TestGateCommandChangeNeedsApprovalAndAppliesToLaterHandbacks(t *testing.T) 
 	if run := g.handBack("p"); run.Results[2].Command != "echo old" {
 		t.Fatalf("a pending proposal changed what runs: %+v", run.Results[2])
 	}
-	if _, err := g.st.ApproveGateChange(c.ID); err != nil {
+	if err := g.st.SetApprovalCredential("pw", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.st.ApproveGateChange(c.ID, "pw"); err != nil {
 		t.Fatal(err)
 	}
 	g.ok(g.warden, "handback", handbackJSON("done", `"again"`, ""), nil)
@@ -243,13 +246,41 @@ func TestGateChangesOverAPIRequireApproval(t *testing.T) {
 	if err := c.Do("GET", "/gate-changes?status=pending", nil, &pending); err != nil || len(pending) != 1 {
 		t.Fatalf("%+v %v", pending, err)
 	}
-	if err := c.Do("POST", "/gate-changes/"+ch.ID+"/approve", nil, nil); err != nil {
+	// the token alone is not the developer: no credential set, none given, a wrong one
+	approve := func(id, credential string) error {
+		return c.Do("POST", "/gate-changes/"+id+"/approve", map[string]string{"credential": credential}, nil)
+	}
+	if err := approve(ch.ID, "pw"); err == nil || !strings.Contains(err.Error(), "archwright approval set") {
+		t.Fatalf("approved with no credential set: %v", err)
+	}
+	for _, m := range []string{"POST", "GET"} {
+		if err := c.Do(m, "/approval-credential", map[string]string{"credential": "pw"}, nil); err == nil {
+			t.Fatalf("%s /approval-credential exists: the token alone could set the credential", m)
+		}
+	}
+	cli, err := store.Open(d.Database())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cli.Close()
+	if err := cli.SetApprovalCredential("pw", ""); err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []error{c.Do("POST", "/gate-changes/"+ch.ID+"/approve", nil, nil), approve(ch.ID, ""), approve(ch.ID, "evil")} {
+		if bad == nil {
+			t.Fatal("approved with the token alone")
+		}
+	}
+	if site().Gates.Test != "t" {
+		t.Fatal("a refused approval changed the gates")
+	}
+	if err := approve(ch.ID, "pw"); err != nil {
 		t.Fatal(err)
 	}
 	if site().Gates.Test != "t2" {
 		t.Fatalf("%+v", site().Gates)
 	}
-	if err := c.Do("POST", "/gate-changes/"+ch.ID+"/approve", nil, nil); err == nil {
+	if err := approve(ch.ID, "pw"); err == nil {
 		t.Fatal("approved twice")
 	}
 	var rej store.GateChange
@@ -259,7 +290,7 @@ func TestGateChangesOverAPIRequireApproval(t *testing.T) {
 	if err := c.Do("POST", "/gate-changes/"+rej.ID+"/reject", nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Do("POST", "/gate-changes/"+rej.ID+"/approve", nil, nil); err == nil || site().Gates.Lint != "lint" {
+	if err := approve(rej.ID, "pw"); err == nil || site().Gates.Lint != "lint" {
 		t.Fatal("a rejected change was applied")
 	}
 }

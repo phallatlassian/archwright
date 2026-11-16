@@ -260,6 +260,9 @@ func TestGateChangesNeedApprovalAtATerminal(t *testing.T) {
 	if out, err := s.cmd("y\n", "site", "gate-approve", ch.ID); err == nil || !strings.Contains(out, "terminal") {
 		t.Fatalf("approved without a terminal: %v\n%s", err, out)
 	}
+	if out, err := s.cmd("pw\npw\n", "approval", "set"); err == nil || !strings.Contains(out, "terminal") {
+		t.Fatalf("set the approval credential without a terminal: %v\n%s", err, out)
+	}
 	if out := s.run("site", "list"); !strings.Contains(out, "go test ./...") || strings.Contains(out, `"test": "true"`) {
 		t.Fatalf("gates changed:\n%s", out)
 	}
