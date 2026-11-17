@@ -176,7 +176,7 @@ func (r *Runs) startReview(jobID string) (store.Review, error) {
 		return store.Review{}, fmt.Errorf("%w: the Job has no Site to review", errInvalidInput)
 	}
 	r.mu.Lock()
-	reviewer, sm, src, root, closed := r.reviewer, r.sites, r.guilds, r.spoolRoot, r.bg.Err() != nil
+	reviewer, sm, src, closed := r.reviewer, r.sites, r.guilds, r.bg.Err() != nil
 	r.mu.Unlock()
 	switch {
 	case closed:
@@ -237,6 +237,11 @@ func (r *Runs) startReview(jobID string) (store.Review, error) {
 		return store.Review{}, err
 	}
 	brief := rev.Brief
+	root, err := r.spoolRootFor(g.Name)
+	if err != nil {
+		r.errorReview(rev.ID, "starting the run: "+err.Error())
+		return store.Review{}, err
+	}
 	env, err := r.StartFor(RoleWarden, root, RunContext{Job: jobID, Guild: g.Name, Review: rev.ID})
 	if err != nil {
 		r.errorReview(rev.ID, "starting the run: "+err.Error())

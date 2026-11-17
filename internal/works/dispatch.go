@@ -508,7 +508,7 @@ func (r *Runs) failDispatch(id, msg string) {
 // fails, unless the Runner was rate-limited, which requeues it.
 func (r *Runs) start(d store.Dispatch) error {
 	r.mu.Lock()
-	runner, root, closed := r.runner, r.spoolRoot, r.bg.Err() != nil
+	runner, closed := r.runner, r.bg.Err() != nil
 	if !closed {
 		r.wg.Add(1) // under mu, so Close cannot Wait between the check and the Add
 	}
@@ -519,6 +519,11 @@ func (r *Runs) start(d store.Dispatch) error {
 	if runner == nil {
 		r.wg.Done()
 		return fmt.Errorf("%w: no runner is configured", errInvalidInput)
+	}
+	root, err := r.spoolRootFor(d.Guild)
+	if err != nil {
+		r.wg.Done()
+		return err
 	}
 	env, err := r.StartFor(RoleWright, root, RunContext{Job: d.JobID, Guild: d.Guild, DispatchID: d.ID})
 	if err != nil {

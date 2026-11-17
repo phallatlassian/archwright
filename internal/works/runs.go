@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/phallatlassian/archwright/internal/defs"
+	"github.com/phallatlassian/archwright/internal/launch"
 	"github.com/phallatlassian/archwright/internal/sites"
 	"github.com/phallatlassian/archwright/internal/spool"
 	"github.com/phallatlassian/archwright/internal/store"
@@ -44,7 +45,7 @@ type Runs struct {
 	reviewer  ReviewRunner // runs Reviews (ADR 0012)
 	warden    WardenRunner // runs the Wardens of started Plan steps (ADR 0020)
 	skills    *SkillsDelivery
-	spoolRoot string
+	spoolRoot string            // when set, every run's spool lives here; otherwise each run's runner picks (ADR 0018)
 	wrightWts map[string]string // dispatch id -> its Wright's worktree, kept across a rate-limit requeue
 	bg        context.Context
 	cancelBg  context.CancelFunc
@@ -86,8 +87,7 @@ type run struct {
 // NewRuns returns an empty registry over st.
 func NewRuns(st *store.Store) *Runs {
 	bg, cancel := context.WithCancel(context.Background())
-	r := &Runs{st: st, poll: 25 * time.Millisecond, runs: map[string]*run{}, cancels: map[string]context.CancelFunc{}, cancelled: map[string]bool{}, wrightWts: map[string]string{}, bg: bg, cancelBg: cancel,
-		spoolRoot: filepath.Join(os.TempDir(), fmt.Sprintf("archwright-%d", os.Getuid()))}
+	r := &Runs{st: st, poll: 25 * time.Millisecond, runs: map[string]*run{}, cancels: map[string]context.CancelFunc{}, cancelled: map[string]bool{}, wrightWts: map[string]string{}, bg: bg, cancelBg: cancel}
 	r.sched = newScheduler(r)
 	return r
 }
@@ -113,6 +113,37 @@ func (r *Runs) Configure(guilds GuildSource, runner Runner) {
 // (mode 0700) under root, which the runner's adapter chooses.
 func (r *Runs) Start(role, root string) (RunEnv, error) {
 	return r.StartFor(role, root, RunContext{})
+}
+
+// SetSpoolRoot puts every run's spool under root instead of the one its
+// runner's sandbox can write (ADR 0018). It is for tests.
+func (r *Runs) SetSpoolRoot(root string) {
+	r.mu.Lock()
+	r.spoolRoot = root
+	r.mu.Unlock()
+}
+
+// spoolRootFor is where the spool of a run led by the named Guild goes: the
+// root its bound runner's sandbox can write (ADR 0018). A Guild that cannot be
+// looked up fails the run rather than falling back to a root the runner's
+// sandbox may not be able to write (ADR 0011). With no Guilds configured, or a
+// Guild with no runner named, the default per-user temp root is used.
+func (r *Runs) spoolRootFor(guild string) (string, error) {
+	r.mu.Lock()
+	override, guilds := r.spoolRoot, r.guilds
+	r.mu.Unlock()
+	if override != "" {
+		return override, nil
+	}
+	runnerName := ""
+	if guilds != nil {
+		g, err := guilds(guild)
+		if err != nil {
+			return "", fmt.Errorf("the spool root for guild %q: %w", guild, err)
+		}
+		runnerName = g.Binding.Runner
+	}
+	return launch.SpoolRoot(runnerName, os.Getuid(), os.TempDir()), nil
 }
 
 // SetPreflight makes every run start only while check passes.
