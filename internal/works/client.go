@@ -40,14 +40,21 @@ func ExecSpawner(d paths.Dirs) error {
 	return cmd.Process.Release()
 }
 
+// slowTimeout bounds DoSlow: room for the doctor to probe each runner (3 minutes
+// apiece) before the Works answers.
+const slowTimeout = 10 * time.Minute
+
 // Client talks to a running Works.
 type Client struct {
 	Info Info
 	http *http.Client
+	// slow serves calls that legitimately outlast the usual 10s, such as
+	// POST /runs waiting on the doctor preflight, which probes every runner.
+	slow *http.Client
 }
 
 func newClient(info Info) *Client {
-	return &Client{Info: info, http: &http.Client{Timeout: 10 * time.Second}}
+	return &Client{Info: info, http: &http.Client{Timeout: 10 * time.Second}, slow: &http.Client{Timeout: slowTimeout}}
 }
 
 // Connect returns a client for the running Works, starting one with spawn if
@@ -98,6 +105,15 @@ func Running(d paths.Dirs) (*Client, bool) {
 
 // Do performs one API call, decoding the JSON reply into out (if non-nil).
 func (c *Client) Do(method, path string, in, out any) error {
+	return c.do(c.http, method, path, in, out)
+}
+
+// DoSlow is Do for a call the Works may take minutes to answer.
+func (c *Client) DoSlow(method, path string, in, out any) error {
+	return c.do(c.slow, method, path, in, out)
+}
+
+func (c *Client) do(hc *http.Client, method, path string, in, out any) error {
 	var body io.Reader
 	if in != nil {
 		b, err := json.Marshal(in)
@@ -111,7 +127,7 @@ func (c *Client) Do(method, path string, in, out any) error {
 		return err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.Info.Token)
-	resp, err := c.http.Do(req)
+	resp, err := hc.Do(req)
 	if err != nil {
 		return err
 	}

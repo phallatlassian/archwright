@@ -59,7 +59,14 @@ func launchArchwright(dirs paths.Dirs, connect func() (*works.Client, error)) er
 		return err
 	}
 	var env works.RunEnv
-	if err := c.Do("POST", "/runs", map[string]string{"Role": works.RoleArchwright, "SpoolRoot": launch.SpoolRoot(choice, os.Getuid(), os.TempDir())}, &env); err != nil {
+	// The Works runs the doctor preflight before it starts any run, which can
+	// take a while on a cold start: wait for it and say so rather than hang.
+	note := time.AfterFunc(2*time.Second, func() {
+		fmt.Fprintln(os.Stderr, "archwright: running doctor before the first run (checking the installed runners), this can take a minute...")
+	})
+	err = c.DoSlow("POST", "/runs", map[string]string{"Role": works.RoleArchwright, "SpoolRoot": launch.SpoolRoot(choice, os.Getuid(), os.TempDir())}, &env)
+	note.Stop()
+	if err != nil {
 		return err
 	}
 	defer c.Do("DELETE", "/runs/"+url.PathEscape(env.Run), nil, nil)
