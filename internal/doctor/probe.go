@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -85,6 +86,13 @@ func (p RunnerProber) Probe(ctx context.Context, name, bin string) ProbeResult {
 	if err != nil {
 		os.RemoveAll(dir)
 		return ProbeResult{Err: err.Error()}
+	}
+	// codex refuses to run outside a git repository, so the probe's directory
+	// is one (real runs are in worktrees); the runner's flags are unchanged.
+	if out, err := exec.CommandContext(ctx, "git", "init", "--quiet", work).CombinedOutput(); err != nil {
+		os.RemoveAll(work)
+		os.RemoveAll(dir)
+		return ProbeResult{Err: "cannot make the probe directory a git repository: " + strings.TrimSpace(string(out)+" "+err.Error())}
 	}
 	defer func() {
 		os.RemoveAll(work)
