@@ -2,6 +2,7 @@ package works
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -158,27 +159,20 @@ func (r *Runs) startStep(jobID, stepID string) (store.StepRun, error) {
 	return sr, nil
 }
 
-// wardenToolGuide tells a Warden how to call its tools. They reach agents
-// through a CLI, not injected MCP (ADR 0014), so a Warden that looks for MCP
-// tools finds none and ends without handing back.
-const wardenToolGuide = `
-## Calling the tools
-
-The tools are not MCP tools and no tool search will find them. Call each one from the Bash tool as ` + "`archwright tool NAME`" + ` with JSON on stdin and JSON on stdout, e.g. ` + "`echo '{\"piece\":\"p1\"}' | archwright tool inspect_wright`" + `. A failed call prints an error: fix the input and call again.
-
-- ` + "`dispatch_wright`" + ` starts a Wright on one piece: ` + "`{\"piece\":\"<name>\",\"brief\":{\"objective\":\"...\",\"scope\":{\"in\":[...],\"out\":[...]},\"constraints\":[...],\"inputs\":[\"<pointers to what the Wright needs>\"],\"definition_of_done\":[...],\"return_shape\":\"...\",\"limits\":{\"timeout_minutes\":30,\"max_turns\":50}}}`" + `. Every field but ` + "`scope.out`, `max_turns` and `read_only`" + ` (true when the piece writes nothing) is required; state ` + "`constraints`" + ` even when it is ` + "`[]`" + `. The Wright knows only its brief.
-- ` + "`inspect_wright`" + ` shows a piece and its dispatches: ` + "`{\"piece\":\"<name>\"}`" + `. Poll it until the latest dispatch is no longer queued or running.
-- ` + "`rework_wright`" + ` sends a rejected piece back: ` + "`{\"piece\":\"<name>\",\"reason\":\"<what was wrong>\",\"diagnosis\":\"...\",\"brief\":{<the amended brief, complete>}}`" + `.
-- ` + "`accept_piece`" + ` accepts a piece you have checked: ` + "`{\"piece\":\"<name>\"}`" + `.
-- ` + "`handback`" + ` ends the step, once no Wright is still running: ` + "`{\"status\":\"done|partial|failed\",\"results\":[\"<pointers to the accepted results>\"],\"checked\":[\"<what you inspected>\"],\"rejected\":[\"<what you rejected, and why>\"],\"uncertainty\":\"...\",\"flags\":[{\"kind\":\"follow-up|decision-needed|risk\",\"description\":\"...\",\"evidence\":\"...\"}]}`" + `. ` + "`results`" + ` is required for done and partial; ` + "`uncertainty`" + ` or ` + "`rejected`" + ` for failed. Always finish with a handback.
-`
+// wardenMD tells a Warden how to call its tools. They reach agents through a
+// CLI, not injected MCP (ADR 0014), so a Warden that looks for MCP tools finds
+// none and ends without handing back. It ships in the binary like the
+// Archwright's instructions.
+//
+//go:embed warden.md
+var wardenMD string
 
 // renderStepBrief is the task brief a step's Warden starts from: the step, the
 // Job's request and the Guild's charter and standards.
 func renderStepBrief(job store.Job, step store.Step, g Guild, charter string) string {
 	var w strings.Builder
 	fmt.Fprintf(&w, "# Task: %s\n\nYou are the %s Warden for step %q of job %s. Work only through the Archwright tools: dispatch_wright, inspect_wright, rework_wright, accept_piece and finally handback.\n", step.Title, g.Name, step.ID, job.ID)
-	w.WriteString(wardenToolGuide)
+	w.WriteString("\n" + strings.TrimSpace(wardenMD) + "\n")
 	w.WriteString("\n## The Job's request\n\n" + strings.TrimSpace(job.Title))
 	if d := strings.TrimSpace(job.Description); d != "" {
 		w.WriteString("\n\n" + d)

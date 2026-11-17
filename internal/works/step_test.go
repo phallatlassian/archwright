@@ -344,6 +344,9 @@ func TestResumeEndsTheRunningStepOfAClosedJob(t *testing.T) {
 // none and ends without handing back.
 func TestStepBriefStatesTheToolCallingConvention(t *testing.T) {
 	brief := renderStepBrief(store.Job{ID: "j1", Title: "Add login"}, store.Step{ID: "a", Title: "Build the form"}, Guild{Name: "masonry"}, "")
+	if strings.TrimSpace(wardenMD) == "" || !strings.Contains(brief, strings.TrimSpace(wardenMD)) {
+		t.Fatalf("the embedded warden.md is not in the step brief:\n%s", brief)
+	}
 	for _, want := range []string{
 		"`archwright tool NAME`", "JSON on stdin", "JSON on stdout", "Bash", "not MCP",
 		`dispatch_wright`, `"piece"`, `"brief"`, `"objective"`, `"scope"`, `"constraints"`, `"inputs"`, `"definition_of_done"`, `"return_shape"`, `"limits"`, `"timeout_minutes"`,
