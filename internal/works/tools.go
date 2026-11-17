@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/phallatlassian/archwright/internal/store"
 )
@@ -73,6 +74,17 @@ var catalogue = map[string]tool{
 		}
 		if a.Site != "" { // the Site the launch hint named (ADR 0010)
 			return c.st.CreateJobOn(a.Site, a.Title, a.Description)
+		}
+		sites, err := c.st.ListSites()
+		if err != nil {
+			return nil, err
+		}
+		if len(sites) > 0 { // work on a repository needs a Site to act on
+			names := make([]string, len(sites))
+			for i, s := range sites {
+				names[i] = s.Name
+			}
+			return nil, fmt.Errorf("%w: site is required; registered Sites: %s (ask the developer which one, or pick the Site the request names)", errInvalidInput, strings.Join(names, ", "))
 		}
 		return c.st.CreateJob(a.Title, a.Description)
 	}},

@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -292,5 +293,33 @@ func TestPreflightRefusesRunsUntilItPasses(t *testing.T) {
 	r.SetPreflight(func(context.Context) error { return nil }) // the developer fixed it
 	if _, err := r.Start(RoleArchwright, root); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestCreateJobWithoutASiteIsRefusedWhenSitesAreRegistered(t *testing.T) {
+	r, st := newRuns(t)
+	env := startRun(t, r, RoleArchwright)
+	for _, n := range []string{"shop", "api"} {
+		if _, err := st.AddSite(store.Site{Name: n, URL: "https://h/o/" + n, ClonePath: "/c/" + n, BaseBranch: "main", ConcurrencyCap: 1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	resp := call(t, env, "n1", "create_job", `{"title":"T"}`)
+	if resp.OK || resp.Error.Code != spool.CodeInvalidInput {
+		t.Fatalf("a Site-less Job was accepted: %+v", resp)
+	}
+	if !strings.Contains(resp.Error.Message, "api, shop") {
+		t.Fatalf("error does not list the registered Sites: %q", resp.Error.Message)
+	}
+	if jobs, _ := st.ListJobs(); len(jobs) != 0 {
+		t.Fatalf("refused call still created a Job: %v", jobs)
+	}
+
+	var job store.Job
+	resp = call(t, env, "n2", "create_job", `{"title":"T","site":"shop"}`)
+	json.Unmarshal(resp.Output, &job)
+	if !resp.OK || job.Site != "shop" {
+		t.Fatalf("%+v", resp)
 	}
 }
