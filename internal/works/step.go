@@ -2,6 +2,7 @@ package works
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -158,11 +159,20 @@ func (r *Runs) startStep(jobID, stepID string) (store.StepRun, error) {
 	return sr, nil
 }
 
+// wardenMD tells a Warden how to call its tools. They reach agents through a
+// CLI, not injected MCP (ADR 0014), so a Warden that looks for MCP tools finds
+// none and ends without handing back. It ships in the binary like the
+// Archwright's instructions.
+//
+//go:embed warden.md
+var wardenMD string
+
 // renderStepBrief is the task brief a step's Warden starts from: the step, the
 // Job's request and the Guild's charter and standards.
 func renderStepBrief(job store.Job, step store.Step, g Guild, charter string) string {
 	var w strings.Builder
 	fmt.Fprintf(&w, "# Task: %s\n\nYou are the %s Warden for step %q of job %s. Work only through the Archwright tools: dispatch_wright, inspect_wright, rework_wright, accept_piece and finally handback.\n", step.Title, g.Name, step.ID, job.ID)
+	w.WriteString("\n" + strings.TrimSpace(wardenMD) + "\n")
 	w.WriteString("\n## The Job's request\n\n" + strings.TrimSpace(job.Title))
 	if d := strings.TrimSpace(job.Description); d != "" {
 		w.WriteString("\n\n" + d)
