@@ -338,3 +338,21 @@ func TestResumeEndsTheRunningStepOfAClosedJob(t *testing.T) {
 		t.Fatalf("step: %+v", sr)
 	}
 }
+
+// The Warden is an agent session with a shell, not an MCP client (ADR 0014):
+// its brief must say how to call the tools, or it looks for MCP tools, finds
+// none and ends without handing back.
+func TestStepBriefStatesTheToolCallingConvention(t *testing.T) {
+	brief := renderStepBrief(store.Job{ID: "j1", Title: "Add login"}, store.Step{ID: "a", Title: "Build the form"}, Guild{Name: "masonry"}, "")
+	for _, want := range []string{
+		"`archwright tool NAME`", "JSON on stdin", "JSON on stdout", "Bash", "not MCP",
+		`dispatch_wright`, `"piece"`, `"brief"`, `"objective"`, `"scope"`, `"constraints"`, `"inputs"`, `"definition_of_done"`, `"return_shape"`, `"limits"`, `"timeout_minutes"`,
+		`inspect_wright`, `rework_wright`, `"reason"`, `"diagnosis"`,
+		`accept_piece`,
+		`handback`, `"status"`, `"results"`, `"checked"`, `"rejected"`, `"uncertainty"`, `"flags"`, `"evidence"`,
+	} {
+		if !strings.Contains(brief, want) {
+			t.Errorf("step brief lacks %q:\n%s", want, brief)
+		}
+	}
+}
