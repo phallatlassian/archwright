@@ -520,7 +520,12 @@ func (r *Runs) start(d store.Dispatch) error {
 		r.wg.Done()
 		return fmt.Errorf("%w: no runner is configured", errInvalidInput)
 	}
-	env, err := r.StartFor(RoleWright, r.spoolRootFor(d.Guild), RunContext{Job: d.JobID, Guild: d.Guild, DispatchID: d.ID})
+	root, err := r.spoolRootFor(d.Guild)
+	if err != nil {
+		r.wg.Done()
+		return err
+	}
+	env, err := r.StartFor(RoleWright, root, RunContext{Job: d.JobID, Guild: d.Guild, DispatchID: d.ID})
 	if err != nil {
 		r.wg.Done()
 		return err

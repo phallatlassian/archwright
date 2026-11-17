@@ -222,12 +222,15 @@ func (r *Runs) summon(sr store.StepRun, resumed bool) error {
 	r.mu.Lock()
 	warden := r.warden
 	r.mu.Unlock()
-	root := r.spoolRootFor(sr.Guild)
 	fail := func(cause error) error {
 		if err := r.st.FailStep(sr.JobID, sr.Step, "starting the run: "+cause.Error()); err != nil {
 			log.Printf("step %s/%s: recording the failure: %v", sr.JobID, sr.Step, err)
 		}
 		return cause
+	}
+	root, err := r.spoolRootFor(sr.Guild)
+	if err != nil {
+		return fail(err)
 	}
 	brief := sr.Brief
 	if resumed {

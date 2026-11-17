@@ -237,7 +237,12 @@ func (r *Runs) startReview(jobID string) (store.Review, error) {
 		return store.Review{}, err
 	}
 	brief := rev.Brief
-	env, err := r.StartFor(RoleWarden, r.spoolRootFor(g.Name), RunContext{Job: jobID, Guild: g.Name, Review: rev.ID})
+	root, err := r.spoolRootFor(g.Name)
+	if err != nil {
+		r.errorReview(rev.ID, "starting the run: "+err.Error())
+		return store.Review{}, err
+	}
+	env, err := r.StartFor(RoleWarden, root, RunContext{Job: jobID, Guild: g.Name, Review: rev.ID})
 	if err != nil {
 		r.errorReview(rev.ID, "starting the run: "+err.Error())
 		return store.Review{}, err

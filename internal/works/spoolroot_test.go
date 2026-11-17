@@ -78,3 +78,11 @@ func TestExplicitSpoolRootStillWins(t *testing.T) {
 		t.Fatalf("warden spool = %+v, want a run directory under %s", reqs, root)
 	}
 }
+
+func TestUnknownGuildHasNoSpoolRoot(t *testing.T) {
+	r, _ := newRuns(t)
+	r.Configure(boundTo(launch.RunnerClaude), NewFakeRunner(nil))
+	if root, err := r.spoolRootFor("nobody"); err == nil {
+		t.Fatalf("an unknown Guild got spool root %q, want an error rather than a root its runner may not write", root)
+	}
+}

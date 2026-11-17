@@ -124,22 +124,26 @@ func (r *Runs) SetSpoolRoot(root string) {
 }
 
 // spoolRootFor is where the spool of a run led by the named Guild goes: the
-// root its bound runner's sandbox can write (ADR 0018), or the default
-// per-user temp root when the Guild or its runner is not known.
-func (r *Runs) spoolRootFor(guild string) string {
+// root its bound runner's sandbox can write (ADR 0018). A Guild that cannot be
+// looked up fails the run rather than falling back to a root the runner's
+// sandbox may not be able to write (ADR 0011). With no Guilds configured, or a
+// Guild with no runner named, the default per-user temp root is used.
+func (r *Runs) spoolRootFor(guild string) (string, error) {
 	r.mu.Lock()
 	override, guilds := r.spoolRoot, r.guilds
 	r.mu.Unlock()
 	if override != "" {
-		return override
+		return override, nil
 	}
 	runnerName := ""
 	if guilds != nil {
-		if g, err := guilds(guild); err == nil {
-			runnerName = g.Binding.Runner
+		g, err := guilds(guild)
+		if err != nil {
+			return "", fmt.Errorf("the spool root for guild %q: %w", guild, err)
 		}
+		runnerName = g.Binding.Runner
 	}
-	return launch.SpoolRoot(runnerName, os.Getuid(), os.TempDir())
+	return launch.SpoolRoot(runnerName, os.Getuid(), os.TempDir()), nil
 }
 
 // SetPreflight makes every run start only while check passes.
