@@ -62,3 +62,17 @@ func TestProbeRemovesItsSpool(t *testing.T) {
 		t.Fatalf("the probe left its spool root behind: %v", err)
 	}
 }
+
+// A real codex refuses to run outside a git repository, so the probe must run
+// in one (it must not widen codex's posture with --skip-git-repo-check).
+func TestProbeRunsCodexInAGitDirectory(t *testing.T) {
+	t.Setenv("STUB_MODE", "ok")
+	t.Setenv("STUB_NEEDS_GIT", "1")
+	uid := 92000 + os.Getpid()%1000
+	t.Cleanup(func() { os.RemoveAll(filepath.Join("/tmp", "claude-"+itoa(uid))) })
+	stub, _ := filepath.Abs("testdata/stub-codex.sh")
+	r := RunnerProber{UID: uid, TempDir: t.TempDir(), Timeout: 20 * time.Second}.Probe(context.Background(), "codex", stub)
+	if r.Err != "" || !r.RequestSeen || !r.ResponseRead {
+		t.Fatalf("%+v", r)
+	}
+}

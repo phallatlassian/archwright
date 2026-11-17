@@ -5,6 +5,10 @@ case "$1" in
 --version) echo "codex-cli 0.162.1"; exit 0 ;;
 exec) [ "$2" = "--help" ] && { echo "  --ephemeral"; exit 0; } ;;
 esac
+if [ -n "$STUB_NEEDS_GIT" ] && ! git rev-parse --git-dir >/dev/null 2>&1; then
+	echo "Not inside a trusted directory and --skip-git-repo-check was not specified." >&2
+	exit 1
+fi
 mode=${STUB_MODE:-$(cat "$STUB_MODE_FILE" 2>/dev/null)}
 echo '{"type":"thread.started","thread_id":"t"}'
 echo '{"type":"turn.started"}'
