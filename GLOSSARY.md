@@ -16,6 +16,10 @@ _Avoid_: server, backend, the Archwright
 A git repository, registered with the Works by remote URL, whose project-level configuration the developer has chosen to trust. The Works keeps its own clone of it and never touches the developer's checkout (ADR 0019). A Job belongs to exactly one Site.
 _Avoid_: Project, repo, workspace
 
+**Forge**:
+The service that hosts a Site's repository, issues and pull requests (GitHub, today). Agents never talk to it directly: the Works does, on their behalf, within what their role permits.
+_Avoid_: remote, host, provider
+
 **Runner**:
 A vendor agent CLI (claude or codex) the Works can run an agent on, reached through an adapter.
 _Avoid_: backend, provider, engine
