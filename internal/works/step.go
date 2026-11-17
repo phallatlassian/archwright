@@ -220,8 +220,9 @@ func (r *Runs) resumeNote(sr store.StepRun) string {
 // start is failed, so the Archwright can start it again.
 func (r *Runs) summon(sr store.StepRun, resumed bool) error {
 	r.mu.Lock()
-	warden, root := r.warden, r.spoolRoot
+	warden := r.warden
 	r.mu.Unlock()
+	root := r.spoolRootFor(sr.Guild)
 	fail := func(cause error) error {
 		if err := r.st.FailStep(sr.JobID, sr.Step, "starting the run: "+cause.Error()); err != nil {
 			log.Printf("step %s/%s: recording the failure: %v", sr.JobID, sr.Step, err)
@@ -251,7 +252,7 @@ func (r *Runs) summon(sr store.StepRun, resumed bool) error {
 	}
 	go func() {
 		defer r.wg.Done()
-		wt, runErr := r.wardenWorkspace(env.Run)
+		wt, runErr := r.wardenWorkspace(env.Run, root)
 		var extra map[string]string
 		if runErr == nil {
 			extra, runErr = r.deliverGuildSkills(sr.Guild, env.Run, wt, nil)
@@ -280,9 +281,9 @@ func (r *Runs) summon(sr store.StepRun, resumed bool) error {
 // the Archwright tools and never touches code. It is a bare git repository
 // root so Guild skills can be delivered into it and hidden from git like in
 // a Wright's worktree.
-func (r *Runs) wardenWorkspace(run string) (string, error) {
+func (r *Runs) wardenWorkspace(run, root string) (string, error) {
 	r.mu.Lock()
-	sd, root := r.skills, r.spoolRoot
+	sd := r.skills
 	r.mu.Unlock()
 	base := filepath.Join(root, "warden-"+run)
 	if sd != nil && sd.RunDir != nil {
