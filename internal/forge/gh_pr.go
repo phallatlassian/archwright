@@ -105,21 +105,15 @@ func (g GH) OpenPR(ctx context.Context, req OpenPRRequest) (PullRequest, error) 
 	case strings.HasPrefix(req.Head, "-") || strings.HasPrefix(req.Base, "-"):
 		return PullRequest{}, &Error{Kind: KindOther, Detail: "head and base must be plain branch names"}
 	}
-	out, err := g.run(ctx, "", "pr", "list", "-R", repo, "--head", req.Head, "--base", req.Base, "--state", "open", "--limit", "1", "--json", prFields)
+	if pr, ok, err := g.findOpenPR(ctx, repo, req); err != nil || ok {
+		return pr, err
+	}
+	out, err := g.run(ctx, req.Body, "pr", "create", "-R", repo, "--head", req.Head, "--base", req.Base, "--title="+req.Title, "--body-file", "-")
 	if err != nil {
-		return PullRequest{}, err
-	}
-	var found []ghPR
-	if err := json.Unmarshal([]byte(out), &found); err != nil {
-		return PullRequest{}, &Error{Kind: KindOther, Detail: "gh returned unreadable output: " + err.Error()}
-	}
-	if len(found) > 0 {
-		pr := found[0].pr()
-		pr.Existing = true
-		return pr, nil
-	}
-	out, err = g.run(ctx, req.Body, "pr", "create", "-R", repo, "--head", req.Head, "--base", req.Base, "--title="+req.Title, "--body-file", "-")
-	if err != nil {
+		// A concurrent open may have won the race: if the PR now exists, that is the answer.
+		if pr, ok, ferr := g.findOpenPR(ctx, repo, req); ferr == nil && ok {
+			return pr, nil
+		}
 		return PullRequest{}, err
 	}
 	u := prURLIn(out)
@@ -129,6 +123,24 @@ func (g GH) OpenPR(ctx context.Context, req OpenPRRequest) (PullRequest, error) 
 	pr := PullRequest{URL: u, Title: req.Title, Body: req.Body, State: "OPEN", Head: req.Head, Base: req.Base}
 	pr.Number = prNumber(u)
 	return pr, nil
+}
+
+// findOpenPR looks for the open pull request from req.Head into req.Base.
+func (g GH) findOpenPR(ctx context.Context, repo string, req OpenPRRequest) (PullRequest, bool, error) {
+	out, err := g.run(ctx, "", "pr", "list", "-R", repo, "--head", req.Head, "--base", req.Base, "--state", "open", "--limit", "1", "--json", prFields)
+	if err != nil {
+		return PullRequest{}, false, err
+	}
+	var found []ghPR
+	if err := json.Unmarshal([]byte(out), &found); err != nil {
+		return PullRequest{}, false, &Error{Kind: KindOther, Detail: "gh returned unreadable output: " + err.Error()}
+	}
+	if len(found) == 0 {
+		return PullRequest{}, false, nil
+	}
+	pr := found[0].pr()
+	pr.Existing = true
+	return pr, true, nil
 }
 
 var prURLRe = regexp.MustCompile(`https?://\S+/pull/\d+`)
