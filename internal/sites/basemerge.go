@@ -3,7 +3,6 @@ package sites
 import (
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/phallatlassian/archwright/internal/store"
 )
@@ -16,6 +15,7 @@ type BaseMerge struct {
 	BaseRef  string // the base branch as the clone knows it, e.g. origin/main
 	BaseSHA  string // the commit BaseRef was fetched to
 	Tip      string // the integration branch's tip before the merge
+	Merged   bool   // BaseSHA is already in the integration branch: there is nothing to merge, only to push
 }
 
 // PrepareBaseMerge fetches the Site's base branch into the Works' own clone,
@@ -60,7 +60,8 @@ func (m *Manager) PrepareBaseMerge(jobID string) (BaseMerge, error) {
 	if err != nil {
 		return BaseMerge{}, fmt.Errorf("integration branch %q does not resolve to a commit in site %s", w.Branch, site.Name)
 	}
-	return BaseMerge{Worktree: w.Path, Branch: w.Branch, BaseRef: "origin/" + site.BaseBranch, BaseSHA: baseSHA, Tip: tip}, nil
+	merged := gitOK(site.ClonePath, "merge-base", "--is-ancestor", baseSHA, tip)
+	return BaseMerge{Worktree: w.Path, Branch: w.Branch, BaseRef: "origin/" + site.BaseBranch, BaseSHA: baseSHA, Tip: tip, Merged: merged}, nil
 }
 
 // IntegrationWorktree is where a Job's integration branch is checked out.
@@ -107,7 +108,7 @@ func (m *Manager) CheckFastForward(jobID string) error {
 		return nil
 	}
 	if !gitOK(site.ClonePath, "merge-base", "--is-ancestor", remote, "refs/heads/"+branch) {
-		return fmt.Errorf("%s no longer contains what was last pushed to origin, so pushing it would rewrite history; it is not pushed (resolve conflicts by merging the base in, never by rebasing): %w", strings.TrimPrefix(branch, "refs/heads/"), store.ErrConflict)
+		return fmt.Errorf("%s no longer contains what was last pushed to origin, so pushing it would rewrite history; it is not pushed (resolve conflicts by merging the base in, never by rebasing): %w", branch, store.ErrConflict)
 	}
 	return nil
 }

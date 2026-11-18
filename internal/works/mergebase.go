@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/phallatlassian/archwright/internal/sites"
 	"github.com/phallatlassian/archwright/internal/store"
@@ -13,19 +14,20 @@ func init() {
 	catalogue["merge_base"] = tool{roles: []string{RoleWarden}, call: mergeBase}
 }
 
-// MergeBasePiece prefixes the pieces merge_base dispatches; each is numbered.
-const MergeBasePiece = "merge-base"
+// mergeBasePiece prefixes the pieces merge_base dispatches; each is numbered.
+const mergeBasePiece = "merge-base"
 
 // Mergeable values of a pull request as the Forge reports them.
 const mergeConflicting = "CONFLICTING"
 
-func isMergeBasePiece(piece string) bool { return strings.HasPrefix(piece, MergeBasePiece+"-") }
+func isMergeBasePiece(piece string) bool { return strings.HasPrefix(piece, mergeBasePiece+"-") }
 
 // Statuses of a BaseMerge answer.
 const (
 	BaseMergeDispatched = "dispatched"  // a merge Wright was started
 	BaseMergeRunning    = "in_progress" // one is already running; nothing more was started
 	BaseMergeNoConflict = "no_conflict" // the PR read shows no conflict; nothing was started
+	BaseMergeMerged     = "merged"      // the base is already in the integration branch; push_branch it
 )
 
 // BaseMergeInfo is the answer to merge_base.
@@ -45,6 +47,8 @@ type BaseMergeInfo struct {
 // same PR. Nothing here rebases, resets or forces, and it takes no argument:
 // the branch, base and PR are all the Job's.
 func mergeBase(c *callCtx, in json.RawMessage) (any, error) {
+	mergeBaseMu.Lock() // one merge Wright per Job, however many calls race
+	defer mergeBaseMu.Unlock()
 	if err := decode(in, &struct{}{}); err != nil {
 		return nil, err
 	}
@@ -97,9 +101,13 @@ func mergeBase(c *callCtx, in json.RawMessage) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	if bm.Merged {
+		return BaseMergeInfo{Status: BaseMergeMerged, Mergeable: pr.Mergeable,
+			Message: "The base is already merged into the integration branch; the Forge may not have caught up. Call push_branch, then read_pr."}, nil
+	}
 	b := baseMergeBrief(bm)
 	raw, _ := json.Marshal(b)
-	piece := fmt.Sprintf("%s-%d", MergeBasePiece, n)
+	piece := fmt.Sprintf("%s-%d", mergeBasePiece, n)
 	d, err := c.st.NewPiece(job.ID, g.Name, piece, raw, b.Render(g.Name, g.Standards, 0, ""))
 	if err != nil {
 		return nil, err
@@ -136,3 +144,6 @@ func baseMergeBrief(bm sites.BaseMerge) Brief {
 	b.Limits.TimeoutMinutes = 30
 	return b
 }
+
+// mergeBaseMu serialises merge_base so two racing calls cannot both start a merge Wright.
+var mergeBaseMu sync.Mutex

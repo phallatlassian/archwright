@@ -256,3 +256,14 @@ func TestMergeBaseEndToEndPushesAFastForwardAndNeverRewrites(t *testing.T) {
 		}
 	}
 }
+
+func TestMergeBaseWithTheBaseAlreadyMergedStartsNoWright(t *testing.T) {
+	g, _, _, _ := conflictRig(t, "CONFLICTING")
+	g.ok(g.warden, "merge_base", `{}`, nil)
+	g.waitReported("merge-base-1")
+	var out BaseMergeInfo
+	g.ok(g.warden, "merge_base", `{}`, &out) // the Forge still says CONFLICTING: the push has not happened yet
+	if out.Status != BaseMergeMerged || out.Dispatch != nil || len(g.runner.Requests()) != 1 {
+		t.Fatalf("%+v, %d Wrights", out, len(g.runner.Requests()))
+	}
+}
