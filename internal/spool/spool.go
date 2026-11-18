@@ -39,6 +39,8 @@ const (
 	CodeNotFound     = "not_found"
 	CodeConflict     = "conflict"
 	CodeRunEnded     = "run_ended"
+	CodeUnsupported  = "unsupported" // the Job's Forge has no adapter (ADR 0022)
+	CodeForgeFault   = "forge_error" // a Forge call failed
 )
 
 // Request is one tool call.
