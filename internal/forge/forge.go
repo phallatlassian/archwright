@@ -32,6 +32,41 @@ type PushRequest struct {
 	DefaultBranch string // the Site's default branch, which is never pushed
 }
 
+// OpenPRRequest names one pull request to open. Head and Base are resolved by
+// the Works (the Job's integration branch and the Site's base branch); only
+// Title and Body come from the Warden.
+type OpenPRRequest struct {
+	SiteURL string // the Site's remote URL: picks the adapter and names the repository
+	Head    string
+	Base    string
+	Title   string
+	Body    string
+}
+
+// Check is one CI check on a pull request.
+type Check struct {
+	Name       string `json:"name"`
+	Status     string `json:"status"`               // queued, in_progress or completed
+	Conclusion string `json:"conclusion,omitempty"` // success, failure, ... once completed
+	URL        string `json:"url,omitempty"`
+}
+
+// PullRequest is a Forge pull request as opened or read. Title and Body are
+// third-party text.
+type PullRequest struct {
+	URL       string  `json:"url"`
+	Number    int     `json:"number,omitempty"`
+	Title     string  `json:"title,omitempty"`
+	Body      string  `json:"body,omitempty"`
+	State     string  `json:"state,omitempty"`
+	Draft     bool    `json:"draft,omitempty"`
+	Head      string  `json:"head,omitempty"`
+	Base      string  `json:"base,omitempty"`
+	Mergeable string  `json:"mergeable,omitempty"`
+	Checks    []Check `json:"checks,omitempty"`
+	Existing  bool    `json:"existing,omitempty"` // set by OpenPR when the branch already had an open PR
+}
+
 // Forge is what the Works asks of a Forge. A second Forge is a second adapter.
 type Forge interface {
 	// ReadIssue reads the issue at the given issue URL.
@@ -39,6 +74,14 @@ type Forge interface {
 	// PushBranch pushes req.Branch to the Site's remote under the same name. It
 	// is never forced: a push that is not a fast-forward fails.
 	PushBranch(ctx context.Context, req PushRequest) error
+	// OpenPR opens a pull request from req.Head into req.Base, or, if that head
+	// already has an open pull request into that base, returns it with
+	// Existing set. It never opens a second one.
+	OpenPR(ctx context.Context, req OpenPRRequest) (PullRequest, error)
+	// ReadPR reads the pull request at prURL, including its CI checks.
+	ReadPR(ctx context.Context, prURL string) (PullRequest, error)
+	// CommentPR adds a comment to the pull request at prURL.
+	CommentPR(ctx context.Context, prURL, body string) error
 }
 
 // ErrUnsupported is what a Forge with no adapter answers to every call.
@@ -72,6 +115,19 @@ func (Unsupported) ReadIssue(context.Context, string) (Issue, error) { return Is
 // PushBranch always returns ErrUnsupported.
 func (Unsupported) PushBranch(context.Context, PushRequest) error { return ErrUnsupported }
 
+// OpenPR always returns ErrUnsupported.
+func (Unsupported) OpenPR(context.Context, OpenPRRequest) (PullRequest, error) {
+	return PullRequest{}, ErrUnsupported
+}
+
+// ReadPR always returns ErrUnsupported.
+func (Unsupported) ReadPR(context.Context, string) (PullRequest, error) {
+	return PullRequest{}, ErrUnsupported
+}
+
+// CommentPR always returns ErrUnsupported.
+func (Unsupported) CommentPR(context.Context, string, string) error { return ErrUnsupported }
+
 // ByHost routes each call to the adapter for the URL's host; a host with no
 // adapter is answered "unsupported".
 type ByHost struct {
@@ -100,6 +156,29 @@ func (b ByHost) PushBranch(ctx context.Context, req PushRequest) error {
 		return f.PushBranch(ctx, req)
 	}
 	return ErrUnsupported
+}
+
+// OpenPR implements Forge, routing by the host of the Site's remote.
+func (b ByHost) OpenPR(ctx context.Context, req OpenPRRequest) (PullRequest, error) {
+	key, err := remote.Normalize(req.SiteURL)
+	if err != nil {
+		return PullRequest{}, ErrUnsupported
+	}
+	host, _, _ := strings.Cut(key, "/")
+	if f, ok := b.Adapters[strings.ToLower(host)]; ok {
+		return f.OpenPR(ctx, req)
+	}
+	return PullRequest{}, ErrUnsupported
+}
+
+// ReadPR implements Forge.
+func (b ByHost) ReadPR(ctx context.Context, prURL string) (PullRequest, error) {
+	return b.pick(prURL).ReadPR(ctx, prURL)
+}
+
+// CommentPR implements Forge.
+func (b ByHost) CommentPR(ctx context.Context, prURL, body string) error {
+	return b.pick(prURL).CommentPR(ctx, prURL, body)
 }
 
 func (b ByHost) pick(ref string) Forge {

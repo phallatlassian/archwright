@@ -28,35 +28,16 @@ type GH struct {
 
 // ReadIssue runs `gh issue view URL --json ...`.
 func (g GH) ReadIssue(ctx context.Context, issueURL string) (Issue, error) {
-	bin := g.Bin
-	if bin == "" {
-		bin = "gh"
-	}
-	path, err := exec.LookPath(bin)
+	stdout, err := g.run(ctx, "", "issue", "view", issueURL, "--json", "title,body,state,author,labels,url")
 	if err != nil {
-		return Issue{}, &Error{Kind: KindOther, Detail: "gh is not installed or not on PATH"}
-	}
-	timeout := g.Timeout
-	if timeout == 0 {
-		timeout = defaultTimeout
-	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, path, "issue", "view", issueURL, "--json", "title,body,state,author,labels,url")
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	if err := cmd.Run(); err != nil {
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			return Issue{}, &Error{Kind: KindNetwork, Detail: "gh timed out"}
-		}
-		return Issue{}, classify(stderr.String(), err)
+		return Issue{}, err
 	}
 	var out struct {
 		URL, Title, Body, State string
 		Author                  struct{ Login string }
 		Labels                  []struct{ Name string }
 	}
-	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+	if err := json.Unmarshal([]byte(stdout), &out); err != nil {
 		return Issue{}, &Error{Kind: KindOther, Detail: "gh returned unreadable output: " + err.Error()}
 	}
 	is := Issue{URL: out.URL, Title: out.Title, Body: out.Body, State: out.State, Author: out.Author.Login}

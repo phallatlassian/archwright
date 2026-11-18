@@ -25,6 +25,38 @@ type fakeForge struct {
 	mu     sync.Mutex
 	pushes []forge.PushRequest // every PushBranch asked for
 	pushed error               // what PushBranch answers
+	prs    prFake
+}
+
+const fakePR = "https://github.com/acme/app/pull/12"
+
+func (f *fakeForge) OpenPR(_ context.Context, req forge.OpenPRRequest) (forge.PullRequest, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.prs.opens = append(f.prs.opens, req)
+	if f.prs.err != nil {
+		return forge.PullRequest{}, f.prs.err
+	}
+	return forge.PullRequest{URL: fakePR, Number: 12, Existing: len(f.prs.opens) > 1}, nil
+}
+
+func (f *fakeForge) ReadPR(_ context.Context, u string) (forge.PullRequest, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.prs.reads = append(f.prs.reads, u)
+	if f.prs.err != nil {
+		return forge.PullRequest{}, f.prs.err
+	}
+	pr := f.prs.pr
+	pr.URL = u
+	return pr, nil
+}
+
+func (f *fakeForge) CommentPR(_ context.Context, u, body string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.prs.comments = append(f.prs.comments, [2]string{u, body})
+	return f.prs.err
 }
 
 func (f *fakeForge) PushBranch(_ context.Context, req forge.PushRequest) error {
@@ -160,4 +192,13 @@ func TestReadIssueFaultsAreStructuredErrorsAndAuthNetworkRaiseNeedsYou(t *testin
 			t.Fatalf("%s: the Forge was called %d times", c.kind, f.calls.Load())
 		}
 	}
+}
+
+// prFake is what a fakeForge records and answers for pull requests.
+type prFake struct {
+	opens    []forge.OpenPRRequest
+	reads    []string
+	comments [][2]string // url, body
+	pr       forge.PullRequest
+	err      error
 }
