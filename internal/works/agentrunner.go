@@ -81,17 +81,29 @@ func (a *AgentRunner) Run(ctx context.Context, req RunRequest) error {
 // forbids, and a restriction the runner cannot enforce fails the run.
 func spawnFor(runnerName string, g Guild) (runner.Spawn, error) {
 	var s runner.Spawn
+	denied := append([]string(nil), g.Binding.DeniedTools...)
 	if g.Binding.Access == defs.ReadOnly {
-		s.Mode = "plan"
+		if runnerName == "claude" {
+			// Not plan mode: plan mode also stops the agent calling
+			// `archwright tool` (dispatch, handback, report_*), so a read-only
+			// Guild could never finish. Denying the edit tools keeps it from
+			// changing files; its worktree is detached too (ADR 0009, 0013).
+			denied = append(denied, readOnlyDeniedTools...)
+		} else {
+			s.Mode = "plan" // a runner without the denial flag fails closed here
+		}
 	}
-	if len(g.Binding.DeniedTools) > 0 {
+	if len(denied) > 0 {
 		if runnerName != "claude" {
 			return s, fmt.Errorf("guild %q denies tools, which %s cannot enforce", g.Name, runnerName)
 		}
-		s.ExtraArgs = append(s.ExtraArgs, "--disallowed-tools", strings.Join(g.Binding.DeniedTools, ","))
+		s.ExtraArgs = append(s.ExtraArgs, "--disallowed-tools", strings.Join(denied, ","))
 	}
 	return s, nil
 }
+
+// readOnlyDeniedTools are the Claude tools that change files.
+var readOnlyDeniedTools = []string{"Edit", "Write", "MultiEdit", "NotebookEdit"}
 
 // rawOf is the vendor event behind a timeline entry; an event the adapter
 // made itself, with no vendor event, is stored as the event.

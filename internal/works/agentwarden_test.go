@@ -116,11 +116,14 @@ func TestTaskWardenRunsOnClaudeInAPerRunDirectoryAndTheRunIsRecorded(t *testing.
 	}
 }
 
-func TestTaskWardenOfAReadOnlyGuildRunsInPlanMode(t *testing.T) {
+// Plan mode would also stop the Warden calling `archwright tool`, so a
+// read-only Guild is held read-only by denying the edit tools instead.
+func TestTaskWardenOfAReadOnlyGuildDeniesEditToolsNotPlanMode(t *testing.T) {
 	g := newWardenRig(t, "success.jsonl")
 	g.startStep("d")
 	g.stepEnds("d")
-	if args := g.file("args"); !strings.Contains(args, "--permission-mode\nplan") {
+	args := g.file("args")
+	if strings.Contains(args, "--permission-mode\nplan") || !strings.Contains(args, "--disallowed-tools\nEdit,Write,MultiEdit,NotebookEdit") {
 		t.Errorf("args = %q", args)
 	}
 }
@@ -285,7 +288,7 @@ func TestReviewWardenRunsReadOnlyInTheReviewWorktreeAndReports(t *testing.T) {
 		}
 		return rev.ID != "" && rev.Status != store.ReviewRunning
 	})
-	if args := g.file("args"); !strings.Contains(args, "--permission-mode\nplan") {
+	if args := g.file("args"); strings.Contains(args, "--permission-mode\nplan") || !strings.Contains(args, "--disallowed-tools\nEdit,Write") {
 		t.Errorf("the review was not read-only: %q", args)
 	}
 	if rev.Status != store.ReviewReported {

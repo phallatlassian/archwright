@@ -338,3 +338,15 @@ func TestResumeEndsTheRunningStepOfAClosedJob(t *testing.T) {
 		t.Fatalf("step: %+v", sr)
 	}
 }
+
+// A Warden has no native Archwright tools (ADR 0014): its brief must say they
+// are shell commands, or the agent searches its tool list, finds nothing and
+// gives up without handing back.
+func TestStepBriefSaysTheToolsAreShellCommands(t *testing.T) {
+	b := renderStepBrief(store.Job{ID: "job-1", Title: "t"}, store.Step{ID: "s", Title: "x"}, Guild{Name: "survey"}, "")
+	for _, want := range []string{"archwright tool dispatch_wright", "archwright tool inspect_wright", "archwright tool handback", "stdin", "not tools in your tool list"} {
+		if !strings.Contains(b, want) {
+			t.Errorf("brief does not say %q:\n%s", want, b)
+		}
+	}
+}

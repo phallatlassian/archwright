@@ -163,6 +163,7 @@ func (r *Runs) startStep(jobID, stepID string) (store.StepRun, error) {
 func renderStepBrief(job store.Job, step store.Step, g Guild, charter string) string {
 	var w strings.Builder
 	fmt.Fprintf(&w, "# Task: %s\n\nYou are the %s Warden for step %q of job %s. Work only through the Archwright tools: dispatch_wright, inspect_wright, rework_wright, accept_piece and finally handback.\n", step.Title, g.Name, step.ID, job.ID)
+	w.WriteString("\n## Calling the Archwright tools\n\nThese are not tools in your tool list, so do not search for them. Call each one from the shell as `archwright tool NAME` with its JSON arguments on stdin; it prints JSON. For example: `echo '{\"piece\":\"p1\",\"brief\":{...}}' | archwright tool dispatch_wright`, then `echo '{\"piece\":\"p1\"}' | archwright tool inspect_wright`, and finally `archwright tool handback` with `{\"status\":\"done|failed\",\"results\":[...],\"checked\":[...],\"rejected\":[...],\"uncertainty\":\"...\"}`. Do the investigation by dispatching read-only Wrights, not by reading the repository yourself.\n")
 	w.WriteString("\n## The Job's request\n\n" + strings.TrimSpace(job.Title))
 	if d := strings.TrimSpace(job.Description); d != "" {
 		w.WriteString("\n\n" + d)

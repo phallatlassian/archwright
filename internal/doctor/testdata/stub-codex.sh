@@ -5,6 +5,11 @@ case "$1" in
 --version) echo "codex-cli 0.162.1"; exit 0 ;;
 exec) [ "$2" = "--help" ] && { echo "  --ephemeral"; exit 0; } ;;
 esac
+# Like the real codex, refuse to run outside a git repo unless told it is fine.
+# The doctor probe runs in a scratch directory, so it has to pass the flag.
+case " $* " in *" --skip-git-repo-check "*) ;; *)
+	echo "Not inside a trusted directory and --skip-git-repo-check was not specified." >&2; exit 1 ;;
+esac
 mode=${STUB_MODE:-$(cat "$STUB_MODE_FILE" 2>/dev/null)}
 echo '{"type":"thread.started","thread_id":"t"}'
 echo '{"type":"turn.started"}'

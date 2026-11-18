@@ -47,7 +47,7 @@ type Client struct {
 }
 
 func newClient(info Info) *Client {
-	return &Client{Info: info, http: &http.Client{Timeout: 10 * time.Second}}
+	return &Client{Info: info, http: &http.Client{}}
 }
 
 // Connect returns a client for the running Works, starting one with spawn if
@@ -96,8 +96,24 @@ func Running(d paths.Dirs) (*Client, bool) {
 	return c, c != nil
 }
 
+// callTimeout bounds an ordinary API call; startTimeout bounds POST /runs,
+// which waits on the doctor gate's probes of the runners (up to minutes on a
+// cold start) before it answers.
+var (
+	callTimeout  = 10 * time.Second
+	startTimeout = 4 * time.Minute
+)
+
 // Do performs one API call, decoding the JSON reply into out (if non-nil).
 func (c *Client) Do(method, path string, in, out any) error {
+	t := callTimeout
+	if method == "POST" && path == "/runs" {
+		t = startTimeout
+	}
+	return c.do(t, method, path, in, out)
+}
+
+func (c *Client) do(timeout time.Duration, method, path string, in, out any) error {
 	var body io.Reader
 	if in != nil {
 		b, err := json.Marshal(in)
@@ -106,7 +122,9 @@ func (c *Client) Do(method, path string, in, out any) error {
 		}
 		body = bytes.NewReader(b)
 	}
-	req, err := http.NewRequest(method, "http://"+c.Info.Addr()+path, body)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, method, "http://"+c.Info.Addr()+path, body)
 	if err != nil {
 		return err
 	}

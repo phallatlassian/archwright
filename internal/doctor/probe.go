@@ -62,11 +62,15 @@ func (p RunnerProber) Probe(ctx context.Context, name, bin string) ProbeResult {
 	defer cancel()
 
 	var rn runner.Runner
+	var extra []string
 	switch name {
 	case launch.RunnerClaude:
 		rn = &runner.Claude{Binary: bin}
 	case launch.RunnerCodex:
 		rn = &runner.Codex{Binary: bin}
+		// The probe runs in a scratch directory, which is not a git repo, and
+		// codex refuses to run in one unless told the directory is fine.
+		extra = []string{"--skip-git-repo-check"}
 	default:
 		return ProbeResult{Err: "unknown runner " + name}
 	}
@@ -105,7 +109,7 @@ func (p RunnerProber) Probe(ctx context.Context, name, bin string) ProbeResult {
 	run, err := rn.Start(ctx, runner.StartRequest{
 		Brief: probeBrief, Dir: work,
 		Env:   map[string]string{spool.EnvRun: "doctor-probe", spool.EnvSpool: dir, spool.EnvToken: token},
-		Spawn: runner.Spawn{Mode: runner.ModeDontAsk},
+		Spawn: runner.Spawn{Mode: runner.ModeDontAsk, ExtraArgs: extra},
 	})
 	if err != nil {
 		return ProbeResult{Err: err.Error()}
