@@ -40,6 +40,15 @@ func TestDeliverSkillsForAShippedGuild(t *testing.T) {
 		}
 	}
 
+	// the forked pr skill is what arrives: it opens the PR through the Forge tools
+	pr, err := os.ReadFile(filepath.Join(wt, ".agents/skills/pr/SKILL.md"))
+	if err != nil {
+		t.Fatalf("pr is not delivered to Masonry: %v", err)
+	}
+	if !strings.Contains(string(pr), "archwright tool") || !strings.Contains(string(pr), "`open_pr`") || strings.Contains(string(pr), "gh pr create") {
+		t.Errorf("the delivered pr skill is not the Forge fork:\n%s", pr)
+	}
+
 	// A Site tracking a same-named skill fails the run with the collision in the message.
 	if err := os.WriteFile(filepath.Join(wt, ".gitkeep"), nil, 0o644); err != nil {
 		t.Fatal(err)

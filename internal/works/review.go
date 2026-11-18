@@ -135,6 +135,7 @@ func renderReviewBrief(g Guild, rev store.Review, worktree, specMaterial string)
 	} else {
 		w.WriteString("(the Guild states no standards)\n")
 	}
+	w.WriteString("\n" + agentRules)
 	w.WriteString("\n## Reporting\n\nCall `archwright tool report_review` with JSON on stdin, one verdict per axis, each `pass`, `fail` or `not_evaluated`:\n" +
 		"`{\"standards\":{\"verdict\":\"pass|fail|not_evaluated\",\"reason\":\"...\",\"findings\":[{\"file\":\"path\",\"line\":12,\"severity\":\"blocker|major|minor\",\"reason\":\"...\"}]},\"spec\":{...}}`.\n" +
 		"A `fail` needs at least one finding; a `pass` may carry only minor findings; `not_evaluated` needs a reason and no findings. Every finding names a file, a line, a severity and a reason. The axes are independent: one may pass while the other fails.\n")

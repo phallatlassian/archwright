@@ -74,7 +74,7 @@ func TestForksOverrideUpstreamAndRecordTheirBase(t *testing.T) {
 			t.Errorf("fork %s records no upstream hashes", f.Name)
 		}
 	}
-	for _, name := range []string{"implement-spec", "code-review", "triage"} {
+	for _, name := range []string{"implement-spec", "code-review", "triage", "pr"} {
 		if !forked[name] {
 			t.Errorf("%s is not recorded as a fork", name)
 		}
@@ -114,3 +114,59 @@ func TestEveryShippedGuildSkillResolves(t *testing.T) {
 }
 
 func readFile(s Skill, name string) ([]byte, error) { return fs.ReadFile(s.FS, name) }
+
+// The pr fork opens the PR through the Works' Forge tools (ADR 0022) and never
+// shells out to gh or git push.
+func TestPRForkOpensThroughTheForgeTools(t *testing.T) {
+	c := Vendored()
+	prov, _ := c.Provenance()
+	var forked bool
+	for _, f := range prov.Forks {
+		if f.Name == "pr" {
+			forked = len(f.UpstreamFiles) > 0
+		}
+	}
+	if !forked {
+		t.Fatal("pr is not recorded as a fork with its upstream hashes")
+	}
+	pr, err := c.Skill("pr")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"SKILL.md", "CREDITS.md", "agents/openai.yaml"} {
+		b, err := readFile(pr, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		checkNoShellForge(t, name, string(b))
+	}
+	b, _ := readFile(pr, "SKILL.md")
+	text := string(b)
+	for _, want := range []string{
+		"archwright tool", "`read_issue`", "`push_branch`", "`open_pr`", `{"title":`, `"body":`,
+		"Never run `gh` and never run `git push`", "own Bash call", "no `cd`, no command substitution, no heredoc",
+		"## Summary", "## Merge Danger", // the upstream template is kept
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("pr fork lacks %q", want)
+		}
+	}
+}
+
+// ghWord matches gh as a command word, not inside another word.
+var ghWord = regexp.MustCompile(`(^|[^A-Za-z])gh([^A-Za-z]|$)`)
+
+func checkNoShellForge(t *testing.T, name, text string) {
+	t.Helper()
+	if strings.Contains(text, "gh pr create") {
+		t.Errorf("%s mentions gh pr create", name)
+	}
+	for _, line := range strings.Split(text, "\n") {
+		if !ghWord.MatchString(line) && !strings.Contains(line, "git push") {
+			continue
+		}
+		if l := strings.ToLower(line); !strings.Contains(l, "never") && !strings.Contains(l, "do not") {
+			t.Errorf("%s: a line does not forbid gh or git push: %q", name, line)
+		}
+	}
+}
