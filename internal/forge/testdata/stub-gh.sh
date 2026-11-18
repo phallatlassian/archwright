@@ -4,13 +4,16 @@
 [ -n "$STUB_GH_LOG" ] && echo "$*" >> "$STUB_GH_LOG"
 mode=$STUB_GH_MODE
 [ -n "$STUB_GH_MODE_FILE" ] && mode=$(cat "$STUB_GH_MODE_FILE")
+# What the Forge says of the PR's merge state: MERGEABLE (default) | CONFLICTING | UNKNOWN, from the file $STUB_GH_MERGEABLE_FILE if set, else STUB_GH_MERGEABLE.
+mergeable=${STUB_GH_MERGEABLE:-MERGEABLE}
+[ -n "$STUB_GH_MERGEABLE_FILE" ] && mergeable=$(cat "$STUB_GH_MERGEABLE_FILE")
 case "${mode:-ok}" in
 ok)
 	if [ "$1" = pr ]; then
 		# Pull requests are stateful in $STUB_GH_STATE: `pr create` makes the one PR, `pr list` then finds it.
 		st=${STUB_GH_STATE:-/nonexistent}
 		url=https://github.com/acme/app/pull/12
-		pr='{"url":"'$url'","number":12,"title":"Fix login","body":"Closes #7","state":"OPEN","isDraft":false,"headRefName":"archwright/job-1/integration","baseRefName":"main","mergeable":"MERGEABLE","statusCheckRollup":[{"__typename":"CheckRun","name":"build","status":"COMPLETED","conclusion":"SUCCESS","detailsUrl":"https://ci/1"},{"__typename":"CheckRun","name":"test","status":"IN_PROGRESS","conclusion":"","detailsUrl":"https://ci/2"},{"__typename":"StatusContext","context":"lint","state":"FAILURE","targetUrl":"https://ci/3"}]}'
+		pr='{"url":"'$url'","number":12,"title":"Fix login","body":"Closes #7","state":"OPEN","isDraft":false,"headRefName":"archwright/job-1/integration","baseRefName":"main","mergeable":"'$mergeable'","statusCheckRollup":[{"__typename":"CheckRun","name":"build","status":"COMPLETED","conclusion":"SUCCESS","detailsUrl":"https://ci/1"},{"__typename":"CheckRun","name":"test","status":"IN_PROGRESS","conclusion":"","detailsUrl":"https://ci/2"},{"__typename":"StatusContext","context":"lint","state":"FAILURE","targetUrl":"https://ci/3"}]}'
 		case "$2" in
 		list) if [ -f "$st/created" ]; then echo "[$pr]"; else echo "[]"; fi ;;
 		create) cat > "$st/body"; touch "$st/created"; echo "$url" ;;
