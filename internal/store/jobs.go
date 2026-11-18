@@ -22,6 +22,7 @@ type Job struct {
 	Description string    `json:"description,omitempty"`
 	Site        string    `json:"site,omitempty"`
 	SourceIssue string    `json:"source_issue,omitempty"` // URL of the Forge issue the Job is for; empty when it has none
+	PR          string    `json:"pr,omitempty"`           // URL of the Job's pull request once opened; the Forge push tool is allowed while it is set and the Job is open (ADR 0022)
 	Outcome     string    `json:"outcome,omitempty"`      // accepted or discarded once closed
 	ParkedFor   string    `json:"parked_for,omitempty"`   // why the Job awaits the Archwright, after a partial handback or a second failed review
 	Writ        string    `json:"writ,omitempty"`         // the ticket that authorised the Job's work, once linked
@@ -146,13 +147,13 @@ func (s *Store) createJob(site, title, description, sourceIssue string) (Job, er
 	return j, tx.Commit()
 }
 
-const jobCols = "id, title, description, COALESCE(site,''), COALESCE(source_issue,''), COALESCE(outcome,''), COALESCE(parked_reason,''), COALESCE(writ,''), COALESCE(pr_go_ahead_at,''), COALESCE(paused_at,''), COALESCE(purged_at,''), created_at"
+const jobCols = "id, title, description, COALESCE(site,''), COALESCE(source_issue,''), COALESCE(pr_url,''), COALESCE(outcome,''), COALESCE(parked_reason,''), COALESCE(writ,''), COALESCE(pr_go_ahead_at,''), COALESCE(paused_at,''), COALESCE(purged_at,''), created_at"
 
 // GetJob reads one Job.
 func (s *Store) GetJob(id string) (Job, error) {
 	var j Job
 	var at string
-	err := s.db.QueryRow("SELECT "+jobCols+" FROM jobs WHERE id = ?", id).Scan(&j.ID, &j.Title, &j.Description, &j.Site, &j.SourceIssue, &j.Outcome, &j.ParkedFor, &j.Writ, &j.PRGoAhead, &j.PausedAt, &j.PurgedAt, &at)
+	err := s.db.QueryRow("SELECT "+jobCols+" FROM jobs WHERE id = ?", id).Scan(&j.ID, &j.Title, &j.Description, &j.Site, &j.SourceIssue, &j.PR, &j.Outcome, &j.ParkedFor, &j.Writ, &j.PRGoAhead, &j.PausedAt, &j.PurgedAt, &at)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Job{}, fmt.Errorf("job %q: %w", id, ErrNotFound)
 	}
@@ -174,7 +175,7 @@ func (s *Store) ListJobs() ([]Job, error) {
 	for rows.Next() {
 		var j Job
 		var at string
-		if err := rows.Scan(&j.ID, &j.Title, &j.Description, &j.Site, &j.SourceIssue, &j.Outcome, &j.ParkedFor, &j.Writ, &j.PRGoAhead, &j.PausedAt, &j.PurgedAt, &at); err != nil {
+		if err := rows.Scan(&j.ID, &j.Title, &j.Description, &j.Site, &j.SourceIssue, &j.PR, &j.Outcome, &j.ParkedFor, &j.Writ, &j.PRGoAhead, &j.PausedAt, &j.PurgedAt, &at); err != nil {
 			return nil, err
 		}
 		j.CreatedAt, _ = time.Parse(time.RFC3339Nano, at)
@@ -395,4 +396,40 @@ func (s *Store) Events(jobID string) ([]Event, error) {
 		evs = append(evs, e)
 	}
 	return evs, rows.Err()
+}
+
+// RecordPR records the pull request opened for a Job. A Job has one PR: a
+// different URL than the one already recorded is refused.
+func (s *Store) RecordPR(jobID, prURL string) error {
+	prURL = strings.TrimSpace(prURL)
+	if prURL == "" {
+		return errors.New("pull request URL is required")
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var cur string
+	err = tx.QueryRow("SELECT COALESCE(pr_url,'') FROM jobs WHERE id = ?", jobID).Scan(&cur)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("job %q: %w", jobID, ErrNotFound)
+	}
+	if err != nil {
+		return err
+	}
+	if cur == prURL {
+		return nil
+	}
+	if cur != "" {
+		return fmt.Errorf("job %q already has a pull request: %w", jobID, ErrConflict)
+	}
+	at := s.stamp()
+	if _, err := tx.Exec("UPDATE jobs SET pr_url = ? WHERE id = ?", prURL, jobID); err != nil {
+		return err
+	}
+	if err := appendEvent(tx, at, jobID, "job.pr_recorded", map[string]string{"pr": prURL}); err != nil {
+		return err
+	}
+	return tx.Commit()
 }

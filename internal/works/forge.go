@@ -14,7 +14,77 @@ import (
 // action itself; the target is always resolved from the caller's Job, never
 // from an argument.
 var forgeTools = map[string]tool{
-	"read_issue": {roles: []string{RoleWarden, RoleWright}, call: readIssue},
+	"read_issue":  {roles: []string{RoleWarden, RoleWright}, call: readIssue},
+	"push_branch": {roles: []string{RoleWarden}, call: pushBranch},
+}
+
+// OpenPRStep is the Plan step during which a Warden may push (ADR 0021, 0022).
+const OpenPRStep = "open-pr"
+
+// Pushed is the answer to push_branch.
+type Pushed struct {
+	Status string `json:"status"`
+	Branch string `json:"branch"`
+}
+
+// pushBranch pushes the Job's integration branch from the Works' own clone. It
+// takes no argument: the branch, remote and clone all come from the Job and
+// its Site, and the adapter never forces and never pushes the default branch.
+// It is allowed only to the Warden of the Job's open-pr step, and to any of
+// the Job's task Wardens while its PR is open (conflict and review fixes).
+func pushBranch(c *callCtx, in json.RawMessage) (any, error) {
+	if err := decode(in, &struct{}{}); err != nil {
+		return nil, err
+	}
+	if c.run.ctx.Job == "" {
+		return nil, fmt.Errorf("%w: this run is not bound to a Job", errInvalidInput)
+	}
+	if c.run.ctx.Review != "" {
+		return nil, fmt.Errorf("%w: a Review run is read-only and pushes nothing", errInvalidInput)
+	}
+	job, err := c.st.GetJob(c.run.ctx.Job)
+	if err != nil {
+		return nil, err
+	}
+	if job.Outcome != "" {
+		return nil, fmt.Errorf("job %q is %s: nothing is pushed for it: %w", job.ID, job.Outcome, store.ErrConflict)
+	}
+	if err := c.pushAllowed(job); err != nil {
+		return nil, err
+	}
+	c.runs.mu.Lock()
+	sm := c.runs.sites
+	c.runs.mu.Unlock()
+	if job.Site == "" || sm == nil {
+		return nil, fmt.Errorf("%w: this Job has no Site, so there is no branch to push", errInvalidInput)
+	}
+	t, err := sm.IntegrationPushTarget(job.ID)
+	if err != nil {
+		return nil, err
+	}
+	err = c.runs.forgeOrDefault().PushBranch(c.runs.bg, forge.PushRequest{SiteURL: t.SiteURL, ClonePath: t.ClonePath, Branch: t.Branch, DefaultBranch: t.DefaultBranch})
+	if err != nil {
+		return nil, c.runs.forgeFailure(job, "push the integration branch", err)
+	}
+	return Pushed{Status: "pushed", Branch: t.Branch}, nil
+}
+
+// pushAllowed says whether the calling Warden may push now: it carries out the
+// Job's running open-pr step, or the Job's PR is already open.
+func (c *callCtx) pushAllowed(job store.Job) error {
+	if job.PR != "" {
+		return nil
+	}
+	if c.run.ctx.Task == OpenPRStep {
+		sr, err := c.st.GetStepRun(job.ID, OpenPRStep)
+		if err != nil && !errors.Is(err, store.ErrNotFound) {
+			return err
+		}
+		if err == nil && sr.Status == store.StepRunning {
+			return nil
+		}
+	}
+	return fmt.Errorf("pushing is allowed only during the %s step or while the Job's pull request is open; neither holds for job %q: %w", OpenPRStep, job.ID, store.ErrConflict)
 }
 
 func init() {

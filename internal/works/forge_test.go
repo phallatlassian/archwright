@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -20,6 +21,23 @@ type fakeForge struct {
 	err   error
 	calls atomic.Int32
 	asked atomic.Value // the last URL asked for
+
+	mu     sync.Mutex
+	pushes []forge.PushRequest // every PushBranch asked for
+	pushed error               // what PushBranch answers
+}
+
+func (f *fakeForge) PushBranch(_ context.Context, req forge.PushRequest) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.pushes = append(f.pushes, req)
+	return f.pushed
+}
+
+func (f *fakeForge) pushCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.pushes)
 }
 
 func (f *fakeForge) ReadIssue(_ context.Context, u string) (forge.Issue, error) {
