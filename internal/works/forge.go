@@ -78,7 +78,7 @@ func pushBranch(c *callCtx, in json.RawMessage) (any, error) {
 	}
 	err = c.runs.forgeOrDefault().PushBranch(c.runs.bg, forge.PushRequest{SiteURL: t.SiteURL, ClonePath: t.ClonePath, Branch: t.Branch, DefaultBranch: t.DefaultBranch})
 	if err != nil {
-		return nil, c.runs.forgeFailure(job, "push the integration branch", err)
+		return nil, c.openPRFailure(job, t.Branch, "push the integration branch", err)
 	}
 	return Pushed{Status: "pushed", Branch: t.Branch}, nil
 }
@@ -158,7 +158,7 @@ func openPR(c *callCtx, in json.RawMessage) (any, error) {
 	}
 	pr, err := c.runs.forgeOrDefault().OpenPR(c.runs.bg, forge.OpenPRRequest{SiteURL: t.SiteURL, Head: t.Branch, Base: t.DefaultBranch, Title: title, Body: args.Body})
 	if err != nil {
-		return nil, c.runs.forgeFailure(job, "open the pull request", err)
+		return nil, c.openPRFailure(job, t.Branch, "open the pull request", err)
 	}
 	if err := c.st.RecordPR(job.ID, pr.URL); err != nil {
 		return nil, err
@@ -181,6 +181,33 @@ func (c *callCtx) carriesOutOpenPR(job store.Job) (bool, error) {
 		return false, nil
 	}
 	return err == nil && sr.Status == store.StepRunning, err
+}
+
+// openPRFailure is forgeFailure for a Forge call made by the open-pr step. A
+// Forge with no adapter fails the step visibly: a Needs-you entry names the
+// integration branch, which stays, with its worktree, for the developer to push.
+// Nothing is deleted.
+func (c *callCtx) openPRFailure(job store.Job, branch, what string, err error) error {
+	if !errors.Is(err, forge.ErrUnsupported) {
+		return c.runs.forgeFailure(job, what, err)
+	}
+	if ok, serr := c.carriesOutOpenPR(job); serr != nil || !ok {
+		return c.runs.forgeFailure(job, what, err)
+	}
+	reason := fmt.Sprintf("this Site's Forge has no adapter, so the pull request cannot be opened; integration branch %q is kept for you to push", branch)
+	msg := reason
+	if _, nerr := c.st.AddNeedsYou(store.NewNeedsYou{
+		Kind: store.NeedsForgeUnsupported, JobID: job.ID, Site: job.Site,
+		Summary:   fmt.Sprintf("Open-pr failed: the Forge has no adapter. Push branch %q and open the pull request yourself", branch),
+		DedupeKey: store.NeedsForgeUnsupported + ":" + job.ID,
+		Detail:    map[string]string{"branch": branch, "source_issue": job.SourceIssue},
+	}); nerr != nil {
+		msg += fmt.Sprintf(" (and the Needs-you entry could not be filed: %v)", nerr)
+	}
+	if ferr := c.st.FailStep(job.ID, OpenPRStep, reason); ferr != nil {
+		msg += fmt.Sprintf(" (and the step could not be failed: %v)", ferr)
+	}
+	return &codedError{spool.CodeUnsupported, msg}
 }
 
 // PRRead is the answer to read_pr.
