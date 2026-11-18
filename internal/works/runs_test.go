@@ -323,3 +323,26 @@ func TestCreateJobWithoutASiteIsRefusedWhenSitesAreRegistered(t *testing.T) {
 		t.Fatalf("%+v", resp)
 	}
 }
+
+func TestCreateJobToolRecordsSourceIssue(t *testing.T) {
+	r, _ := newRuns(t)
+	env := startRun(t, r, RoleArchwright)
+	const issue = "https://github.com/acme/widgets/issues/80"
+	var job, shown store.Job
+	resp := call(t, env, "i1", "create_job", `{"title":"T","source_issue":"`+issue+`"}`)
+	json.Unmarshal(resp.Output, &job)
+	if !resp.OK || job.SourceIssue != issue {
+		t.Fatalf("%+v", resp)
+	}
+	resp = call(t, env, "i2", "show_job", `{"id":"`+job.ID+`"}`)
+	json.Unmarshal(resp.Output, &shown)
+	if !resp.OK || shown.SourceIssue != issue {
+		t.Fatalf("%+v", resp)
+	}
+	if resp := call(t, env, "i3", "create_job", `{"title":"T","source_issue":"nope"}`); resp.OK {
+		t.Fatalf("malformed source issue accepted: %+v", resp)
+	}
+	if resp := call(t, env, "i4", "create_job", `{"title":"U"}`); !resp.OK {
+		t.Fatalf("create without an issue: %+v", resp)
+	}
+}

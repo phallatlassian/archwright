@@ -250,6 +250,7 @@ const views = {
       crumbs(full.title),
       h('h1', {}, full.title, ' ', tag(state)),
       h('p', { class: 'muted' }, [full.site || 'no site', id, 'created ' + ago(full.created_at), full.writ ? 'writ ' + full.writ : '', money(cost)].filter(Boolean).join(' · ')),
+      full.source_issue ? h('p', { class: 'muted' }, 'Source issue: ', h('a', { href: full.source_issue, target: '_blank', rel: 'noopener' }, full.source_issue)) : null,
       full.description ? h('p', {}, full.description) : null,
       h('div', { class: 'row' }, controls),
     ];

@@ -68,12 +68,15 @@ func requireField(name, v string) error {
 // catalogue is the tool API served over the spool, keyed by tool name.
 var catalogue = map[string]tool{
 	"create_job": {roles: []string{RoleArchwright}, call: func(c *callCtx, in json.RawMessage) (any, error) {
-		var a struct{ Title, Description, Site string }
+		var a struct {
+			Title, Description, Site string
+			SourceIssue              string `json:"source_issue"`
+		}
 		if err := decode(in, &a); err != nil {
 			return nil, err
 		}
 		if a.Site != "" { // the Site the launch hint named (ADR 0010)
-			return c.st.CreateJobOn(a.Site, a.Title, a.Description)
+			return c.st.CreateJobFor(a.Site, a.Title, a.Description, a.SourceIssue)
 		}
 		sites, err := c.st.ListSites()
 		if err != nil {
@@ -86,7 +89,7 @@ var catalogue = map[string]tool{
 			}
 			return nil, fmt.Errorf("%w: site is required; registered Sites: %s (ask the developer which one, or pick the Site the request names)", errInvalidInput, strings.Join(names, ", "))
 		}
-		return c.st.CreateJob(a.Title, a.Description)
+		return c.st.CreateJobFor("", a.Title, a.Description, a.SourceIssue)
 	}},
 	"list_jobs": {roles: []string{RoleArchwright}, call: func(c *callCtx, in json.RawMessage) (any, error) {
 		if err := decode(in, &struct{}{}); err != nil {

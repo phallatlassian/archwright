@@ -47,7 +47,7 @@ const usage = `usage: archwright [command]
   site list                                list Sites
   site remove NAME                         unregister a Site and delete its clone (Job history is kept)
   site resolve DIR                         show the Site whose remote is DIR's git origin; refused if unregistered
-  job create --title T [--description D] [--site NAME | --path DIR]
+  job create --title T [--description D] [--issue URL] [--site NAME | --path DIR]
                                            create a Job (on a registered Site; --path matches DIR's git origin)
   job close ID accepted|discarded          end a Job and remove its remaining worktrees
   job purge ID                             remove a Job's raw run content now, keeping its summary (confirms at a terminal)
@@ -196,10 +196,11 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 		desc := fs.String("description", "", "Job description")
 		site := fs.String("site", "", "registered Site name")
 		dir := fs.String("path", "", "directory inside a registered Site")
+		issue := fs.String("issue", "", "URL of the Forge issue the Job is for")
 		if err := fs.Parse(args[2:]); err != nil {
 			return err
 		}
-		return call("POST", "/jobs", map[string]string{"title": *title, "description": *desc, "site": *site, "path": absPath(*dir)})
+		return call("POST", "/jobs", map[string]string{"title": *title, "description": *desc, "site": *site, "path": absPath(*dir), "source_issue": *issue})
 	case "site detect":
 		p, err := arg(args, 2)
 		if err != nil {

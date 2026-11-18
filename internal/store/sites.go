@@ -289,7 +289,7 @@ func (s *Store) CreateJobOn(site, title, description string) (Job, error) {
 	if _, err := s.GetSite(site); err != nil {
 		return Job{}, err
 	}
-	return s.createJob(site, title, description)
+	return s.createJob(site, title, description, "")
 }
 
 // CloseJob records that the developer accepted or discarded a Job.
