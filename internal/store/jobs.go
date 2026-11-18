@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -20,12 +21,13 @@ type Job struct {
 	Title       string    `json:"title"`
 	Description string    `json:"description,omitempty"`
 	Site        string    `json:"site,omitempty"`
-	Outcome     string    `json:"outcome,omitempty"`     // accepted or discarded once closed
-	ParkedFor   string    `json:"parked_for,omitempty"`  // why the Job awaits the Archwright, after a partial handback or a second failed review
-	Writ        string    `json:"writ,omitempty"`        // the ticket that authorised the Job's work, once linked
-	PRGoAhead   string    `json:"pr_go_ahead,omitempty"` // when the Archwright's PR go-ahead was recorded; it needs an overall review pass (ADR 0012)
-	PausedAt    string    `json:"paused_at,omitempty"`   // set while the developer has paused the Job: no new Wright starts
-	PurgedAt    string    `json:"purged_at,omitempty"`   // when the developer purged the Job's raw run content (ADR 0017)
+	SourceIssue string    `json:"source_issue,omitempty"` // URL of the Forge issue the Job is for; empty when it has none
+	Outcome     string    `json:"outcome,omitempty"`      // accepted or discarded once closed
+	ParkedFor   string    `json:"parked_for,omitempty"`   // why the Job awaits the Archwright, after a partial handback or a second failed review
+	Writ        string    `json:"writ,omitempty"`         // the ticket that authorised the Job's work, once linked
+	PRGoAhead   string    `json:"pr_go_ahead,omitempty"`  // when the Archwright's PR go-ahead was recorded; it needs an overall review pass (ADR 0012)
+	PausedAt    string    `json:"paused_at,omitempty"`    // set while the developer has paused the Job: no new Wright starts
+	PurgedAt    string    `json:"purged_at,omitempty"`    // when the developer purged the Job's raw run content (ADR 0017)
 	CreatedAt   time.Time `json:"created_at"`
 }
 
@@ -74,38 +76,83 @@ func newID(prefix string) string {
 
 // CreateJob records a new Job and a job.created event.
 func (s *Store) CreateJob(title, description string) (Job, error) {
-	return s.createJob("", title, description)
+	return s.createJob("", title, description, "")
 }
 
-func (s *Store) createJob(site, title, description string) (Job, error) {
+// CreateJobFor is CreateJob for a Job that may belong to a registered Site
+// (site "" for none) and may record the Forge issue it is for (sourceIssue ""
+// for none).
+func (s *Store) CreateJobFor(site, title, description, sourceIssue string) (Job, error) {
+	if site != "" {
+		if _, err := s.GetSite(site); err != nil {
+			return Job{}, err
+		}
+	}
+	return s.createJob(site, title, description, sourceIssue)
+}
+
+// ValidSourceIssue checks only the shape of a source issue reference, an
+// http(s) URL ending /issues/N, and returns it trimmed with no trailing slash.
+// Nothing is fetched or parsed further.
+func ValidSourceIssue(ref string) (string, error) {
+	ref = strings.TrimRight(strings.TrimSpace(ref), "/")
+	u, err := url.Parse(ref)
+	if err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != "" && u.RawQuery == "" && u.Fragment == "" && !strings.ContainsAny(ref, " \t\r\n") {
+		segs := strings.Split(u.Path, "/")
+		if n := len(segs); n >= 4 && segs[n-2] == "issues" && isDigits(segs[n-1]) {
+			return ref, nil
+		}
+	}
+	return "", fmt.Errorf("source issue must be an issue URL such as https://github.com/OWNER/REPO/issues/N, not %q", ref)
+}
+
+func isDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *Store) createJob(site, title, description, sourceIssue string) (Job, error) {
 	title = strings.TrimSpace(title)
 	if title == "" {
 		return Job{}, errors.New("job title is required")
 	}
+	if sourceIssue != "" {
+		var err error
+		if sourceIssue, err = ValidSourceIssue(sourceIssue); err != nil {
+			return Job{}, err
+		}
+	}
 	now := s.now().UTC()
 	at := now.Format(time.RFC3339Nano)
-	j := Job{ID: newID("job-"), Title: title, Description: description, Site: site, CreatedAt: now}
+	j := Job{ID: newID("job-"), Title: title, Description: description, Site: site, SourceIssue: sourceIssue, CreatedAt: now}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return Job{}, err
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec("INSERT INTO jobs (id, title, description, site, created_at) VALUES (?,?,?,NULLIF(?,''),?)", j.ID, j.Title, j.Description, j.Site, at); err != nil {
+	if _, err := tx.Exec("INSERT INTO jobs (id, title, description, site, source_issue, created_at) VALUES (?,?,?,NULLIF(?,''),NULLIF(?,''),?)", j.ID, j.Title, j.Description, j.Site, j.SourceIssue, at); err != nil {
 		return Job{}, err
 	}
-	if err := appendEvent(tx, at, j.ID, "job.created", map[string]string{"title": j.Title, "site": j.Site}); err != nil {
+	if err := appendEvent(tx, at, j.ID, "job.created", map[string]string{"title": j.Title, "site": j.Site, "source_issue": j.SourceIssue}); err != nil {
 		return Job{}, err
 	}
 	return j, tx.Commit()
 }
 
-const jobCols = "id, title, description, COALESCE(site,''), COALESCE(outcome,''), COALESCE(parked_reason,''), COALESCE(writ,''), COALESCE(pr_go_ahead_at,''), COALESCE(paused_at,''), COALESCE(purged_at,''), created_at"
+const jobCols = "id, title, description, COALESCE(site,''), COALESCE(source_issue,''), COALESCE(outcome,''), COALESCE(parked_reason,''), COALESCE(writ,''), COALESCE(pr_go_ahead_at,''), COALESCE(paused_at,''), COALESCE(purged_at,''), created_at"
 
 // GetJob reads one Job.
 func (s *Store) GetJob(id string) (Job, error) {
 	var j Job
 	var at string
-	err := s.db.QueryRow("SELECT "+jobCols+" FROM jobs WHERE id = ?", id).Scan(&j.ID, &j.Title, &j.Description, &j.Site, &j.Outcome, &j.ParkedFor, &j.Writ, &j.PRGoAhead, &j.PausedAt, &j.PurgedAt, &at)
+	err := s.db.QueryRow("SELECT "+jobCols+" FROM jobs WHERE id = ?", id).Scan(&j.ID, &j.Title, &j.Description, &j.Site, &j.SourceIssue, &j.Outcome, &j.ParkedFor, &j.Writ, &j.PRGoAhead, &j.PausedAt, &j.PurgedAt, &at)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Job{}, fmt.Errorf("job %q: %w", id, ErrNotFound)
 	}
@@ -127,7 +174,7 @@ func (s *Store) ListJobs() ([]Job, error) {
 	for rows.Next() {
 		var j Job
 		var at string
-		if err := rows.Scan(&j.ID, &j.Title, &j.Description, &j.Site, &j.Outcome, &j.ParkedFor, &j.Writ, &j.PRGoAhead, &j.PausedAt, &j.PurgedAt, &at); err != nil {
+		if err := rows.Scan(&j.ID, &j.Title, &j.Description, &j.Site, &j.SourceIssue, &j.Outcome, &j.ParkedFor, &j.Writ, &j.PRGoAhead, &j.PausedAt, &j.PurgedAt, &at); err != nil {
 			return nil, err
 		}
 		j.CreatedAt, _ = time.Parse(time.RFC3339Nano, at)

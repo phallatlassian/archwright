@@ -100,6 +100,28 @@ func TestCreateJobAndPlanReadBackThroughCLI(t *testing.T) {
 	}
 }
 
+func TestJobSourceIssueThroughCLI(t *testing.T) {
+	s := newSandbox(t)
+	const issue = "https://github.com/acme/widgets/issues/80"
+	var job struct {
+		ID          string
+		SourceIssue string `json:"source_issue"`
+	}
+	if err := json.Unmarshal([]byte(s.run("job", "create", "--title", "From an issue", "--issue", issue)), &job); err != nil || job.SourceIssue != issue {
+		t.Fatalf("%+v %v", job, err)
+	}
+	plain := s.run("job", "create", "--title", "No issue")
+	if strings.Contains(plain, "source_issue") {
+		t.Errorf("a Job without an issue shows one: %s", plain)
+	}
+	if out := s.run("job", "show", job.ID); !strings.Contains(out, issue) {
+		t.Errorf("job show lacks the source issue: %s", out)
+	}
+	if out, err := s.cmd("", "job", "create", "--title", "Bad", "--issue", "80"); err == nil {
+		t.Errorf("malformed issue accepted: %s", out)
+	}
+}
+
 func TestWorksStartsOnceAndOutlivesCommands(t *testing.T) {
 	s := newSandbox(t)
 	s.run("job", "list") // starts the Works
