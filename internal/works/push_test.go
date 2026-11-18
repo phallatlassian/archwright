@@ -248,10 +248,10 @@ func TestPushReachesALocalBareRemoteAsAFastForwardAndNeverTheDefaultBranch(t *te
 		t.Fatalf("remote %s, want %s", got, second)
 	}
 
-	git(t, g.worktree.Path, "reset", "--hard", "HEAD~2") // rewritten history is refused by the remote
+	git(t, g.worktree.Path, "reset", "--hard", "HEAD~2") // rewritten history is never even offered to the remote
 	g.commit("c.txt", "c")
 	resp := g.call(g.warden, "push_branch", `{}`)
-	if resp.OK || resp.Error.Code != spool.CodeForgeFault || !strings.Contains(resp.Error.Message, "non-fast-forward") {
+	if resp.OK || resp.Error.Code != spool.CodeConflict || !strings.Contains(resp.Error.Message, "rewrite history") {
 		t.Fatalf("%+v", resp)
 	}
 	if got := git(t, remote, "rev-parse", g.worktree.Branch); got != second {

@@ -630,6 +630,13 @@ func (r *Runs) wrightWorktree(d store.Dispatch) (string, error) {
 	if _, err := os.Stat(kept); kept != "" && err == nil {
 		return kept, nil // requeued after a rate limit: the same worktree, not another
 	}
+	if isMergeBasePiece(d.Piece) { // a merge Wright commits on the integration branch itself, so the push is a fast-forward (ADR 0022)
+		path, err := sm.IntegrationWorktree(d.JobID)
+		if err != nil {
+			return "", fmt.Errorf("finding the integration worktree: %w", err)
+		}
+		return path, nil
+	}
 	wt, err := sm.CreateWorktree(d.JobID, store.KindWright, "")
 	if err != nil {
 		return "", fmt.Errorf("creating the Wright's worktree: %w", err)

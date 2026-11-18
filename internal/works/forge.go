@@ -73,6 +73,9 @@ func pushBranch(c *callCtx, in json.RawMessage) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := sm.CheckFastForward(job.ID); err != nil { // a rewritten branch is never offered to the Forge
+		return nil, err
+	}
 	err = c.runs.forgeOrDefault().PushBranch(c.runs.bg, forge.PushRequest{SiteURL: t.SiteURL, ClonePath: t.ClonePath, Branch: t.Branch, DefaultBranch: t.DefaultBranch})
 	if err != nil {
 		return nil, c.runs.forgeFailure(job, "push the integration branch", err)
