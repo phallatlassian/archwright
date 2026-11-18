@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+
+	"github.com/phallatlassian/archwright/internal/remote"
 )
 
 // Issue is a Forge issue as read. Everything in it is third-party text.
@@ -21,10 +23,22 @@ type Issue struct {
 	Labels []string `json:"labels,omitempty"`
 }
 
+// PushRequest names one push of a Job's integration branch. Every field is
+// resolved by the Works from the Job and its Site, never taken from an agent.
+type PushRequest struct {
+	SiteURL       string // the Site's remote URL: picks the adapter
+	ClonePath     string // the Works' own clone to push from
+	Branch        string // the Job's integration branch, a local branch of the clone
+	DefaultBranch string // the Site's default branch, which is never pushed
+}
+
 // Forge is what the Works asks of a Forge. A second Forge is a second adapter.
 type Forge interface {
 	// ReadIssue reads the issue at the given issue URL.
 	ReadIssue(ctx context.Context, issueURL string) (Issue, error)
+	// PushBranch pushes req.Branch to the Site's remote under the same name. It
+	// is never forced: a push that is not a fast-forward fails.
+	PushBranch(ctx context.Context, req PushRequest) error
 }
 
 // ErrUnsupported is what a Forge with no adapter answers to every call.
@@ -55,6 +69,9 @@ type Unsupported struct{}
 // ReadIssue always returns ErrUnsupported.
 func (Unsupported) ReadIssue(context.Context, string) (Issue, error) { return Issue{}, ErrUnsupported }
 
+// PushBranch always returns ErrUnsupported.
+func (Unsupported) PushBranch(context.Context, PushRequest) error { return ErrUnsupported }
+
 // ByHost routes each call to the adapter for the URL's host; a host with no
 // adapter is answered "unsupported".
 type ByHost struct {
@@ -69,6 +86,20 @@ func Default() Forge {
 // ReadIssue implements Forge.
 func (b ByHost) ReadIssue(ctx context.Context, issueURL string) (Issue, error) {
 	return b.pick(issueURL).ReadIssue(ctx, issueURL)
+}
+
+// PushBranch implements Forge, routing by the host of the Site's remote, which
+// may be an scp-style address such as git@github.com:o/r.
+func (b ByHost) PushBranch(ctx context.Context, req PushRequest) error {
+	key, err := remote.Normalize(req.SiteURL) // host/owner/repo
+	if err != nil {
+		return ErrUnsupported
+	}
+	host, _, _ := strings.Cut(key, "/")
+	if f, ok := b.Adapters[strings.ToLower(host)]; ok {
+		return f.PushBranch(ctx, req)
+	}
+	return ErrUnsupported
 }
 
 func (b ByHost) pick(ref string) Forge {

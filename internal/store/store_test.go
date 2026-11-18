@@ -472,3 +472,33 @@ func TestSourceIssueShapeIsValidated(t *testing.T) {
 		t.Fatalf("surrounding space and a trailing slash should be tolerated: %v", err)
 	}
 }
+
+func TestRecordPRIsOncePerJobAndIdempotent(t *testing.T) {
+	s, _ := open(t)
+	j, err := s.CreateJob("T", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.GetJob(j.ID); got.PR != "" {
+		t.Fatalf("a new Job has PR %q", got.PR)
+	}
+	const pr = "https://github.com/o/r/pull/1"
+	if err := s.RecordPR(j.ID, pr); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RecordPR(j.ID, pr); err != nil {
+		t.Fatalf("recording the same PR again: %v", err)
+	}
+	if err := s.RecordPR(j.ID, "https://github.com/o/r/pull/2"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("a second PR: %v", err)
+	}
+	if err := s.RecordPR("job-missing", pr); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("%v", err)
+	}
+	if err := s.RecordPR(j.ID, " "); err == nil {
+		t.Fatal("an empty URL was recorded")
+	}
+	if got, _ := s.GetJob(j.ID); got.PR != pr {
+		t.Fatalf("PR %q", got.PR)
+	}
+}
