@@ -221,6 +221,9 @@ func dispatchWright(c *callCtx, in json.RawMessage) (any, error) {
 	if err := requireField("piece", a.Piece); err != nil {
 		return nil, err
 	}
+	if isMergeBasePiece(a.Piece) {
+		return nil, fmt.Errorf("%w: the %q piece prefix is reserved for merge_base", errInvalidInput, mergeBasePiece+"-")
+	}
 	g, err := c.warden()
 	if err != nil {
 		return nil, err
@@ -255,6 +258,9 @@ func reworkWright(c *callCtx, in json.RawMessage) (any, error) {
 	}
 	if err := requireField("reason", a.Reason); err != nil {
 		return nil, err
+	}
+	if isMergeBasePiece(a.Piece) {
+		return nil, fmt.Errorf("%w: merge_base pieces cannot be reworked; call merge_base again", errInvalidInput)
 	}
 	g, err := c.warden()
 	if err != nil {

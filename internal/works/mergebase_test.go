@@ -267,3 +267,12 @@ func TestMergeBaseWithTheBaseAlreadyMergedStartsNoWright(t *testing.T) {
 		t.Fatalf("%+v, %d Wrights", out, len(g.runner.Requests()))
 	}
 }
+
+func TestWardenCannotUseTheReservedMergeBasePieceName(t *testing.T) {
+	g, _, _, _ := conflictRig(t, "CONFLICTING")
+	g.fails(g.warden, "dispatch_wright", `{"piece":"merge-base-x","brief":`+goodBrief+`}`, spool.CodeInvalidInput)
+	g.fails(g.warden, "rework_wright", `{"piece":"merge-base-1","reason":"r","brief":`+goodBrief+`}`, spool.CodeInvalidInput)
+	if len(g.runner.Requests()) != 0 {
+		t.Fatal("a Wright was started")
+	}
+}
