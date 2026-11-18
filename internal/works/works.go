@@ -17,6 +17,7 @@ import (
 
 	"github.com/phallatlassian/archwright/internal/config"
 	"github.com/phallatlassian/archwright/internal/defs"
+	"github.com/phallatlassian/archwright/internal/forge"
 	"github.com/phallatlassian/archwright/internal/paths"
 	"github.com/phallatlassian/archwright/internal/sites"
 	"github.com/phallatlassian/archwright/internal/skills"
@@ -104,6 +105,7 @@ func ServeWith(ctx context.Context, d paths.Dirs, ready chan<- struct{}, opts Op
 	runs := NewRuns(st)
 	defer runs.Close()
 	runs.UseSites(sm)
+	runs.UseForge(forge.Default())
 	runs.SetPreflight(opts.Preflight)
 	reg := defs.New(defs.Shipped(), d.Config)
 	ReloadDefinitions(reg)

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/phallatlassian/archwright/internal/defs"
+	"github.com/phallatlassian/archwright/internal/forge"
 	"github.com/phallatlassian/archwright/internal/launch"
 	"github.com/phallatlassian/archwright/internal/sites"
 	"github.com/phallatlassian/archwright/internal/spool"
@@ -45,6 +46,7 @@ type Runs struct {
 	reviewer  ReviewRunner // runs Reviews (ADR 0012)
 	warden    WardenRunner // runs the Wardens of started Plan steps (ADR 0020)
 	skills    *SkillsDelivery
+	forge     forge.Forge       // what Forge tools act through (ADR 0022); nil means forge.Default
 	spoolRoot string            // when set, every run's spool lives here; otherwise each run's runner picks (ADR 0018)
 	wrightWts map[string]string // dispatch id -> its Wright's worktree, kept across a rate-limit requeue
 	bg        context.Context
@@ -144,6 +146,23 @@ func (r *Runs) spoolRootFor(guild string) (string, error) {
 		runnerName = g.Binding.Runner
 	}
 	return launch.SpoolRoot(runnerName, os.Getuid(), os.TempDir()), nil
+}
+
+// UseForge sets the Forge the Forge tools act through. Without one the Works
+// uses forge.Default.
+func (r *Runs) UseForge(f forge.Forge) {
+	r.mu.Lock()
+	r.forge = f
+	r.mu.Unlock()
+}
+
+func (r *Runs) forgeOrDefault() forge.Forge {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.forge == nil {
+		return forge.Default()
+	}
+	return r.forge
 }
 
 // SetPreflight makes every run start only while check passes.
@@ -303,7 +322,10 @@ func (r *Runs) respond(ru *run, id string) (resp spool.Response, cache bool) {
 		return reject(id, spool.CodeRunEnded, "run has ended"), true
 	}
 	out, err := t.call(&callCtx{st: r.st, runs: r, run: ru}, req.Input)
+	var ce *codedError
 	switch {
+	case errors.As(err, &ce):
+		return reject(id, ce.code, ce.msg), true
 	case err == nil:
 		b, merr := json.Marshal(out)
 		if merr != nil {

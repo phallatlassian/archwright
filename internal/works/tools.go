@@ -28,6 +28,11 @@ type callCtx struct {
 	run  *run
 }
 
+// codedError is a failure that answers with its own spool error code.
+type codedError struct{ code, msg string }
+
+func (e *codedError) Error() string { return e.msg }
+
 type tool struct {
 	roles []string
 	call  func(c *callCtx, in json.RawMessage) (any, error)
