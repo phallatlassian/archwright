@@ -254,7 +254,7 @@ func TestPRForgeFaultsAreStructuredAndAuthNetworkRaiseNeedsYou(t *testing.T) {
 		{&forge.Error{Kind: forge.KindAuth, Detail: "no creds"}, spool.CodeForgeFault, true},
 		{&forge.Error{Kind: forge.KindNetwork, Detail: "offline"}, spool.CodeForgeFault, true},
 		{&forge.Error{Kind: forge.KindOther, Detail: "no commits between main and head"}, spool.CodeForgeFault, false},
-		{forge.ErrUnsupported, spool.CodeUnsupported, false},
+		{forge.ErrUnsupported, spool.CodeUnsupported, true},
 	} {
 		g, f, env := openPRRig(t)
 		f.prs.err = c.err
@@ -394,5 +394,70 @@ func TestPRToolsEndToEndThroughTheGHAdapterAndAStubGH(t *testing.T) {
 		if strings.Contains(line, "other/repo") {
 			t.Fatalf("gh reached another repository: %s", line)
 		}
+	}
+}
+
+func TestUnsupportedForgeFailsOpenPRStepAsNeedsYouNamingTheBranch(t *testing.T) {
+	for _, tool := range []string{"open_pr", "push_branch"} {
+		g, f, env := openPRRig(t)
+		f.prs.err, f.pushed = forge.ErrUnsupported, forge.ErrUnsupported
+		args := openArgs
+		if tool == "push_branch" {
+			args = `{}`
+		}
+		resp := g.call(env, tool, args)
+		if resp.OK || resp.Error.Code != spool.CodeUnsupported || !strings.Contains(resp.Error.Message, g.worktree.Branch) {
+			t.Fatalf("%s: %+v", tool, resp)
+		}
+		sr, err := g.st.GetStepRun(g.job.ID, OpenPRStep)
+		if err != nil || sr.Status != store.StepFailed || !strings.Contains(sr.Reason, g.worktree.Branch) {
+			t.Fatalf("%s: step %+v, %v", tool, sr, err)
+		}
+		items, _ := g.st.NeedsYou()
+		if len(items) != 1 || items[0].Kind != store.NeedsForgeUnsupported || items[0].JobID != g.job.ID || !strings.Contains(items[0].Summary, g.worktree.Branch) {
+			t.Fatalf("%s: Needs-you %+v", tool, items)
+		}
+		if _, err := os.Stat(g.worktree.Path); err != nil {
+			t.Fatalf("%s: the integration worktree was lost: %v", tool, err)
+		}
+		if out, err := exec.Command("git", "-C", g.worktree.Path, "rev-parse", "--verify", g.worktree.Branch).CombinedOutput(); err != nil {
+			t.Fatalf("%s: the branch was lost: %s", tool, out)
+		}
+		if job, _ := g.st.GetJob(g.job.ID); job.PR != "" || job.Outcome != "" {
+			t.Fatalf("%s: job changed: %+v", tool, job)
+		}
+	}
+}
+
+// A Site whose host has no adapter registered and ran its local steps (the
+// gate check here); only open-pr fails, and the branch and worktree survive.
+// Through the real Forge router and, with ARCHWRIGHT_LIVE_BIN, the built binary.
+func TestUnsupportedHostSiteRunsLocalStepsThenOpenPRFailsVisibly(t *testing.T) {
+	g := newGateRig(t, store.Gates{})
+	g.r.UseForge(forge.ByHost{Adapters: map[string]forge.Forge{"github.com": forge.GH{}}})
+	site, err := g.st.GetSite("demo")
+	if err != nil || strings.Contains(site.URL, "github.com") {
+		t.Fatalf("site %+v, %v", site, err)
+	}
+	sha := g.commit("local.txt", "local work\n")
+	g.planWithOpenPR(true)
+	env := g.wardenFor(RoleWarden, OpenPRStep)
+
+	resp := toolVia(t, env, "open_pr", openArgs)
+	if resp.OK || resp.Error.Code != spool.CodeUnsupported || !strings.Contains(resp.Error.Message, g.worktree.Branch) {
+		t.Fatalf("open: %+v", resp)
+	}
+	if sr, _ := g.st.GetStepRun(g.job.ID, OpenPRStep); sr.Status != store.StepFailed {
+		t.Fatalf("step %+v", sr)
+	}
+	items, _ := g.st.NeedsYou()
+	if len(items) != 1 || !strings.Contains(items[0].Summary, g.worktree.Branch) {
+		t.Fatalf("Needs-you %+v", items)
+	}
+	if got := git(t, g.worktree.Path, "rev-parse", g.worktree.Branch); got != sha {
+		t.Fatalf("branch moved: %s != %s", got, sha)
+	}
+	if _, err := os.Stat(filepath.Join(g.worktree.Path, "local.txt")); err != nil {
+		t.Fatalf("worktree lost its work: %v", err)
 	}
 }

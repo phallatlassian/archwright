@@ -205,7 +205,7 @@ func TestPushForgeFaultsAreStructuredAndAuthNetworkRaiseNeedsYou(t *testing.T) {
 		{&forge.Error{Kind: forge.KindAuth, Detail: "no creds"}, spool.CodeForgeFault, true},
 		{&forge.Error{Kind: forge.KindNetwork, Detail: "offline"}, spool.CodeForgeFault, true},
 		{&forge.Error{Kind: forge.KindOther, Detail: "non-fast-forward"}, spool.CodeForgeFault, false},
-		{forge.ErrUnsupported, spool.CodeUnsupported, false},
+		{forge.ErrUnsupported, spool.CodeUnsupported, true},
 	} {
 		g := newGateRig(t, store.Gates{})
 		f := &fakeForge{pushed: c.err}
