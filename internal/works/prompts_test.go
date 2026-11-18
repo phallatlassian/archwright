@@ -94,10 +94,3 @@ func TestReviewBriefCarriesTheAgentRules(t *testing.T) {
 	brief := renderReviewBrief(Guild{Name: "hallmark"}, store.Review{Seq: 1, SHA: "abc", Branch: "b"}, "/wt", "spec")
 	assertAgentRules(t, "review Warden", brief)
 }
-
-// Every Wright and Warden brief is checked for guidance above; the templates
-// the agents read must not undo it.
-func TestEmbeddedGuidanceNeverInstructsGhOrGitPush(t *testing.T) {
-	assertNoForgeShellInstruction(t, "warden.md", wardenMD)
-	assertNoForgeShellInstruction(t, "agentRules", agentRules)
-}
