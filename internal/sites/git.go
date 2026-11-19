@@ -12,6 +12,11 @@ import (
 // the caller's GIT_* repository overrides are dropped so only dir decides
 // which repository is touched.
 func git(dir string, args ...string) (string, error) {
+	return gitEnv(dir, nil, args...)
+}
+
+// gitEnv is git with extra environment variables, which win over the caller's.
+func gitEnv(dir string, env []string, args ...string) (string, error) {
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
 	for _, e := range os.Environ() {
 		if strings.HasPrefix(e, "GIT_DIR=") || strings.HasPrefix(e, "GIT_WORK_TREE=") || strings.HasPrefix(e, "GIT_INDEX_FILE=") {
@@ -20,6 +25,7 @@ func git(dir string, args ...string) (string, error) {
 		cmd.Env = append(cmd.Env, e)
 	}
 	cmd.Env = append(cmd.Env, "GIT_TERMINAL_PROMPT=0")
+	cmd.Env = append(cmd.Env, env...)
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	if err := cmd.Run(); err != nil {
