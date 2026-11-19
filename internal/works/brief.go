@@ -129,10 +129,7 @@ func (b Brief) Render(guild, standards string, round int, reason string) string 
 		w.WriteString("(the Guild states no standards)\n")
 	}
 	w.WriteString("\n" + agentRules)
-	w.WriteString("## Committing\n\nCommit your work by calling `archwright tool commit` with `{\"message\":\"<commit message>\"}` on stdin. " +
-		"The Works stages and commits in your own worktree for you; add `\"paths\":[\"<path relative to your working directory>\"]` to commit only those paths. " +
-		"Use it if `git commit` fails with `Operation not permitted`, which it does in some sandboxes. Never amend, rebase or reset.\n\n")
-	w.WriteString("## Returning your result\n\nWhen finished, call `archwright tool report_result` with JSON on stdin:\n" +
+	w.WriteString("\n## Returning your result\n\nWhen finished, call `archwright tool report_result` with JSON on stdin:\n" +
 		"`{\"status\":\"done|blocked|failed\",\"result\":\"<pointer to the result>\",\"evidence\":[...],\"observations\":[...],\"uncertainty\":\"...\"}`.\n" +
 		"Return large artifacts by pointer. Put anything outside your remit under `observations`.\n" +
 		"\n## Asking\n\nIf you need a human decision, a manual step done, or something clarified, call `archwright tool ask` with JSON on stdin:\n" +

@@ -562,7 +562,6 @@ func (r *Runs) start(d store.Dispatch) error {
 			extra, runErr = r.deliverSkillsFor(d, env.Run, wt)
 		}
 		if runErr == nil {
-			r.setWorkdir(env.Run, wt, extra)
 			runErr = runner.Run(ctx, RunRequest{Env: env, Job: d.JobID, Guild: d.Guild, Piece: d.Piece, DispatchID: d.ID, Worktree: wt, Brief: d.Rendered, ExtraEnv: extra, Trace: trace})
 		}
 		unreported := false

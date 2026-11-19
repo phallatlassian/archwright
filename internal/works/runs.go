@@ -79,11 +79,6 @@ type run struct {
 	stop                 chan struct{}
 	done                 chan struct{}
 
-	// A Wright's working copy and git environment, set once its worktree is
-	// ready (ADR 0022). Read by the commit tool under mu, which a call holds.
-	workdir string
-	gitEnv  []string
-
 	mu    sync.Mutex
 	ended bool
 	// answered remembers each handled request id's response, so a replayed
@@ -106,24 +101,6 @@ type RunContext struct {
 	DispatchID string // the dispatch a Wright carries out
 	Review     string // the review a fresh Warden carries out
 	Task       string // the Plan step a Warden carries out (ADR 0020)
-}
-
-// setWorkdir records where a Wright run works and the git environment it runs
-// with, so the commit tool acts on that worktree and nothing a caller names.
-func (r *Runs) setWorkdir(runID, dir string, env map[string]string) {
-	r.mu.Lock()
-	ru := r.runs[runID]
-	r.mu.Unlock()
-	if ru == nil {
-		return
-	}
-	var kv []string
-	for k, v := range env {
-		kv = append(kv, k+"="+v)
-	}
-	ru.mu.Lock()
-	ru.workdir, ru.gitEnv = dir, kv
-	ru.mu.Unlock()
 }
 
 // Configure sets where Guild definitions come from and which Runner carries
