@@ -58,11 +58,6 @@ type gateRig struct {
 
 func newGateRig(t *testing.T, gates store.Gates) *gateRig {
 	g := newRig(t, nil)
-	// The commit tool commits as whoever git is configured as; CI has no one.
-	for _, k := range []string{"GIT_AUTHOR", "GIT_COMMITTER"} {
-		t.Setenv(k+"_NAME", "t")
-		t.Setenv(k+"_EMAIL", "t@example.com")
-	}
 	url := fakeHost(t, map[string]string{"verdict.txt": "good\n"})
 	root, _ := filepath.EvalSymlinks(t.TempDir())
 	sm := sites.New(g.st, filepath.Join(root, "worktrees"), filepath.Join(root, "clones"))

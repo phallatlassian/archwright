@@ -21,14 +21,6 @@ type FakeRunner struct {
 	asks   map[string][]string // per piece, the ask input a run raises instead of reporting
 	briefs []RunRequest
 	delay  time.Duration
-	act    func(ctx context.Context, req RunRequest) error
-}
-
-// WithAct makes each run call fn after it starts and before it reports, so a
-// test can play the part of a Wright using its worktree and tool calls.
-func (f *FakeRunner) WithAct(fn func(ctx context.Context, req RunRequest) error) *FakeRunner {
-	f.act = fn
-	return f
 }
 
 // WithDelay makes each run wait before it reports, so a Wright can be in
@@ -81,11 +73,6 @@ func (f *FakeRunner) Run(ctx context.Context, req RunRequest) error {
 		case <-time.After(f.delay):
 		case <-ctx.Done():
 			return ctx.Err()
-		}
-	}
-	if f.act != nil {
-		if err := f.act(ctx, req); err != nil {
-			return err
 		}
 	}
 	if ask != "" {
