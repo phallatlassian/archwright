@@ -184,20 +184,20 @@ finish() {
 # git push under managed policy?). Results land in $ENV_FILE as KEY=VALUE lines.
 # ──────────────────────────────────────────────────────────────────────────
 
-TOTAL_STAGES=18
+TOTAL_STAGES=17
 # The library defaults ENV_FILE to .env; force a dedicated results file instead.
 ENV_FILE="${SPIKE_RESULTS:-spike-97-results.env}"
 
 # Resume support: START_AT=10 ./spike-97-forge-session.sh (or pass the number as
 # the first argument). Run it from the directory holding the results file.
-# Supported start points: 1-10 and 18 (clean up).
+# Supported start points: 1-10 and 17 (clean up).
 START_AT="${START_AT:-${1:-1}}"
 BRANCH="spike/forge-97"
 CODEX_BRANCH="spike/forge-97-codex"
 PR_NUMBER=""; CODEX_PR_NUMBER=""; CODEX_RUN=0
 if (( START_AT > 1 )); then
-  if (( START_AT > 10 && START_AT != 18 )); then
-    warn "can only resume at stages 1-10 or 18 (stages 11-17 depend on stage 10)"; exit 1
+  if (( START_AT > 10 && START_AT != 17 )); then
+    warn "can only resume at stages 1-10 or 17 (stages 11-16 depend on stage 10)"; exit 1
   fi
   [[ -f "$ENV_FILE" ]] || { warn "no $ENV_FILE here; run from the directory with your earlier results"; exit 1; }
   FIXTURE_REPO="$(_existing FIXTURE_REPO || true)"
@@ -414,12 +414,12 @@ fi
 
 # ── 10 ────────────────────────────────────────────────────────────────────
 if (( START_AT <= 10 )); then
-stage "Codex (optional): worktree and writable roots (#106)"
+stage "Codex (optional): worktree for the interactive session"
 CODEX_BRANCH="spike/forge-97-codex"
 CODEX_WT="$(cd "$FIXTURE_REPO/.." && pwd)/spike-97-codex-worktree"
 CODEX_PR_NUMBER=""
 CODEX_RUN=0
-CODEX_STAGES=7   # stages after this one that belong to the Codex run
+CODEX_STAGES=6   # stages after this one that belong to the Codex run
 if command -v codex >/dev/null 2>&1 && confirm "Run the Codex part of the spike?"; then
   CODEX_RUN=1
   say "Codex gets its own worktree and branch so the Claude commit does not interfere."
@@ -429,18 +429,9 @@ if command -v codex >/dev/null 2>&1 && confirm "Run the Codex part of the spike?
     git -C "$FIXTURE_REPO" worktree add -b "$CODEX_BRANCH" "$CODEX_WT"
   fi
   write_env CODEX_WORKTREE "$CODEX_WT"
-  CODEX_GITDIR="$(git -C "$CODEX_WT" rev-parse --absolute-git-dir)"
-  CODEX_COMMON="$(git -C "$CODEX_WT" rev-parse --path-format=absolute --git-common-dir)"
-  # Codex's sandbox refuses to start if a listed root does not exist (seen on
-  # Linux/bwrap with a fresh bare clone that has no logs/ directory).
-  mkdir -p "$CODEX_COMMON/logs"
-  CODEX_ROOTS="[\"$CODEX_GITDIR\",\"$CODEX_COMMON/objects\",\"$CODEX_COMMON/refs\",\"$CODEX_COMMON/logs\"]"
-  CODEX_CFG="sandbox_workspace_write.writable_roots=$CODEX_ROOTS"
-  write_env CODEX_WRITABLE_ROOTS "$CODEX_ROOTS"
   say ""
-  say "Issue #106 proposes launching codex with workspace-write and exactly these writable roots:"
-  note "-s workspace-write -c '$CODEX_CFG'"
-  warn "Your global git config may sign commits (commit.gpgsign). Note any gpg error you see."
+  say "This tests a NON-headless codex session as a Forge agent: launch it exactly as the"
+  say "Archwright is launched, with no extra permission or sandbox flags."
   pause "Press Enter to continue."
 else
   write_env CODEX_RESULTS "skipped"
@@ -448,43 +439,29 @@ else
 fi
 fi
 
-# ── 11 ────────────────────────────────────────────────────────────────────
+# ── 11-16 ─────────────────────────────────────────────────────────────────
 if (( CODEX_RUN )); then
-  stage "Codex: headless check (as the Works runs a Wright)"
-  say "Run this yourself in a terminal. It sends one short prompt to the model and"
-  say "edits and commits only inside the codex worktree:"
-  say ""
-  step "cd $CODEX_WT"
-  step "codex exec --json --ephemeral -s workspace-write -c '$CODEX_CFG' -- \"Create file spike-97-codex-headless.txt containing 'spike', run git add spike-97-codex-headless.txt, then git commit -m 'spike 97 codex headless'. If anything fails, report the stderr verbatim and do not try alternatives.\""
-  note "Tip: append '| tee codex-headless.jsonl' to keep the transcript."
-  pause "Press Enter once the command has finished."
-  record_action CXH_HEADLESS_COMMIT codex
-  ask CXH_PACKED_REFS "Did a 'packed-refs.lock' message appear? (yes/no):"
-  ask CXH_GPG "Did a gpg / commit-signing error appear? (yes/no):"
-  write_env CXH_PACKED_REFS "${CXH_PACKED_REFS:-}"
-  write_env CXH_GPG "${CXH_GPG:-}"
-
-  # ── 12 ──────────────────────────────────────────────────────────────────
+  # ── 11 ──────────────────────────────────────────────────────────────────
   stage "Codex: launch the interactive session"
   say "In a SECOND terminal:"
   step "cd $CODEX_WT"
-  step "codex -s workspace-write -c '$CODEX_CFG'"
-  step "no other flags: no danger-full-access, no --add-dir"
-  ask CODEX_LAUNCH_COMMAND "Paste the exact command you used (Enter to keep the one above):"
+  step "launch codex exactly as the Archwright is launched (interactive, no extra flags)"
+  step "do NOT pre-approve anything"
+  ask CODEX_LAUNCH_COMMAND "Paste the exact command you used:"
   ask CODEX_APPROVAL_MODE "Approval policy shown in the session (e.g. on-request, never):"
-  ask CODEX_SANDBOX_MODE "Sandbox mode shown (expect workspace-write, or say if managed policy refused it):"
-  write_env CODEX_LAUNCH_COMMAND "${CODEX_LAUNCH_COMMAND:-codex -s workspace-write -c '$CODEX_CFG'}"
+  ask CODEX_SANDBOX_MODE "Sandbox mode shown (read-only, workspace-write, danger-full-access, unsure):"
+  write_env CODEX_LAUNCH_COMMAND "$CODEX_LAUNCH_COMMAND"
   write_env CODEX_APPROVAL_MODE "$CODEX_APPROVAL_MODE"
   write_env CODEX_SANDBOX_MODE "$CODEX_SANDBOX_MODE"
 
-  # ── 13 ──────────────────────────────────────────────────────────────────
+  # ── 12 ──────────────────────────────────────────────────────────────────
   stage "Codex action 1/5: gh issue view"
   say "Paste this into the codex session:"
   note "Run exactly: gh issue view $FIXTURE_ISSUE   Report what happened. If it fails, do not try alternatives."
   pause "Press Enter once codex has finished."
   record_action CX1_ISSUE_VIEW codex
 
-  # ── 14 ──────────────────────────────────────────────────────────────────
+  # ── 13 ──────────────────────────────────────────────────────────────────
   stage "Codex action 2/5: git commit in the worktree"
   say "Paste this into the codex session:"
   note "Create a file spike-97-codex.txt containing 'spike', then run: git add spike-97-codex.txt && git commit -m 'spike 97 codex'. Report what happened. If it fails, do not try alternatives."
@@ -492,14 +469,14 @@ if (( CODEX_RUN )); then
   record_action CX2_COMMIT codex
   seed_commit_if_failed CX2_COMMIT "$CODEX_WT" spike-97-codex.txt "spike 97 codex"
 
-  # ── 15 ──────────────────────────────────────────────────────────────────
+  # ── 14 ──────────────────────────────────────────────────────────────────
   stage "Codex action 3/5: git push"
   say "Paste this into the codex session:"
   note "Run exactly: git push -u origin $CODEX_BRANCH   Report what happened. If it fails, do not try alternatives."
   pause "Press Enter once codex has finished."
   record_action CX3_PUSH codex
 
-  # ── 16 ──────────────────────────────────────────────────────────────────
+  # ── 15 ──────────────────────────────────────────────────────────────────
   stage "Codex action 4/5: gh pr create"
   say "Skip if the push failed (choose 4 and note 'skipped: no branch')."
   say "Paste this into the codex session:"
@@ -509,7 +486,7 @@ if (( CODEX_RUN )); then
   ask CODEX_PR_NUMBER "PR number created (Enter if none):"
   write_env CODEX_PR_NUMBER "${CODEX_PR_NUMBER:-}"
 
-  # ── 17 ──────────────────────────────────────────────────────────────────
+  # ── 16 ──────────────────────────────────────────────────────────────────
   stage "Codex action 5/5: gh pr comment"
   say "Skip if there is no PR."
   say "Paste this into the codex session:"
@@ -518,8 +495,8 @@ if (( CODEX_RUN )); then
   record_action CX5_PR_COMMENT codex
 fi
 
-# ── 18 ────────────────────────────────────────────────────────────────────
-if (( START_AT <= 18 )); then
+# ── 17 ────────────────────────────────────────────────────────────────────
+if (( START_AT <= 17 )); then
 stage "Clean up"
 say "Closes the draft PRs, deletes the remote branches and removes the worktrees."
 if confirm "Clean up now?"; then
