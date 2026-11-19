@@ -181,6 +181,18 @@ func (b ByHost) CommentPR(ctx context.Context, prURL, body string) error {
 	return b.pick(prURL).CommentPR(ctx, prURL, body)
 }
 
+// SupportsSite reports whether the Default Forge has an adapter for the host
+// of a Site's remote URL (https or scp-style).
+func SupportsSite(siteURL string) bool {
+	key, err := remote.Normalize(siteURL)
+	if err != nil {
+		return false
+	}
+	host, _, _ := strings.Cut(key, "/")
+	_, ok := Default().(ByHost).Adapters[strings.ToLower(host)]
+	return ok
+}
+
 func (b ByHost) pick(ref string) Forge {
 	u, err := url.Parse(ref)
 	if err != nil {

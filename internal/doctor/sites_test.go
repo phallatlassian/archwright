@@ -24,7 +24,12 @@ func git(t *testing.T, args ...string) {
 func siteDeps(t *testing.T, pocock bool, gates store.Gates) (Deps, string) {
 	t.Helper()
 	d := newDeps(t)
-	d.Output = execOutput
+	d.Output = func(ctx context.Context, name string, args ...string) (string, error) {
+		if filepath.Base(name) == "gh" { // never the developer's real gh
+			return "Logged in to github.com", nil
+		}
+		return execOutput(ctx, name, args...)
+	}
 	host, _ := filepath.EvalSymlinks(t.TempDir())
 	t.Setenv("GIT_CONFIG_COUNT", "1")
 	t.Setenv("GIT_CONFIG_KEY_0", "url."+host+"/.insteadOf")

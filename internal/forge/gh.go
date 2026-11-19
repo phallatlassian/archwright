@@ -55,6 +55,10 @@ var (
 	netMarkers  = []string{"could not resolve host", "no such host", "dial tcp", "connection refused", "i/o timeout", "network is unreachable", "timeout", "tls", "x509", "unable to access", "could not read from remote repository"}
 )
 
+// Classify sorts the output of a failed gh call into a fault class, as the
+// adapter does for its own calls.
+func Classify(output string, err error) *Error { return classify(output, err) }
+
 // classify sorts a failed gh call by its stderr.
 func classify(stderr string, err error) *Error {
 	detail := strings.TrimSpace(stderr)
