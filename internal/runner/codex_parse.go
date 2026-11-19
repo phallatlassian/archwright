@@ -2,6 +2,7 @@ package runner
 
 import (
 	"encoding/json"
+	"strings"
 )
 
 // codexParser normalizes `codex exec --json` lines into events and
@@ -13,6 +14,9 @@ type codexParser struct {
 	result      *Result
 	failure     string // a turn.failed or error message, if any
 
+	// wantWrite: the run asked for workspace-write, so a managed-policy notice
+	// that the sandbox was changed back fails the run (ADR 0023).
+	wantWrite  bool
 	noticeList []string // managed-policy notices seen before anything else
 	done       bool     // a line other than a start or a notice was seen
 }
@@ -177,5 +181,23 @@ func (p *codexParser) fail(raw json.RawMessage) Event {
 func (p *codexParser) final() *Result   { return p.result }
 func (p *codexParser) denied() []Denial { return p.denials }
 
-// violation: codex reports no posture of its own, so there is nothing to compare.
-func (p *codexParser) violation() string { return "" }
+// WorkspaceWriteDisallowed starts the error of a run killed because managed
+// policy does not allow the workspace-write sandbox a Codex Wright needs.
+const WorkspaceWriteDisallowed = "managed policy does not allow the workspace-write sandbox"
+
+// violation: codex reports no posture of its own, so there is nothing to
+// compare, except that a Wright step asked for workspace-write and a managed
+// requirement replaced it. That fails the run closed: there is no fallback to
+// a looser or brokered path.
+func (p *codexParser) violation() string {
+	if !p.wantWrite {
+		return ""
+	}
+	for _, n := range p.noticeList {
+		l := strings.ToLower(n)
+		if strings.Contains(l, "sandbox") && (strings.Contains(l, "falling back") || strings.Contains(l, "not in the allowed set")) {
+			return WorkspaceWriteDisallowed + ": " + n
+		}
+	}
+	return ""
+}

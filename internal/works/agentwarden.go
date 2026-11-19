@@ -16,10 +16,10 @@ type AgentWarden struct {
 
 // RunWarden implements WardenRunner.
 func (w *AgentWarden) RunWarden(ctx context.Context, req WardenRequest) error {
-	return w.Agent.Run(ctx, RunRequest{Env: req.Env, Job: req.Job, Guild: req.Guild, Piece: req.Step, Worktree: req.Worktree, Brief: req.Brief, ExtraEnv: req.ExtraEnv, Trace: req.Trace})
+	return w.Agent.run(ctx, RunRequest{Env: req.Env, Job: req.Job, Guild: req.Guild, Piece: req.Step, Worktree: req.Worktree, Brief: req.Brief, ExtraEnv: req.ExtraEnv, Trace: req.Trace}, false)
 }
 
 // RunReview implements ReviewRunner, for the Guild that carries out reviews.
 func (w *AgentWarden) RunReview(ctx context.Context, req ReviewRequest) error {
-	return w.Agent.Run(ctx, RunRequest{Env: req.Env, Job: req.Job, Guild: ReviewGuild, Worktree: req.Worktree, Brief: req.Brief, ExtraEnv: req.ExtraEnv, Trace: req.Trace})
+	return w.Agent.run(ctx, RunRequest{Env: req.Env, Job: req.Job, Guild: ReviewGuild, Worktree: req.Worktree, Brief: req.Brief, ExtraEnv: req.ExtraEnv, Trace: req.Trace}, false)
 }

@@ -45,6 +45,8 @@ type procSpec struct {
 	argv         []string // arguments after the binary, the brief included
 	version      string
 	postureFlags []string // the flags recorded in the posture; the brief excluded
+	sandbox      string   // the sandbox mode the adapter passed; empty is inherited
+	roots        []string // the writable roots it passed
 	grace        time.Duration
 	parser       streamParser
 }
@@ -81,6 +83,9 @@ func startProc(ctx context.Context, spec procSpec, req StartRequest) (Run, error
 
 	r := &procRun{log: newLog(), done: make(chan struct{}), name: spec.name}
 	posture := newPosture(spec.name, spec.version, req.Spawn, spec.postureFlags)
+	if spec.sandbox != "" {
+		posture.Posture.Sandbox, posture.Posture.WritableRoots = spec.sandbox, spec.roots
+	}
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start %s: %w", spec.name, err)
 	}

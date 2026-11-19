@@ -273,3 +273,26 @@ func TestGateRefusesWithTheFixesAndRemembersBriefly(t *testing.T) {
 		t.Fatalf("pass not remembered: %d runs", calls)
 	}
 }
+
+func TestWorkspaceWriteDisallowedByManagedPolicyIsAFailureWithARemedy(t *testing.T) {
+	d := newDeps(t)
+	d.Probe = fakeProber{"claude": healthy, "codex": {WriteDisallowed: true, Notices: []string{"sandbox_mode falls back to ReadOnly"}}}
+	rep := Run(context.Background(), d)
+	c := byName(rep, "sandbox:codex")
+	if c.Status != Fail || !strings.Contains(c.Detail, "ReadOnly") || !strings.Contains(c.Fix, "allowed_sandbox_modes") || !strings.Contains(c.Fix, "never falls back") {
+		t.Fatalf("%+v", c)
+	}
+	if rep.OK {
+		t.Fatal("doctor passed with workspace-write disallowed")
+	}
+}
+
+func TestWorkspaceWriteAllowedPasses(t *testing.T) {
+	rep := Run(context.Background(), newDeps(t))
+	if c := byName(rep, "sandbox:codex"); c.Status != Pass {
+		t.Fatalf("%+v", c)
+	}
+	if c := byName(rep, "sandbox:claude"); c.Status != "absent" {
+		t.Errorf("claude has a sandbox check: %+v", c)
+	}
+}

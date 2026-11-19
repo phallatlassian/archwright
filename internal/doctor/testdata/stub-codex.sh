@@ -9,9 +9,14 @@ if [ -n "$STUB_NEEDS_GIT" ] && ! git rev-parse --git-dir >/dev/null 2>&1; then
 	echo "Not inside a trusted directory and --skip-git-repo-check was not specified." >&2
 	exit 1
 fi
+[ -n "$STUB_ARGS" ] && printf '%s\n' "$@" > "$STUB_ARGS"
 mode=${STUB_MODE:-$(cat "$STUB_MODE_FILE" 2>/dev/null)}
 echo '{"type":"thread.started","thread_id":"t"}'
 echo '{"type":"turn.started"}'
+if [ "$mode" = "nowrite" ]; then
+	echo '{"type":"item.completed","item":{"id":"n","type":"error","message":"enterprise-managed requirements Baseline: sandbox_mode value `WorkspaceWrite` is not in the allowed set [ReadOnly]; falling back to required value ReadOnly"}}'
+	sleep 5
+fi
 if [ "$mode" = "silent" ]; then
 	echo '{"type":"item.completed","item":{"id":"i","type":"agent_message","text":"I did not run it"}}'
 	echo '{"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens":0,"output_tokens":1}}'
