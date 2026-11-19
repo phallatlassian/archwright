@@ -66,3 +66,10 @@ Note: `developers.openai.com/codex/*` now 308-redirects to `learn.chatgpt.com/do
 - Exact admin file paths (section 3).
 - Headless approval behavior (section 2).
 - Primary-source cross-check on github.com/openai/codex (`docs/` there only links to the hosted docs; only `exec_events.rs` was read from source).
+
+## Codex Wrights under workspace-write (ADR 0023, issue #106)
+- A Wright step runs `codex exec --json --ephemeral -s workspace-write -c 'sandbox_workspace_write.writable_roots=[...]'`; no other `-s` or `-c` is ever passed, and Warden, review and research steps keep the default.
+- Roots: the run's own worktree gitdir plus the clone's `objects`, `refs` and `logs` (Works worktree), or the repo's `.git` (plain repo). The bare clone itself and `--add-dir` do not work (scratch tests, codex-cli 0.162.1).
+- `git commit` prints a non-fatal `packed-refs.lock` error (exit 0). Tolerated: `packed-refs` is not made writable.
+- If managed policy disallows `workspace-write` (a sandbox notice in the first events falling back to a narrower mode), the run is killed and the bind fails; `archwright doctor` reports it as `sandbox:codex`. There is no fallback.
+- Not yet confirmed here: a real run on codex-cli 0.170.0 and the exact wording of the managed-policy notice for a disallowed sandbox (the check matches a notice that mentions the sandbox with "falling back" or "not in the allowed set").

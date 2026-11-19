@@ -3,7 +3,9 @@ package runner
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
+	"unicode"
 )
 
 // ErrForbidden marks a spawn request the never-list refuses (ADR 0011).
@@ -23,7 +25,10 @@ const ModeDontAsk = "dontAsk"
 
 var permittedModes = map[string]bool{"": true, "default": true, "plan": true, "dontAsk": true}
 
-// forbiddenFlags are runner flags refused outright, in any spelling.
+// forbiddenFlags are runner flags refused outright, in any spelling. This
+// includes -s and -c: the one bounded exception (ADR 0023) is not a pass-through,
+// it is rendered by the Codex adapter from Spawn.WritableRoots, which only the
+// Works sets.
 var forbiddenFlags = []string{
 	"--dangerously-skip-permissions", "--allow-dangerously-skip-permissions",
 	"--yolo", "--approve-for-me",
@@ -81,6 +86,9 @@ func Check(s Spawn) error {
 	if s.DisableSandbox {
 		return refuse("the sandbox may not be disabled")
 	}
+	if err := checkWritableRoots(s); err != nil {
+		return err
+	}
 	for _, a := range s.ExtraArgs {
 		name := strings.ToLower(a)
 		if i := strings.IndexByte(name, '='); i > 0 && strings.HasPrefix(name, "-") {
@@ -105,4 +113,35 @@ func Check(s Spawn) error {
 
 func refuse(format string, args ...any) error {
 	return fmt.Errorf("%w: %s", ErrForbidden, fmt.Sprintf(format, args...))
+}
+
+// maxWritableRoots bounds the list; a worktree needs four.
+const maxWritableRoots = 8
+
+// checkWritableRoots validates the roots the Works computed for a Codex Wright
+// (ADR 0023). They become one quoted array in a config override, so each must
+// be a clean absolute path that cannot break out of its quotes or name a root
+// as wide as the filesystem. The mode must not be one the adapter would
+// refuse alongside a write sandbox.
+func checkWritableRoots(s Spawn) error {
+	if len(s.WritableRoots) == 0 {
+		return nil
+	}
+	if len(s.WritableRoots) > maxWritableRoots {
+		return refuse("%d writable roots; at most %d", len(s.WritableRoots), maxWritableRoots)
+	}
+	if m := s.EffectiveMode(); m != ModeDefault && m != ModeDontAsk {
+		return refuse("writable roots may not be combined with permission mode %q", m)
+	}
+	for _, r := range s.WritableRoots {
+		if !filepath.IsAbs(r) || filepath.Clean(r) != r || r == string(filepath.Separator) || strings.ContainsAny(r, "\"\\,=[]") {
+			return refuse("writable root %q is not a clean absolute path", r)
+		}
+		for _, c := range r {
+			if unicode.IsControl(c) {
+				return refuse("writable root %q has a control character", r)
+			}
+		}
+	}
+	return nil
 }

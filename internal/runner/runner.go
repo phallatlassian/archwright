@@ -43,12 +43,14 @@ type Event struct {
 // Posture is the permission posture a run started under, recorded as its
 // first event (ADR 0011).
 type Posture struct {
-	Runner  string   `json:"runner"`
-	Version string   `json:"version"`
-	Mode    string   `json:"mode"`    // the permission mode requested
-	Sandbox string   `json:"sandbox"` // always "inherited": the factory never changes it
-	Flags   []string `json:"flags"`   // every flag passed, the brief excluded
-	Notices []string `json:"notices"` // managed-policy and other notices seen
+	Runner  string `json:"runner"`
+	Version string `json:"version"`
+	Mode    string `json:"mode"`    // the permission mode requested
+	Sandbox string `json:"sandbox"` // "inherited", or "workspace-write" for a Codex Wright (ADR 0023)
+	// WritableRoots are the extra writable roots a workspace-write run was given.
+	WritableRoots []string `json:"writable_roots,omitempty"`
+	Flags         []string `json:"flags"`   // every flag passed, the brief excluded
+	Notices       []string `json:"notices"` // managed-policy and other notices seen
 }
 
 // Status is how a run ended.
@@ -124,6 +126,12 @@ type Spawn struct {
 	AllowRules     []string // allow rules to add
 	SettingsWrites []string // settings files to write
 	DisableSandbox bool
+	// WritableRoots are the roots the Works computed for a Codex Wright step,
+	// which the Codex adapter renders as `-s workspace-write` plus the one
+	// `-c sandbox_workspace_write.writable_roots` key (ADR 0023). Only the
+	// Works sets it, never a Guild or agent; Check validates it, and the
+	// Claude adapter ignores it. Empty keeps the runner's default sandbox.
+	WritableRoots []string
 }
 
 // EffectiveMode is the permission mode the run will have.
@@ -134,8 +142,12 @@ func (s Spawn) EffectiveMode() string {
 	return s.Mode
 }
 
-// SandboxInherited is the sandbox posture of every run: the factory never changes it.
+// SandboxInherited is the sandbox posture of every run but a Codex Wright's: the factory never changes it.
 const SandboxInherited = "inherited"
+
+// SandboxWorkspaceWrite is the one sandbox mode the factory may pass: a Codex
+// Wright's, with Works-computed writable roots (ADR 0023).
+const SandboxWorkspaceWrite = "workspace-write"
 
 func newPosture(runner, version string, spawn Spawn, flags []string) Event {
 	return Event{Kind: KindPosture, Posture: &Posture{
