@@ -217,8 +217,8 @@ func TestRegisterRefusals(t *testing.T) {
 
 func TestRegisterAndDetectRefuseCredentialURLsAndPersistNothing(t *testing.T) {
 	e := setup(t)
+	e.hosts.create(t, "o/two", map[string]string{"x": "x"})
 	for _, u := range []string{"https://user:s3cret@git.example.com/o/two.git", "https://s3cret@git.example.com/o/two.git", "ssh://git:s3cret@git.example.com/o/two.git"} {
-		e.hosts.create(t, "o/two", map[string]string{"x": "x"})
 		_, err := e.m.Register(RegisterInput{Name: "x", URL: u, BaseBranch: "main", Gates: &store.Gates{}})
 		if err == nil || strings.Contains(err.Error(), "s3cret") || !strings.Contains(err.Error(), "credentials") {
 			t.Errorf("%s: %v", u, err)

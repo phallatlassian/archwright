@@ -88,6 +88,9 @@ func TestWrightBriefCarriesTheAgentRules(t *testing.T) {
 	if !strings.Contains(reqs[0].Brief, "archwright tool read_issue") {
 		t.Error("Wright brief does not name read_issue")
 	}
+	if !strings.Contains(reqs[0].Brief, `archwright tool commit`) || !strings.Contains(reqs[0].Brief, `{"message":"<commit message>"}`) {
+		t.Error("Wright brief does not name the commit tool and its argument shape")
+	}
 }
 
 func TestReviewBriefCarriesTheAgentRules(t *testing.T) {
