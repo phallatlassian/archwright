@@ -370,7 +370,7 @@ else
 fi
 
 # ── 10 ────────────────────────────────────────────────────────────────────
-stage "Codex (optional): same five actions, clean worktree"
+stage "Codex (optional): redo with the #106 writable-roots solution"
 CODEX_BRANCH="spike/forge-97-codex"
 CODEX_WT="$(cd "$FIXTURE_REPO/.." && pwd)/spike-97-codex-worktree"
 CODEX_PR_NUMBER=""
@@ -382,14 +382,51 @@ if command -v codex >/dev/null 2>&1 && confirm "Run the five actions in an inter
     git -C "$FIXTURE_REPO" worktree add -b "$CODEX_BRANCH" "$CODEX_WT"
   fi
   write_env CODEX_WORKTREE "$CODEX_WT"
+  # ── Issue #106: narrow workspace-write + Works-computed writable roots ──
+  CODEX_GITDIR="$(git -C "$CODEX_WT" rev-parse --absolute-git-dir)"
+  CODEX_COMMON="$(git -C "$CODEX_WT" rev-parse --path-format=absolute --git-common-dir)"
+  # Codex's sandbox refuses to start if a listed root does not exist (seen on
+  # Linux/bwrap with a fresh bare clone that has no logs/ directory).
+  mkdir -p "$CODEX_COMMON/logs"
+  CODEX_ROOTS="[\"$CODEX_GITDIR\",\"$CODEX_COMMON/objects\",\"$CODEX_COMMON/refs\",\"$CODEX_COMMON/logs\"]"
+  CODEX_CFG="sandbox_workspace_write.writable_roots=$CODEX_ROOTS"
+  write_env CODEX_WRITABLE_ROOTS "$CODEX_ROOTS"
   say ""
-  say "In a terminal:"
+  say "Issue #106 proposes launching codex with workspace-write and exactly these writable roots:"
+  note "-s workspace-write -c '$CODEX_CFG'"
+  warn "Your global git config may sign commits (commit.gpgsign). Note any gpg error below."
+  say ""
+  say "${BOLD}Part A (automatic): headless 'codex exec' as the Works would run a Wright${RESET}"
+  say "This sends one short prompt to the model. Edits and commits only in $CODEX_WT."
+  if confirm "Run the headless check now?"; then
+    HEADLESS_LOG="$(pwd)/codex-headless.jsonl"
+    ( cd "$CODEX_WT" && codex exec --json --ephemeral -s workspace-write -c "$CODEX_CFG" -- \
+      "Create file spike-97-codex-headless.txt containing 'spike', run git add spike-97-codex-headless.txt, then git commit -m 'spike 97 codex headless'. If anything fails, report the stderr verbatim and do not try alternatives." \
+      > "$HEADLESS_LOG" 2>&1 ) || true
+    if git -C "$CODEX_WT" log -1 --format=%s | grep -qx 'spike 97 codex headless'; then
+      write_env CODEX_HEADLESS_COMMIT "ok"
+    else
+      write_env CODEX_HEADLESS_COMMIT "failed"
+    fi
+    grep -q 'packed-refs.lock' "$HEADLESS_LOG" && write_env CODEX_HEADLESS_PACKED_REFS_MSG "yes" || write_env CODEX_HEADLESS_PACKED_REFS_MSG "no"
+    grep -qi 'gpg' "$HEADLESS_LOG" && write_env CODEX_HEADLESS_GPG_MENTIONED "yes" || write_env CODEX_HEADLESS_GPG_MENTIONED "no"
+    grep -qE 'bwrap|Operation not permitted|read-only' "$HEADLESS_LOG" && write_env CODEX_HEADLESS_SANDBOX_ERROR "yes" || write_env CODEX_HEADLESS_SANDBOX_ERROR "no"
+    say "full transcript saved to $HEADLESS_LOG"
+    ask CODEX_HEADLESS_NOTE "Anything odd in $HEADLESS_LOG worth noting? (Enter for none):"
+    write_env CODEX_HEADLESS_NOTE "${CODEX_HEADLESS_NOTE:-}"
+  else
+    write_env CODEX_HEADLESS_COMMIT "skipped"
+  fi
+  # the interactive part starts from a clean HEAD for the commit-message check below
+  say ""
+  say "${BOLD}Part B (interactive)${RESET}: same flags, interactive session"
   step "cd $CODEX_WT"
-  step "launch interactive codex the way you normally would (no flags that widen permissions)"
-  ask CODEX_LAUNCH_COMMAND "Paste the exact command you used:"
+  step "codex -s workspace-write -c '$CODEX_CFG'"
+  step "(no other flags; do not add danger-full-access or --add-dir)"
+  ask CODEX_LAUNCH_COMMAND "Paste the exact command you used (Enter to keep the one above):"
   ask CODEX_APPROVAL_MODE "Approval policy shown in the session (e.g. on-request, never):"
-  ask CODEX_SANDBOX_MODE "Sandbox mode shown (read-only, workspace-write, danger-full-access, unsure):"
-  write_env CODEX_LAUNCH_COMMAND "$CODEX_LAUNCH_COMMAND"
+  ask CODEX_SANDBOX_MODE "Sandbox mode shown (expect workspace-write; or: managed policy refused it / other):"
+  write_env CODEX_LAUNCH_COMMAND "${CODEX_LAUNCH_COMMAND:-codex -s workspace-write -c '$CODEX_CFG'}"
   write_env CODEX_APPROVAL_MODE "$CODEX_APPROVAL_MODE"
   write_env CODEX_SANDBOX_MODE "$CODEX_SANDBOX_MODE"
   pause "Codex is running? Press Enter for action 1/5."
