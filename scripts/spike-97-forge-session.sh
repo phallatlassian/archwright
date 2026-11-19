@@ -451,27 +451,18 @@ fi
 # ── 11 ────────────────────────────────────────────────────────────────────
 if (( CODEX_RUN )); then
   stage "Codex: headless check (as the Works runs a Wright)"
-  say "Runs 'codex exec' with the #106 flags. One short prompt goes to the model;"
-  say "edits and a commit happen only in $CODEX_WT."
-  if confirm "Run the headless check now?"; then
-    HEADLESS_LOG="$(pwd)/codex-headless.jsonl"
-    ( cd "$CODEX_WT" && codex exec --json --ephemeral -s workspace-write -c "$CODEX_CFG" -- \
-      "Create file spike-97-codex-headless.txt containing 'spike', run git add spike-97-codex-headless.txt, then git commit -m 'spike 97 codex headless'. If anything fails, report the stderr verbatim and do not try alternatives." \
-      > "$HEADLESS_LOG" 2>&1 ) || true
-    if git -C "$CODEX_WT" log -1 --format=%s | grep -qx 'spike 97 codex headless'; then
-      write_env CODEX_HEADLESS_COMMIT "ok"
-    else
-      write_env CODEX_HEADLESS_COMMIT "failed"
-    fi
-    grep -q 'packed-refs.lock' "$HEADLESS_LOG" && write_env CODEX_HEADLESS_PACKED_REFS_MSG "yes" || write_env CODEX_HEADLESS_PACKED_REFS_MSG "no"
-    grep -qi 'gpg' "$HEADLESS_LOG" && write_env CODEX_HEADLESS_GPG_MENTIONED "yes" || write_env CODEX_HEADLESS_GPG_MENTIONED "no"
-    grep -qE 'bwrap|Operation not permitted|read-only' "$HEADLESS_LOG" && write_env CODEX_HEADLESS_SANDBOX_ERROR "yes" || write_env CODEX_HEADLESS_SANDBOX_ERROR "no"
-    say "full transcript saved to $HEADLESS_LOG"
-    ask CODEX_HEADLESS_NOTE "Anything odd in the transcript worth noting? (Enter for none):"
-    write_env CODEX_HEADLESS_NOTE "${CODEX_HEADLESS_NOTE:-}"
-  else
-    write_env CODEX_HEADLESS_COMMIT "skipped"
-  fi
+  say "Run this yourself in a terminal. It sends one short prompt to the model and"
+  say "edits and commits only inside the codex worktree:"
+  say ""
+  step "cd $CODEX_WT"
+  step "codex exec --json --ephemeral -s workspace-write -c '$CODEX_CFG' -- \"Create file spike-97-codex-headless.txt containing 'spike', run git add spike-97-codex-headless.txt, then git commit -m 'spike 97 codex headless'. If anything fails, report the stderr verbatim and do not try alternatives.\""
+  note "Tip: append '| tee codex-headless.jsonl' to keep the transcript."
+  pause "Press Enter once the command has finished."
+  record_action CXH_HEADLESS_COMMIT codex
+  ask CXH_PACKED_REFS "Did a 'packed-refs.lock' message appear? (yes/no):"
+  ask CXH_GPG "Did a gpg / commit-signing error appear? (yes/no):"
+  write_env CXH_PACKED_REFS "${CXH_PACKED_REFS:-}"
+  write_env CXH_GPG "${CXH_GPG:-}"
 
   # ── 12 ──────────────────────────────────────────────────────────────────
   stage "Codex: launch the interactive session"
