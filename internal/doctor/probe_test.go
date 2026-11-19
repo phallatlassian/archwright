@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -73,6 +74,37 @@ func TestProbeRunsCodexInAGitDirectory(t *testing.T) {
 	stub, _ := filepath.Abs("testdata/stub-codex.sh")
 	r := RunnerProber{UID: uid, TempDir: t.TempDir(), Timeout: 20 * time.Second}.Probe(context.Background(), "codex", stub)
 	if r.Err != "" || !r.RequestSeen || !r.ResponseRead {
+		t.Fatalf("%+v", r)
+	}
+}
+
+func probeCodexStub(t *testing.T, mode string) (ProbeResult, string) {
+	t.Helper()
+	t.Setenv("STUB_MODE", mode)
+	args := filepath.Join(t.TempDir(), "args")
+	t.Setenv("STUB_ARGS", args)
+	uid := 93000 + os.Getpid()%1000
+	t.Cleanup(func() { os.RemoveAll(filepath.Join("/tmp", "claude-"+itoa(uid))) })
+	stub, _ := filepath.Abs("testdata/stub-codex.sh")
+	r := RunnerProber{UID: uid, TempDir: t.TempDir(), Timeout: 20 * time.Second}.Probe(context.Background(), "codex", stub)
+	b, _ := os.ReadFile(args)
+	return r, string(b)
+}
+
+// The codex probe runs under the posture a Codex Wright runs under (ADR 0023).
+func TestProbeRunsCodexUnderWorkspaceWriteWithItsOwnGitdirRoot(t *testing.T) {
+	r, args := probeCodexStub(t, "ok")
+	if r.Err != "" || r.WriteDisallowed || !r.ResponseRead {
+		t.Fatalf("%+v", r)
+	}
+	if !strings.Contains(args, "-s\nworkspace-write\n-c\nsandbox_workspace_write.writable_roots=[\"") || !strings.Contains(args, ".git\"]\n") {
+		t.Errorf("args = %q", args)
+	}
+}
+
+func TestProbeReportsManagedPolicyDisallowingWorkspaceWrite(t *testing.T) {
+	r, _ := probeCodexStub(t, "nowrite")
+	if !r.WriteDisallowed || r.RequestSeen || len(r.Notices) != 1 || !strings.Contains(r.Notices[0], "sandbox_mode") {
 		t.Fatalf("%+v", r)
 	}
 }

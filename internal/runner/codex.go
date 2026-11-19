@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -28,12 +29,20 @@ func (c *Codex) bin() string {
 	return "codex"
 }
 
-// args builds the flags of one run. The brief is not among them. Neither a
-// sandbox nor an approval policy is ever passed: both are inherited, and
-// plain `codex exec` denies what it cannot approve. MaxTurns and MaxBudgetUSD
-// have no codex equivalent and are not applied.
+// WritableRootsKey is the one `-c` key the adapter ever passes, and only with
+// roots the Works computed (ADR 0023).
+const WritableRootsKey = "sandbox_workspace_write.writable_roots"
+
+// args builds the flags of one run. The brief is not among them. An approval
+// policy is never passed, and a sandbox only for a Wright step the Works gave
+// writable roots (`-s workspace-write` and the one roots key, ADR 0023); every
+// other run inherits both, and plain `codex exec` denies what it cannot
+// approve. MaxTurns and MaxBudgetUSD have no codex equivalent and are not applied.
 func (c *Codex) args(req StartRequest) []string {
 	flags := []string{"--json", "--ephemeral"}
+	if roots := req.Spawn.WritableRoots; len(roots) > 0 {
+		flags = append(flags, "-s", SandboxWorkspaceWrite, "-c", WritableRootsKey+"="+tomlStrings(roots))
+	}
 	if m := req.Limits.Model; m != "" {
 		flags = append(flags, "--model", m)
 	}
@@ -53,8 +62,23 @@ func (c *Codex) Start(ctx context.Context, req StartRequest) (Run, error) {
 	}
 	flags := append([]string{"exec"}, c.args(req)...)
 	argv := append(append([]string(nil), flags...), "--", req.Brief) // "--": the brief is never read as a flag
-	return startProc(ctx, procSpec{
+	spec := procSpec{
 		name: "codex", bin: c.bin(), argv: argv, version: cliVersion(ctx, c.bin()), postureFlags: flags,
 		grace: c.Grace, parser: &codexParser{},
-	}, req)
+	}
+	if roots := req.Spawn.WritableRoots; len(roots) > 0 {
+		spec.sandbox, spec.roots = SandboxWorkspaceWrite, roots
+		spec.parser = &codexParser{wantWrite: true}
+	}
+	return startProc(ctx, spec, req)
+}
+
+// tomlStrings renders roots as a TOML array of strings. Check has already
+// refused any root with a character that needs escaping.
+func tomlStrings(roots []string) string {
+	q := make([]string, len(roots))
+	for i, r := range roots {
+		q[i] = `"` + r + `"`
+	}
+	return "[" + strings.Join(q, ",") + "]"
 }
