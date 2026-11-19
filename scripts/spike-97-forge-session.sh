@@ -185,7 +185,31 @@ finish() {
 # ──────────────────────────────────────────────────────────────────────────
 
 TOTAL_STAGES=18
-ENV_FILE="${ENV_FILE:-spike-97-results.env}"
+# The library defaults ENV_FILE to .env; force a dedicated results file instead.
+ENV_FILE="${SPIKE_RESULTS:-spike-97-results.env}"
+
+# Resume support: START_AT=10 ./spike-97-forge-session.sh (or pass the number as
+# the first argument). Run it from the directory holding the results file.
+# Supported start points: 1-10 and 18 (clean up).
+START_AT="${START_AT:-${1:-1}}"
+BRANCH="spike/forge-97"
+CODEX_BRANCH="spike/forge-97-codex"
+PR_NUMBER=""; CODEX_PR_NUMBER=""; CODEX_RUN=0
+if (( START_AT > 1 )); then
+  if (( START_AT > 10 && START_AT != 18 )); then
+    warn "can only resume at stages 1-10 or 18 (stages 11-17 depend on stage 10)"; exit 1
+  fi
+  [[ -f "$ENV_FILE" ]] || { warn "no $ENV_FILE here; run from the directory with your earlier results"; exit 1; }
+  FIXTURE_REPO="$(_existing FIXTURE_REPO || true)"
+  FIXTURE_ISSUE="$(_existing FIXTURE_ISSUE || true)"
+  WT="$(_existing WORKTREE || true)"
+  PR_NUMBER="$(_existing PR_NUMBER || true)"
+  CODEX_PR_NUMBER="$(_existing CODEX_PR_NUMBER || true)"
+  if [[ -z "$FIXTURE_REPO" || -z "$FIXTURE_ISSUE" ]]; then
+    warn "$ENV_FILE has no FIXTURE_REPO/FIXTURE_ISSUE; start from stage 1 or 2"; exit 1
+  fi
+  CODEX_WT="$(cd "$FIXTURE_REPO/.." && pwd)/spike-97-codex-worktree"
+fi
 
 # record_action PREFIX "what you asked": asks the standard three questions and
 # writes PREFIX_RESULT, PREFIX_SANDBOX, PREFIX_NOTE.
@@ -263,8 +287,10 @@ seed_commit_if_failed() {
 }
 
 banner "Spike #97: interactive auto-mode session vs gh and git push"
+_STAGE_INDEX=$((START_AT - 1))
 
 # ── 1 ─────────────────────────────────────────────────────────────────────
+if (( START_AT <= 1 )); then
 stage "Preflight: what machine is this?"
 say "Collecting facts automatically. Nothing is changed."
 write_env OS "$(uname -sm)"
@@ -279,8 +305,10 @@ else
   write_env MANAGED_POLICY_FOUND "no"
 fi
 pause "Looks right? Press Enter."
+fi
 
 # ── 2 ─────────────────────────────────────────────────────────────────────
+if (( START_AT <= 2 )); then
 stage "Pick the fixture repo and issue"
 say "Use the fixture repo (a throwaway GitHub repo you don't mind a draft PR in)."
 ask FIXTURE_REPO "Path to a local clone of the fixture repo:"
@@ -298,8 +326,10 @@ else
   warn "worktree needed; aborting"; exit 1
 fi
 write_env WORKTREE "$WT"
+fi
 
 # ── 3 ─────────────────────────────────────────────────────────────────────
+if (( START_AT <= 3 )); then
 stage "Launch the interactive session"
 say "In a SECOND terminal, start the session exactly as the Archwright is launched:"
 step "cd $WT"
@@ -309,30 +339,38 @@ ask LAUNCH_COMMAND "Paste the exact command you used to launch it:"
 ask PERMISSION_MODE "Permission mode shown in the session (auto/default/other):"
 write_env LAUNCH_COMMAND "$LAUNCH_COMMAND"
 write_env PERMISSION_MODE "$PERMISSION_MODE"
+fi
 
 # ── 4 ─────────────────────────────────────────────────────────────────────
+if (( START_AT <= 4 )); then
 stage "Action 1/5: gh issue view"
 say "Paste this into the session:"
 note "Run exactly: gh issue view $FIXTURE_ISSUE   Report what happened. If it fails, do not try alternatives."
 pause "Press Enter once the session has finished."
 record_action A1_ISSUE_VIEW
+fi
 
 # ── 5 ─────────────────────────────────────────────────────────────────────
+if (( START_AT <= 5 )); then
 stage "Action 2/5: git commit in the worktree"
 say "Paste this into the session:"
 note "Create a file spike-97.txt containing 'spike', then run: git add spike-97.txt && git commit -m 'spike 97'. Report what happened. If it fails, do not try alternatives."
 pause "Press Enter once the session has finished."
 record_action A2_COMMIT
 seed_commit_if_failed A2_COMMIT "$WT" spike-97.txt "spike 97"
+fi
 
 # ── 6 ─────────────────────────────────────────────────────────────────────
+if (( START_AT <= 6 )); then
 stage "Action 3/5: git push"
 say "Paste this into the session:"
 note "Run exactly: git push -u origin $BRANCH   Report what happened. If it fails, do not try alternatives."
 pause "Press Enter once the session has finished."
 record_action A3_PUSH
+fi
 
 # ── 7 ─────────────────────────────────────────────────────────────────────
+if (( START_AT <= 7 )); then
 stage "Action 4/5: gh pr create"
 say "Skip this if the push failed (say 4 and note 'skipped: no branch')."
 say "Paste this into the session:"
@@ -341,16 +379,20 @@ pause "Press Enter once the session has finished."
 record_action A4_PR_CREATE
 ask PR_NUMBER "PR number created (Enter if none):"
 write_env PR_NUMBER "${PR_NUMBER:-}"
+fi
 
 # ── 8 ─────────────────────────────────────────────────────────────────────
+if (( START_AT <= 8 )); then
 stage "Action 5/5: gh pr comment"
 say "Skip if there is no PR."
 say "Paste this into the session:"
 note "Run exactly: gh pr comment ${PR_NUMBER:-<n>} --body spike   Report what happened. If it fails, do not try alternatives."
 pause "Press Enter once the session has finished."
 record_action A5_PR_COMMENT
+fi
 
 # ── 9 ─────────────────────────────────────────────────────────────────────
+if (( START_AT <= 9 )); then
 stage "tmux check"
 if command -v tmux >/dev/null 2>&1; then
   say "Starting and stopping a throwaway detached session (no claude involved)."
@@ -368,8 +410,10 @@ else
   warn "tmux is not installed on this machine"
   write_env TMUX_SESSION_TEST "not-installed"
 fi
+fi
 
 # ── 10 ────────────────────────────────────────────────────────────────────
+if (( START_AT <= 10 )); then
 stage "Codex (optional): worktree and writable roots (#106)"
 CODEX_BRANCH="spike/forge-97-codex"
 CODEX_WT="$(cd "$FIXTURE_REPO/.." && pwd)/spike-97-codex-worktree"
@@ -401,6 +445,7 @@ if command -v codex >/dev/null 2>&1 && confirm "Run the Codex part of the spike?
 else
   write_env CODEX_RESULTS "skipped"
   _STAGE_INDEX=$((_STAGE_INDEX + CODEX_STAGES))
+fi
 fi
 
 # ── 11 ────────────────────────────────────────────────────────────────────
@@ -483,6 +528,7 @@ if (( CODEX_RUN )); then
 fi
 
 # ── 18 ────────────────────────────────────────────────────────────────────
+if (( START_AT <= 18 )); then
 stage "Clean up"
 say "Closes the draft PRs, deletes the remote branches and removes the worktrees."
 if confirm "Clean up now?"; then
@@ -501,6 +547,7 @@ if confirm "Clean up now?"; then
   say "cleaned up"
 else
   warn "left in place; remove the PRs, branches $BRANCH and $CODEX_BRANCH, and worktrees $WT and $CODEX_WT by hand"
+fi
 fi
 
 finish
