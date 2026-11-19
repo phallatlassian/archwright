@@ -25,6 +25,9 @@ type ProbeResult struct {
 	RequestSeen  bool // the call's request reached the spool, with the probe's token
 	ResponseRead bool // the agent got the response back (its nonce appears in the run)
 	Notices      []string
+	// WriteDisallowed: codex was run under the Wright posture (workspace-write,
+	// ADR 0023) and managed policy refused it; Notices has what it said.
+	WriteDisallowed bool
 }
 
 // Prober exercises one installed runner from inside its sandbox. It is a
@@ -102,6 +105,19 @@ func (p RunnerProber) Probe(ctx context.Context, name, bin string) ProbeResult {
 		}
 	}()
 
+	// A codex probe runs under the posture a Codex Wright runs under, so a
+	// managed policy that disallows workspace-write shows here (ADR 0023).
+	var spawn runner.Spawn = runner.Spawn{Mode: runner.ModeDontAsk}
+	if name == launch.RunnerCodex {
+		roots, err := runner.WorktreeWritableRoots(work)
+		if err != nil {
+			os.RemoveAll(work)
+			os.RemoveAll(dir)
+			return ProbeResult{Err: "cannot compute the writable roots a Codex Wright gets: " + err.Error()}
+		}
+		spawn.WritableRoots = roots
+	}
+
 	token, nonce := spool.NewID(), spool.NewID()
 	var seen atomic.Bool
 	stop := make(chan struct{})
@@ -113,7 +129,7 @@ func (p RunnerProber) Probe(ctx context.Context, name, bin string) ProbeResult {
 	run, err := rn.Start(ctx, runner.StartRequest{
 		Brief: probeBrief, Dir: work,
 		Env:   map[string]string{spool.EnvRun: "doctor-probe", spool.EnvSpool: dir, spool.EnvToken: token},
-		Spawn: runner.Spawn{Mode: runner.ModeDontAsk},
+		Spawn: spawn,
 	})
 	if err != nil {
 		return ProbeResult{Err: err.Error()}
@@ -134,6 +150,9 @@ func (p RunnerProber) Probe(ctx context.Context, name, bin string) ProbeResult {
 		}
 	}
 	out := run.Result()
+	if out.Status == runner.StatusFailed && strings.HasPrefix(out.Error, runner.WorkspaceWriteDisallowed) {
+		res.WriteDisallowed = true
+	}
 	if len(res.Denied) == 0 {
 		res.Denied = out.Denials
 	}

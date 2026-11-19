@@ -28,6 +28,13 @@ type AgentRunner struct {
 // prose: it is the process's own result, and whether it reported through the
 // spool, which the caller checks.
 func (a *AgentRunner) Run(ctx context.Context, req RunRequest) error {
+	return a.run(ctx, req, true)
+}
+
+// run starts the agent. writes is whether the step's role edits and commits
+// in its worktree, which only a Wright step does; Wardens and reviewers never
+// get writable roots.
+func (a *AgentRunner) run(ctx context.Context, req RunRequest, writes bool) error {
 	g, err := a.Guilds(req.Guild)
 	if err != nil {
 		return err
@@ -42,6 +49,14 @@ func (a *AgentRunner) Run(ctx context.Context, req RunRequest) error {
 	spawn, err := spawnFor(g.Binding.Runner, g)
 	if err != nil {
 		return err
+	}
+	if writes && g.Binding.Runner == "codex" && g.Binding.Access != defs.ReadOnly {
+		// ADR 0023: the Works computes the roots from the run's own worktree;
+		// nothing a Guild or agent supplies reaches them. A failure fails the
+		// bind: there is no fallback to a looser or brokered path.
+		if spawn.WritableRoots, err = runner.WorktreeWritableRoots(req.Worktree); err != nil {
+			return fmt.Errorf("codex was not started: cannot compute its writable roots: %w", err)
+		}
 	}
 	env := map[string]string{}
 	for _, kv := range req.Env.Environ() {
