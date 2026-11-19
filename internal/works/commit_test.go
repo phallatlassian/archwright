@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -292,5 +293,37 @@ func TestMergeWrightCommitsTheMergeInTheIntegrationWorktree(t *testing.T) {
 	}
 	if parents := git(t, g.worktree.Path, "rev-list", "--parents", "-n1", head); parents != head+" "+tip+" "+base {
 		t.Fatalf("not a merge of the old tip and the base: %s", parents)
+	}
+}
+
+func TestWrightCommitRefusesUnresolvedMergeConflicts(t *testing.T) {
+	g, _, _, _ := conflictRig(t, "CONFLICTING")
+	var got spool.Response
+	g.runner.WithAct(func(ctx context.Context, req RunRequest) error {
+		exec.Command("git", "-C", req.Worktree, "merge", "--no-commit", "origin/main").Run() // conflicts, left unresolved
+		resp, err := spool.Call(ctx, spool.Env{Run: req.Env.Run, Dir: req.Env.Spool, Token: req.Env.Token}, "c1", "commit", json.RawMessage(`{"message":"m"}`), 5*time.Second)
+		got = resp
+		return err
+	})
+	g.ok(g.warden, "merge_base", `{}`, nil)
+	g.waitReported("merge-base-1")
+	if got.OK || got.Error.Code != spool.CodeConflict {
+		t.Fatalf("%+v", got)
+	}
+}
+
+func TestWrightCommitWithPathsCommitsOnlyThosePathsEvenIfMoreIsStaged(t *testing.T) {
+	g := newGateRig(t, store.Gates{})
+	var wt string
+	resps := g.playWright("p", func(req RunRequest, call wrightTool) {
+		wt = req.Worktree
+		writeFile(t, filepath.Join(wt, "a.txt"), "a")
+		writeFile(t, filepath.Join(wt, "b.txt"), "b")
+		git(t, wt, "add", "b.txt")
+		call("commit", `{"message":"a only","paths":["a.txt"]}`)
+	})
+	wantCommitted(t, resps[0])
+	if git(t, wt, "show", "--name-only", "--format=", "HEAD") != "a.txt" {
+		t.Fatal("more than the named path was committed")
 	}
 }

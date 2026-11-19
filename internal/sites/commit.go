@@ -53,8 +53,17 @@ func (m *Manager) CommitWorktree(jobID, worktree, message string, paths, gitEnvV
 	if w.Branch == "" || w.Branch == site.BaseBranch {
 		return Committed{}, fmt.Errorf("refusing to commit on %q: %w", w.Branch, store.ErrConflict)
 	}
-	if on, err := git(w.Path, "symbolic-ref", "--short", "HEAD"); err != nil || on != w.Branch {
-		return Committed{}, fmt.Errorf("the worktree is not on %s, so nothing is committed: %w", w.Branch, store.ErrConflict)
+	on, err := git(w.Path, "symbolic-ref", "--short", "HEAD")
+	if err != nil {
+		return Committed{}, err
+	}
+	if on != w.Branch {
+		return Committed{}, fmt.Errorf("the worktree is on %s, not %s, so nothing is committed: %w", on, w.Branch, store.ErrConflict)
+	}
+	if unmerged, err := git(w.Path, "ls-files", "--unmerged"); err != nil {
+		return Committed{}, err
+	} else if unmerged != "" {
+		return Committed{}, fmt.Errorf("the worktree has unresolved merge conflicts, so nothing is committed; resolve them first: %w", store.ErrConflict)
 	}
 	specs := []string{"-A", "--", "."}
 	if len(paths) > 0 {
@@ -92,7 +101,11 @@ func (m *Manager) CommitWorktree(jobID, worktree, message string, paths, gitEnvV
 		tip, err := gitc("rev-parse", "HEAD")
 		return Committed{Branch: w.Branch, SHA: tip}, err
 	}
-	if _, err := gitc("commit", "--no-verify", "--no-edit", "-m", message); err != nil {
+	commitArgs := []string{"commit", "--no-verify", "--no-gpg-sign", "-m", message}
+	if len(paths) > 0 && !merging {
+		commitArgs = append(commitArgs, append([]string{"--only", "--"}, specs[2:]...)...) // only the named paths, even if the index holds more
+	}
+	if _, err := gitc(commitArgs...); err != nil {
 		return Committed{}, err
 	}
 	sha, err := gitc("rev-parse", "HEAD")
