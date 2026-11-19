@@ -184,7 +184,7 @@ finish() {
 # git push under managed policy?). Results land in $ENV_FILE as KEY=VALUE lines.
 # ──────────────────────────────────────────────────────────────────────────
 
-TOTAL_STAGES=11
+TOTAL_STAGES=18
 ENV_FILE="${ENV_FILE:-spike-97-results.env}"
 
 # record_action PREFIX "what you asked": asks the standard three questions and
@@ -370,11 +370,14 @@ else
 fi
 
 # ── 10 ────────────────────────────────────────────────────────────────────
-stage "Codex (optional): redo with the #106 writable-roots solution"
+stage "Codex (optional): worktree and writable roots (#106)"
 CODEX_BRANCH="spike/forge-97-codex"
 CODEX_WT="$(cd "$FIXTURE_REPO/.." && pwd)/spike-97-codex-worktree"
 CODEX_PR_NUMBER=""
-if command -v codex >/dev/null 2>&1 && confirm "Run the five actions in an interactive codex session too?"; then
+CODEX_RUN=0
+CODEX_STAGES=7   # stages after this one that belong to the Codex run
+if command -v codex >/dev/null 2>&1 && confirm "Run the Codex part of the spike?"; then
+  CODEX_RUN=1
   say "Codex gets its own worktree and branch so the Claude commit does not interfere."
   if [[ -d "$CODEX_WT" ]]; then
     note "worktree already exists at $CODEX_WT, reusing it"
@@ -382,7 +385,6 @@ if command -v codex >/dev/null 2>&1 && confirm "Run the five actions in an inter
     git -C "$FIXTURE_REPO" worktree add -b "$CODEX_BRANCH" "$CODEX_WT"
   fi
   write_env CODEX_WORKTREE "$CODEX_WT"
-  # ── Issue #106: narrow workspace-write + Works-computed writable roots ──
   CODEX_GITDIR="$(git -C "$CODEX_WT" rev-parse --absolute-git-dir)"
   CODEX_COMMON="$(git -C "$CODEX_WT" rev-parse --path-format=absolute --git-common-dir)"
   # Codex's sandbox refuses to start if a listed root does not exist (seen on
@@ -394,10 +396,18 @@ if command -v codex >/dev/null 2>&1 && confirm "Run the five actions in an inter
   say ""
   say "Issue #106 proposes launching codex with workspace-write and exactly these writable roots:"
   note "-s workspace-write -c '$CODEX_CFG'"
-  warn "Your global git config may sign commits (commit.gpgsign). Note any gpg error below."
-  say ""
-  say "${BOLD}Part A (automatic): headless 'codex exec' as the Works would run a Wright${RESET}"
-  say "This sends one short prompt to the model. Edits and commits only in $CODEX_WT."
+  warn "Your global git config may sign commits (commit.gpgsign). Note any gpg error you see."
+  pause "Press Enter to continue."
+else
+  write_env CODEX_RESULTS "skipped"
+  _STAGE_INDEX=$((_STAGE_INDEX + CODEX_STAGES))
+fi
+
+# ── 11 ────────────────────────────────────────────────────────────────────
+if (( CODEX_RUN )); then
+  stage "Codex: headless check (as the Works runs a Wright)"
+  say "Runs 'codex exec' with the #106 flags. One short prompt goes to the model;"
+  say "edits and a commit happen only in $CODEX_WT."
   if confirm "Run the headless check now?"; then
     HEADLESS_LOG="$(pwd)/codex-headless.jsonl"
     ( cd "$CODEX_WT" && codex exec --json --ephemeral -s workspace-write -c "$CODEX_CFG" -- \
@@ -412,59 +422,67 @@ if command -v codex >/dev/null 2>&1 && confirm "Run the five actions in an inter
     grep -qi 'gpg' "$HEADLESS_LOG" && write_env CODEX_HEADLESS_GPG_MENTIONED "yes" || write_env CODEX_HEADLESS_GPG_MENTIONED "no"
     grep -qE 'bwrap|Operation not permitted|read-only' "$HEADLESS_LOG" && write_env CODEX_HEADLESS_SANDBOX_ERROR "yes" || write_env CODEX_HEADLESS_SANDBOX_ERROR "no"
     say "full transcript saved to $HEADLESS_LOG"
-    ask CODEX_HEADLESS_NOTE "Anything odd in $HEADLESS_LOG worth noting? (Enter for none):"
+    ask CODEX_HEADLESS_NOTE "Anything odd in the transcript worth noting? (Enter for none):"
     write_env CODEX_HEADLESS_NOTE "${CODEX_HEADLESS_NOTE:-}"
   else
     write_env CODEX_HEADLESS_COMMIT "skipped"
   fi
-  # the interactive part starts from a clean HEAD for the commit-message check below
-  say ""
-  say "${BOLD}Part B (interactive)${RESET}: same flags, interactive session"
+
+  # ── 12 ──────────────────────────────────────────────────────────────────
+  stage "Codex: launch the interactive session"
+  say "In a SECOND terminal:"
   step "cd $CODEX_WT"
   step "codex -s workspace-write -c '$CODEX_CFG'"
-  step "(no other flags; do not add danger-full-access or --add-dir)"
+  step "no other flags: no danger-full-access, no --add-dir"
   ask CODEX_LAUNCH_COMMAND "Paste the exact command you used (Enter to keep the one above):"
   ask CODEX_APPROVAL_MODE "Approval policy shown in the session (e.g. on-request, never):"
-  ask CODEX_SANDBOX_MODE "Sandbox mode shown (expect workspace-write; or: managed policy refused it / other):"
+  ask CODEX_SANDBOX_MODE "Sandbox mode shown (expect workspace-write, or say if managed policy refused it):"
   write_env CODEX_LAUNCH_COMMAND "${CODEX_LAUNCH_COMMAND:-codex -s workspace-write -c '$CODEX_CFG'}"
   write_env CODEX_APPROVAL_MODE "$CODEX_APPROVAL_MODE"
   write_env CODEX_SANDBOX_MODE "$CODEX_SANDBOX_MODE"
-  pause "Codex is running? Press Enter for action 1/5."
 
-  say ""; say "${BOLD}Codex 1/5: gh issue view${RESET}"
+  # ── 13 ──────────────────────────────────────────────────────────────────
+  stage "Codex action 1/5: gh issue view"
+  say "Paste this into the codex session:"
   note "Run exactly: gh issue view $FIXTURE_ISSUE   Report what happened. If it fails, do not try alternatives."
   pause "Press Enter once codex has finished."
   record_action CX1_ISSUE_VIEW codex
 
-  say ""; say "${BOLD}Codex 2/5: git commit in the worktree${RESET}"
+  # ── 14 ──────────────────────────────────────────────────────────────────
+  stage "Codex action 2/5: git commit in the worktree"
+  say "Paste this into the codex session:"
   note "Create a file spike-97-codex.txt containing 'spike', then run: git add spike-97-codex.txt && git commit -m 'spike 97 codex'. Report what happened. If it fails, do not try alternatives."
   pause "Press Enter once codex has finished."
   record_action CX2_COMMIT codex
   seed_commit_if_failed CX2_COMMIT "$CODEX_WT" spike-97-codex.txt "spike 97 codex"
 
-  say ""; say "${BOLD}Codex 3/5: git push${RESET}"
+  # ── 15 ──────────────────────────────────────────────────────────────────
+  stage "Codex action 3/5: git push"
+  say "Paste this into the codex session:"
   note "Run exactly: git push -u origin $CODEX_BRANCH   Report what happened. If it fails, do not try alternatives."
   pause "Press Enter once codex has finished."
   record_action CX3_PUSH codex
 
-  say ""; say "${BOLD}Codex 4/5: gh pr create${RESET}"
+  # ── 16 ──────────────────────────────────────────────────────────────────
+  stage "Codex action 4/5: gh pr create"
   say "Skip if the push failed (choose 4 and note 'skipped: no branch')."
+  say "Paste this into the codex session:"
   note "Run exactly: gh pr create --draft --title spike-codex --body spike   Report what happened and the PR number. If it fails, do not try alternatives."
   pause "Press Enter once codex has finished."
   record_action CX4_PR_CREATE codex
   ask CODEX_PR_NUMBER "PR number created (Enter if none):"
   write_env CODEX_PR_NUMBER "${CODEX_PR_NUMBER:-}"
 
-  say ""; say "${BOLD}Codex 5/5: gh pr comment${RESET}"
+  # ── 17 ──────────────────────────────────────────────────────────────────
+  stage "Codex action 5/5: gh pr comment"
   say "Skip if there is no PR."
+  say "Paste this into the codex session:"
   note "Run exactly: gh pr comment ${CODEX_PR_NUMBER:-<n>} --body spike   Report what happened. If it fails, do not try alternatives."
   pause "Press Enter once codex has finished."
   record_action CX5_PR_COMMENT codex
-else
-  write_env CODEX_RESULTS "skipped"
 fi
 
-# ── 11 ────────────────────────────────────────────────────────────────────
+# ── 18 ────────────────────────────────────────────────────────────────────
 stage "Clean up"
 say "Closes the draft PRs, deletes the remote branches and removes the worktrees."
 if confirm "Clean up now?"; then
