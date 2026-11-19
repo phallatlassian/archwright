@@ -74,7 +74,7 @@ func TestForksOverrideUpstreamAndRecordTheirBase(t *testing.T) {
 			t.Errorf("fork %s records no upstream hashes", f.Name)
 		}
 	}
-	for _, name := range []string{"implement-spec", "code-review", "triage"} {
+	for _, name := range []string{"implement-spec", "code-review", "triage", "pr"} {
 		if !forked[name] {
 			t.Errorf("%s is not recorded as a fork", name)
 		}
