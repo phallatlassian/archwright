@@ -223,3 +223,14 @@ func TestCodexSandboxNoticeIsOnlyAFailureWhenWriteWasAsked(t *testing.T) {
 		t.Errorf("a read-only step failed on a write notice: %+v", res)
 	}
 }
+
+func TestCodexWindowsSandboxAndApprovalNoticesDoNotFailAWrightRun(t *testing.T) {
+	run, _, err := codexStubRun(t, "codex-managed-notices-benign.jsonl", StartRequest{Brief: "b", Spawn: Spawn{WritableRoots: []string{"/clone/refs"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	collect(t, run)
+	if res := run.Result(); res.Status != StatusDone || strings.Contains(res.Error, WorkspaceWriteDisallowed) {
+		t.Errorf("a benign managed-policy notice failed the run: %+v", res)
+	}
+}

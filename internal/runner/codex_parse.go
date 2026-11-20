@@ -195,7 +195,9 @@ func (p *codexParser) violation() string {
 	}
 	for _, n := range p.noticeList {
 		l := strings.ToLower(n)
-		if strings.Contains(l, "sandbox") && (strings.Contains(l, "falling back") || strings.Contains(l, "not in the allowed set")) {
+		// Only the sandbox_mode key counts: `windows.sandbox` is a
+		// Windows-only setting that managed policy reports on every run.
+		if strings.Contains(l, "sandbox_mode") && (strings.Contains(l, "falling back") || strings.Contains(l, "not in the allowed set")) {
 			return WorkspaceWriteDisallowed + ": " + n
 		}
 	}
