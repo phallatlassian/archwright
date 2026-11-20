@@ -67,10 +67,18 @@ func checkRunner(ctx context.Context, r *collector, d Deps, spec runnerSpec, cho
 func checkProbe(r *collector, d Deps, spec runnerSpec, res ProbeResult) {
 	name := spec.name
 	root := launch.SpoolRoot(name, d.UID, d.TempDir)
+	if res.WriteDisallowed {
+		r.fail("sandbox:"+name, "managed policy does not allow the workspace-write sandbox Codex Wrights need: "+strings.Join(res.Notices, " | "),
+			"ask whoever manages Codex policy to allow `workspace-write` in allowed_sandbox_modes of the managed requirements; the factory never overrides it and never falls back to a looser or brokered path, so Guilds bound to codex cannot run Wright steps until then (or bind them to claude)")
+		return
+	}
 	if res.Err != "" {
 		r.fail("tool:"+name, "the probe run did not complete: "+res.Err,
 			fmt.Sprintf("run `%s --version`, check you are signed in, and re-run `archwright doctor`", name))
 		return
+	}
+	if name == launch.RunnerCodex {
+		r.pass("sandbox:"+name, "codex accepted the workspace-write sandbox Codex Wrights run under")
 	}
 	notices := "none"
 	if len(res.Notices) > 0 {
