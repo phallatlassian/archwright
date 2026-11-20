@@ -421,3 +421,84 @@ func TestWrongApprovalCredentialsAreAuditedAndLockOut(t *testing.T) {
 		t.Fatalf("%+v %v", got, err)
 	}
 }
+
+func TestJobSourceIssueSurvivesReopen(t *testing.T) {
+	s, path := open(t)
+	const issue = "https://github.com/acme/widgets/issues/80"
+	with, err := s.CreateJobFor("", "From an issue", "", issue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	without, err := s.CreateJob("No issue", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+
+	s2, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s2.Close()
+	if got, _ := s2.GetJob(with.ID); got.SourceIssue != issue {
+		t.Fatalf("source issue: %+v", got)
+	}
+	if got, _ := s2.GetJob(without.ID); got.SourceIssue != "" {
+		t.Fatalf("unexpected source issue: %+v", got)
+	}
+	jobs, _ := s2.ListJobs()
+	if len(jobs) != 2 || jobs[0].SourceIssue != issue || jobs[1].SourceIssue != "" {
+		t.Fatalf("list: %+v", jobs)
+	}
+}
+
+func TestSourceIssueShapeIsValidated(t *testing.T) {
+	s, _ := open(t)
+	for _, bad := range []string{
+		"80", "#80", "acme/widgets#80", "github.com/acme/widgets/issues/80",
+		"ftp://github.com/acme/widgets/issues/80", "https://github.com/acme/widgets/pull/80",
+		"https://github.com/acme/widgets/issues/", "https://github.com/acme/widgets/issues/x",
+		"https:///acme/widgets/issues/80", "https://github.com/acme/widgets/issues/80 now",
+		"https://github.com/acme/widgets/issues/80?x=1",
+	} {
+		if _, err := s.CreateJobFor("", "T", "", bad); err == nil {
+			t.Errorf("accepted %q", bad)
+		}
+	}
+	if jobs, _ := s.ListJobs(); len(jobs) != 0 {
+		t.Fatalf("a refused create left Jobs behind: %+v", jobs)
+	}
+	if _, err := s.CreateJobFor("", "T", "", "  https://github.com/acme/widgets/issues/80/ "); err != nil {
+		t.Fatalf("surrounding space and a trailing slash should be tolerated: %v", err)
+	}
+}
+
+func TestRecordPRIsOncePerJobAndIdempotent(t *testing.T) {
+	s, _ := open(t)
+	j, err := s.CreateJob("T", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.GetJob(j.ID); got.PR != "" {
+		t.Fatalf("a new Job has PR %q", got.PR)
+	}
+	const pr = "https://github.com/o/r/pull/1"
+	if err := s.RecordPR(j.ID, pr); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RecordPR(j.ID, pr); err != nil {
+		t.Fatalf("recording the same PR again: %v", err)
+	}
+	if err := s.RecordPR(j.ID, "https://github.com/o/r/pull/2"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("a second PR: %v", err)
+	}
+	if err := s.RecordPR("job-missing", pr); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("%v", err)
+	}
+	if err := s.RecordPR(j.ID, " "); err == nil {
+		t.Fatal("an empty URL was recorded")
+	}
+	if got, _ := s.GetJob(j.ID); got.PR != pr {
+		t.Fatalf("PR %q", got.PR)
+	}
+}

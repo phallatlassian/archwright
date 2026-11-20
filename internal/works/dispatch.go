@@ -221,6 +221,9 @@ func dispatchWright(c *callCtx, in json.RawMessage) (any, error) {
 	if err := requireField("piece", a.Piece); err != nil {
 		return nil, err
 	}
+	if isMergeBasePiece(a.Piece) {
+		return nil, fmt.Errorf("%w: the %q piece prefix is reserved for merge_base", errInvalidInput, mergeBasePiece+"-")
+	}
 	g, err := c.warden()
 	if err != nil {
 		return nil, err
@@ -255,6 +258,9 @@ func reworkWright(c *callCtx, in json.RawMessage) (any, error) {
 	}
 	if err := requireField("reason", a.Reason); err != nil {
 		return nil, err
+	}
+	if isMergeBasePiece(a.Piece) {
+		return nil, fmt.Errorf("%w: merge_base pieces cannot be reworked; call merge_base again", errInvalidInput)
 	}
 	g, err := c.warden()
 	if err != nil {
@@ -629,6 +635,13 @@ func (r *Runs) wrightWorktree(d store.Dispatch) (string, error) {
 	}
 	if _, err := os.Stat(kept); kept != "" && err == nil {
 		return kept, nil // requeued after a rate limit: the same worktree, not another
+	}
+	if isMergeBasePiece(d.Piece) { // a merge Wright commits on the integration branch itself, so the push is a fast-forward (ADR 0022)
+		path, err := sm.IntegrationWorktree(d.JobID)
+		if err != nil {
+			return "", fmt.Errorf("finding the integration worktree: %w", err)
+		}
+		return path, nil
 	}
 	wt, err := sm.CreateWorktree(d.JobID, store.KindWright, "")
 	if err != nil {

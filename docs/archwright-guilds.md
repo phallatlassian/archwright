@@ -127,7 +127,7 @@ present a guess with the same confidence as a citation.
 
 **Intake.** A ticket or spec specific enough to implement, with its constraints stated.
 **Handback.** A diff, passing tests, and anything the Guild noticed that exceeds its remit.
-**Draws on.** `implement`, `implement-spec`, `tdd`, `diagnosing-bugs`, `prototype`, with
+**Draws on.** `implement`, `implement-spec`, `tdd`, `diagnosing-bugs`, `prototype`, `pr`, with
 `codebase-design` as a standing standard every brief inherits.
 
 Masons built to a lodge's standards, course by course, each stone set on those already

@@ -29,6 +29,16 @@
       }
     },
     {
+      "name": "pr",
+      "upstream": "upstream/pr",
+      "edited": "opens the PR through the Works' Forge tools (read_issue, push_branch, open_pr) instead of gh or git push (ADR 0022)",
+      "upstream_files": {
+        "pr/agents/openai.yaml": "2295b586624db4ef546f3fd4695492f039d941a46d8a1593a702ce3ca511b8ad",
+        "pr/CREDITS.md": "a7a087127665d7298a72280ef6e19c41ad8404523712a788c8dc3ab414bc2497",
+        "pr/SKILL.md": "ab63f1cf78647389edcd386c9427c5dfca27ed2836930c24773ffee834c19bcd"
+      }
+    },
+    {
       "name": "triage",
       "upstream": "upstream/triage",
       "edited": "dispatches through the Works (dispatch_wright, inspect_wright, rework_wright, report_review, ask) and fills the gaps upstream leaves",

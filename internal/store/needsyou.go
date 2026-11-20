@@ -11,6 +11,8 @@ const (
 	NeedsScopeOverlap       = "scope-overlap"
 	NeedsReviewParked       = "review-parked"        // a second failed review parked the Job (ADR 0012)
 	NeedsReviewNotEvaluated = "review-not-evaluated" // a review could not evaluate an axis, so the Job cannot pass
+	NeedsForgeFault         = "forge-fault"          // a Forge call failed on authentication or the network (ADR 0022)
+	NeedsForgeUnsupported   = "forge-unsupported"    // the Site's host has no Forge adapter, so open-pr failed and the branch awaits a manual push (ADR 0022)
 	NeedsPermissionWanted   = "permission-wanted"    // a runner denied an action that would have prompted (ADR 0011)
 )
 

@@ -31,7 +31,7 @@ func newDeps(t *testing.T) Deps {
 	if err := dirs.Ensure(); err != nil {
 		t.Fatal(err)
 	}
-	found := map[string]string{"archwright": "/usr/bin/archwright", "claude": "/bin/claude", "codex": "/bin/codex", "lavish-axi": "/bin/lavish-axi"}
+	found := map[string]string{"archwright": "/usr/bin/archwright", "claude": "/bin/claude", "codex": "/bin/codex", "lavish-axi": "/bin/lavish-axi", "gh": "/bin/gh"}
 	return Deps{
 		Dirs:     dirs,
 		Getenv:   func(string) string { return "" },
@@ -39,6 +39,9 @@ func newDeps(t *testing.T) Deps {
 		Output: func(_ context.Context, name string, args ...string) (string, error) {
 			if len(args) > 0 && args[0] == "--version" {
 				return "1.2.3 (" + filepath.Base(name) + ")", nil
+			}
+			if filepath.Base(name) == "gh" {
+				return "Logged in to github.com", nil
 			}
 			return "--no-session-persistence --ephemeral", nil
 		},

@@ -174,7 +174,10 @@ func newHandler(st *store.Store, runs *Runs, sm *sites.Manager, token string, pi
 		go shutdown()
 	})
 	mux.HandleFunc("POST /jobs", func(w http.ResponseWriter, r *http.Request) {
-		var in struct{ Title, Description, Site, Path string }
+		var in struct {
+			Title, Description, Site, Path string
+			SourceIssue                    string `json:"source_issue"`
+		}
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 			fail(w, err)
 			return
@@ -185,12 +188,12 @@ func newHandler(st *store.Store, runs *Runs, sm *sites.Manager, token string, pi
 		case in.Path != "": // the directory the developer launched from
 			var site store.Site
 			if site, err = sm.Resolve(in.Path); err == nil {
-				j, err = st.CreateJobOn(site.Name, in.Title, in.Description)
+				j, err = st.CreateJobFor(site.Name, in.Title, in.Description, in.SourceIssue)
 			}
 		case in.Site != "":
-			j, err = st.CreateJobOn(in.Site, in.Title, in.Description)
+			j, err = st.CreateJobFor(in.Site, in.Title, in.Description, in.SourceIssue)
 		default:
-			j, err = st.CreateJob(in.Title, in.Description)
+			j, err = st.CreateJobFor("", in.Title, in.Description, in.SourceIssue)
 		}
 		if err != nil {
 			fail(w, err)

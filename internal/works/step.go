@@ -171,7 +171,7 @@ var wardenMD string
 // Job's request and the Guild's charter and standards.
 func renderStepBrief(job store.Job, step store.Step, g Guild, charter string) string {
 	var w strings.Builder
-	fmt.Fprintf(&w, "# Task: %s\n\nYou are the %s Warden for step %q of job %s. Work only through the Archwright tools: dispatch_wright, inspect_wright, rework_wright, accept_piece and finally handback.\n", step.Title, g.Name, step.ID, job.ID)
+	fmt.Fprintf(&w, "# Task: %s\n\nYou are the %s Warden for step %q of job %s. Work only through the Archwright tools: dispatch_wright, inspect_wright, rework_wright, accept_piece and finally handback, plus the Forge tools listed below.\n", step.Title, g.Name, step.ID, job.ID)
 	w.WriteString("\n" + strings.TrimSpace(wardenMD) + "\n")
 	w.WriteString("\n## The Job's request\n\n" + strings.TrimSpace(job.Title))
 	if d := strings.TrimSpace(job.Description); d != "" {

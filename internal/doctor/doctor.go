@@ -120,6 +120,7 @@ func Run(ctx context.Context, d Deps) Report {
 		checkRunner(ctx, r, d, spec, chosen)
 	}
 	checkSites(ctx, r, d, snap)
+	checkForge(ctx, r, d, snap)
 
 	rep := Report{Checks: r.checks}
 	rep.OK = len(rep.Failures()) == 0

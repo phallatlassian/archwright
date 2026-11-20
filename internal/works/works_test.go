@@ -259,3 +259,31 @@ func TestSitesAndWorktreesOverAPI(t *testing.T) {
 		t.Fatal("removed Site resolves")
 	}
 }
+
+func TestJobSourceIssueOverAPIAndTool(t *testing.T) {
+	d := dirs(t)
+	var n atomic.Int32
+	c, err := Connect(context.Background(), d, inProcess(t, &n))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const issue = "https://github.com/acme/widgets/issues/80"
+	var with, without store.Job
+	if err := c.Do("POST", "/jobs", map[string]string{"title": "T", "source_issue": issue}, &with); err != nil || with.SourceIssue != issue {
+		t.Fatalf("%+v %v", with, err)
+	}
+	if err := c.Do("POST", "/jobs", map[string]string{"title": "U"}, &without); err != nil || without.SourceIssue != "" {
+		t.Fatalf("%+v %v", without, err)
+	}
+	if err := c.Do("POST", "/jobs", map[string]string{"title": "V", "source_issue": "#80"}, nil); err == nil {
+		t.Fatal("a malformed source issue was accepted")
+	}
+	var shown JobWithPlan
+	if err := c.Do("GET", "/jobs/"+with.ID, nil, &shown); err != nil || shown.SourceIssue != issue {
+		t.Fatalf("%+v %v", shown, err)
+	}
+	var list []store.Job
+	if err := c.Do("GET", "/jobs", nil, &list); err != nil || len(list) != 2 || list[0].SourceIssue != issue || list[1].SourceIssue != "" {
+		t.Fatalf("%+v %v", list, err)
+	}
+}

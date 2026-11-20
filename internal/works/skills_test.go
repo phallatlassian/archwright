@@ -40,6 +40,19 @@ func TestDeliverSkillsForAShippedGuild(t *testing.T) {
 		}
 	}
 
+	// the forked pr skill is what arrives, not upstream's
+	pr, err := os.ReadFile(filepath.Join(wt, ".agents/skills/pr/SKILL.md"))
+	if err != nil {
+		t.Fatalf("pr is not delivered to Masonry: %v", err)
+	}
+	up, err := os.ReadFile(filepath.Join("..", "skills", "vendor", "upstream", "pr", "SKILL.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(pr) == string(up) || strings.Contains(string(pr), "gh pr create") {
+		t.Errorf("the delivered pr skill is not the Forge fork:\n%s", pr)
+	}
+
 	// A Site tracking a same-named skill fails the run with the collision in the message.
 	if err := os.WriteFile(filepath.Join(wt, ".gitkeep"), nil, 0o644); err != nil {
 		t.Fatal(err)
@@ -133,5 +146,32 @@ func TestDispatchDeliversSkillsAndFailsOnCollision(t *testing.T) {
 	}
 	if res.Status != ResultFailed || !strings.Contains(res.Uncertainty, `skill "tdd" collides`) {
 		t.Errorf("the dispatch did not fail visibly with the collision: %s", d.Result)
+	}
+}
+
+func TestStepWardenReceivesTheGuildSkills(t *testing.T) {
+	root := t.TempDir()
+	g := newStepRig(t, true)
+	reg := defs.New(defs.Shipped(), "")
+	reg.Reload()
+	g.r.UseDefinitions(reg)
+	g.r.UseSkills(SkillsDelivery{
+		Catalogue: skills.Vendored(),
+		Runner:    "claude",
+		RunDir:    func(id string) string { return filepath.Join(root, "runs", id) },
+	})
+	if resp := g.start("a"); !resp.OK {
+		t.Fatalf("start: %+v", resp)
+	}
+	g.waitStatus("a", store.StepHandedBack)
+	reqs := g.warden.Requests()
+	if len(reqs) != 1 {
+		t.Fatalf("warden requests: %+v", reqs)
+	}
+	if reqs[0].ExtraEnv["GIT_CONFIG_GLOBAL"] == "" {
+		t.Error("no GIT_CONFIG_GLOBAL for the step Warden")
+	}
+	if _, err := os.Stat(filepath.Join(reqs[0].Worktree, ".claude/skills/pr/SKILL.md")); err != nil {
+		t.Errorf("the step Warden cannot see the pr skill: %v", err)
 	}
 }

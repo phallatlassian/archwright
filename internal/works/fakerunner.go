@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os/exec"
+	"strings"
 	"sync"
 	"time"
 
@@ -83,6 +85,11 @@ func (f *FakeRunner) Run(ctx context.Context, req RunRequest) error {
 		}
 		return nil
 	}
+	if isMergeBasePiece(req.Piece) && req.Worktree != "" {
+		if err := fakeMerge(req); err != nil {
+			return err
+		}
+	}
 	req.Trace.Emit("tool_use", "report_result: "+string(res.Status), json.RawMessage(`{"type":"tool_use","name":"archwright tool report_result"}`))
 	req.Trace.Consumed("fake", 1200, 300, 0.0123)
 	in, err := json.Marshal(res)
@@ -97,4 +104,32 @@ func (f *FakeRunner) Run(ctx context.Context, req RunRequest) error {
 		return fmt.Errorf("report_result: %s", resp.Error)
 	}
 	return nil
+}
+
+// fakeMerge plays a merge Wright: it merges the base ref named in the brief
+// into the worktree, taking the integration side of every conflict, and
+// commits. It only merges: no rebase, reset, amend or push.
+func fakeMerge(req RunRequest) error {
+	_, ref, ok := strings.Cut(req.Brief, "- base ref: ")
+	ref, _, _ = strings.Cut(ref, "\n")
+	if !ok || ref == "" {
+		return fmt.Errorf("fake merge Wright: the brief names no base ref")
+	}
+	git := func(args ...string) error {
+		cmd := exec.Command("git", append([]string{"-C", req.Worktree, "-c", "user.name=fake merge Wright", "-c", "user.email=fake@archwright.invalid"}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("fake merge Wright: git %s: %v: %s", args[0], err, out)
+		}
+		return nil
+	}
+	if git("merge", "--no-edit", "-X", "ours", ref) == nil {
+		return nil
+	}
+	if err := git("checkout", "--ours", "--", "."); err != nil { // what -X ours cannot settle: take our side whole
+		return err
+	}
+	if err := git("add", "-A"); err != nil {
+		return err
+	}
+	return git("commit", "--no-edit")
 }
