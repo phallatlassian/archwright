@@ -67,6 +67,10 @@ func (d Dirs) PidFile() string { return filepath.Join(d.State, "works.pid") }
 // Log is the detached Works' output log.
 func (d Dirs) Log() string { return filepath.Join(d.State, "works.log") }
 
+// EventLog is the tail-able, one-line-per-event log of the events store; it
+// rolls to events.log.1 at a size cap (ADR 0017).
+func (d Dirs) EventLog() string { return filepath.Join(d.State, "events.log") }
+
 // Worktrees is the directory holding Works-managed git worktrees, outside every Site (ADR 0008).
 func (d Dirs) Worktrees() string { return filepath.Join(d.State, "worktrees") }
 
