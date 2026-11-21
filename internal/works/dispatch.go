@@ -545,13 +545,17 @@ func (r *Runs) start(d store.Dispatch) error {
 	go func() {
 		defer r.wg.Done()
 		defer cancel()
-		wt, runErr := r.wrightWorktree(d)
+		wt, from, runErr := r.wrightWorktree(d)
+		brief := d.Rendered
+		if runErr == nil && d.Round > 0 && !isMergeWright(d.Piece) && wt != "" {
+			brief += startingPoint(from)
+		}
 		var extra map[string]string
 		if runErr == nil {
 			extra, runErr = r.deliverSkillsFor(d, env.Run, wt)
 		}
 		if runErr == nil {
-			runErr = runner.Run(ctx, RunRequest{Env: env, Job: d.JobID, Guild: d.Guild, Piece: d.Piece, DispatchID: d.ID, Worktree: wt, Brief: d.Rendered, ExtraEnv: extra, Trace: trace})
+			runErr = runner.Run(ctx, RunRequest{Env: env, Job: d.JobID, Guild: d.Guild, Piece: d.Piece, DispatchID: d.ID, Worktree: wt, Brief: brief, ExtraEnv: extra, Trace: trace})
 		}
 		unreported := false
 		cur, curErr := r.st.GetDispatch(d.ID)
@@ -656,33 +660,72 @@ func commitRaw(outcome, sha string) json.RawMessage {
 }
 
 // wrightWorktree gives a dispatch's Wright its own worktree on its own branch
-// from the Job's integration branch (ADR 0008). Without Sites there is none.
-func (r *Runs) wrightWorktree(d store.Dispatch) (string, error) {
+// (ADR 0008). Without Sites there is none. A later round of a piece continues
+// from the branch of its previous round, whose work the Works committed when
+// that round reported (ADR 0025); from names that branch, or is empty when the
+// worktree starts from the Job's integration branch.
+func (r *Runs) wrightWorktree(d store.Dispatch) (path, from string, err error) {
 	r.mu.Lock()
 	sm, kept := r.sites, r.wrightWts[d.ID]
 	r.mu.Unlock()
 	if sm == nil {
-		return "", nil
+		return "", "", nil
 	}
 	if _, err := os.Stat(kept); kept != "" && err == nil {
-		return kept, nil // requeued after a rate limit: the same worktree, not another
+		return kept, "", nil // requeued after a rate limit: the same worktree, not another
 	}
 	if isMergeWright(d.Piece) { // a merge Wright commits on the integration branch itself, so the push is a fast-forward (ADR 0022)
 		path, err := sm.IntegrationWorktree(d.JobID)
 		if err != nil {
-			return "", fmt.Errorf("finding the integration worktree: %w", err)
+			return "", "", fmt.Errorf("finding the integration worktree: %w", err)
 		}
-		return path, nil
+		return path, "", nil
 	}
-	wt, err := sm.CreateWorktree(d.JobID, store.KindWright, "")
+	from = r.previousBranch(d)
+	wt, err := sm.CreateWorktree(d.JobID, store.KindWright, from)
+	if err != nil && from != "" {
+		log.Printf("dispatch %s: continuing from %s: %v; starting from the integration branch", d.ID, from, err)
+		from = ""
+		wt, err = sm.CreateWorktree(d.JobID, store.KindWright, "")
+	}
 	if err != nil {
-		return "", fmt.Errorf("creating the Wright's worktree: %w", err)
+		return "", "", fmt.Errorf("creating the Wright's worktree: %w", err)
 	}
 	r.mu.Lock()
 	r.wrightWts[d.ID] = wt.Path
 	r.mu.Unlock()
 	if err := r.st.SetDispatchBranch(d.ID, wt.Branch); err != nil { // accept_piece merges this branch
-		return "", fmt.Errorf("recording the Wright's branch: %w", err)
+		return "", "", fmt.Errorf("recording the Wright's branch: %w", err)
 	}
-	return wt.Path, nil
+	return wt.Path, from, nil
+}
+
+// previousBranch is the branch of the piece's latest earlier round that had a
+// worktree, or "" for a first round.
+func (r *Runs) previousBranch(d store.Dispatch) string {
+	if d.Round == 0 {
+		return ""
+	}
+	ds, err := r.st.Dispatches(d.JobID)
+	if err != nil {
+		log.Printf("dispatch %s: finding the previous round: %v", d.ID, err)
+		return ""
+	}
+	branch, round := "", -1
+	for _, p := range ds {
+		if p.Piece == d.Piece && p.Round < d.Round && p.Round > round && p.Branch != "" {
+			branch, round = p.Branch, p.Round
+		}
+	}
+	return branch
+}
+
+// startingPoint tells a later round's Wright what its worktree holds: the
+// previous round's committed work, or a fresh tree when none could be used.
+func startingPoint(from string) string {
+	if from == "" {
+		return "\n## Starting point\n\nYour worktree is fresh from the Job's integration branch. The previous round's work is not in it.\n"
+	}
+	return "\n## Starting point\n\nYour worktree continues from the previous round's work, not a fresh tree: the Works committed whatever that round left, finished or not, to branch `" + from + "`, and your branch starts there. " +
+		"Look at what is there (`git log`, `git show`) and build on it instead of redoing it.\n"
 }
