@@ -109,3 +109,11 @@ tr.click { cursor:pointer; } tr.click:hover td, tr.click:focus-visible td { back
 .tl-detail pre { max-height:none; }
 .tl-card { display:flex; flex-wrap:wrap; gap:.4rem 2rem; }
 .tl-f { font-size:.9rem; } .tl-f .muted { font-size:.75rem; }
+.ny-group + .ny-group { border-top:1px solid var(--line); }
+.ny-head { position:sticky; top:0; z-index:1; display:flex; gap:.5rem; align-items:center; padding:.4rem .6rem; background:var(--card); border-bottom:1px solid var(--line); }
+.ny-title { flex:1 1 0; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.ny-head .tag { margin:0; }
+.ny-row { flex-wrap:wrap; }
+.ny-where { flex:1 1 100%; color:var(--muted); font-size:.85rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.ny-trail { margin-bottom:.6rem; }
+.tl-split[hidden] { display:none; }
