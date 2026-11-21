@@ -294,3 +294,106 @@ func TestGateChangesOverAPIRequireApproval(t *testing.T) {
 		t.Fatal("a rejected change was applied")
 	}
 }
+
+func TestTheWorksCommitsAWrightsWorktreeWhenItReports(t *testing.T) {
+	g := newGateRig(t, store.Gates{Test: "true"})
+	g.runner.script = map[string][]WrightResult{
+		"p": {doneResult},
+		"q": {{Status: ResultBlocked, Uncertainty: "stuck"}},
+	}
+	g.runner.WriteFiles(map[string]string{"work.txt": "w", ".claude/settings.json": "{}"})
+	g.dispatch("p")
+	g.dispatch("q")
+	g.runner.WriteFiles(nil) // r changes nothing
+	g.dispatch("r")
+	commitEvent := func(piece string) (kind, summary string) {
+		for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+			if d, err := g.st.LatestDispatch(g.job.ID, piece); err == nil && d.RunID != "" {
+				evs, _ := g.st.RunEvents(d.RunID)
+				for _, e := range evs {
+					if e.Kind == "commit" {
+						return e.Kind, e.Summary
+					}
+				}
+			}
+		}
+		t.Fatalf("piece %s: the Works recorded no commit on the run", piece)
+		return
+	}
+	commitEvent("p")
+	commitEvent("q")
+	if _, sum := commitEvent("r"); !strings.Contains(sum, "no changes") {
+		t.Errorf("the no-change handback was recorded as %q", sum)
+	}
+
+	var wrights []store.Worktree
+	wts, err := g.st.Worktrees(g.job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range wts {
+		if w.Kind == store.KindWright {
+			wrights = append(wrights, w)
+		}
+	}
+	if len(wrights) != 3 {
+		t.Fatalf("want a worktree per piece, got %d", len(wrights))
+	}
+	for i, want := range []string{"piece p (round 0)", "wip: piece q (round 0), blocked"} {
+		w := wrights[i]
+		if got := git(t, w.Path, "log", "-1", "--format=%s"); got != want {
+			t.Errorf("piece %d commit subject %q, want %q", i, got, want)
+		}
+		files := git(t, w.Path, "show", "--name-only", "--format=", "HEAD")
+		if files != "work.txt" {
+			t.Errorf("piece %d committed %q, want only work.txt (no scaffolding)", i, files)
+		}
+		if st := git(t, w.Path, "status", "--porcelain"); !strings.Contains(st, ".claude") || strings.Contains(st, "work.txt") {
+			t.Errorf("piece %d worktree status %q", i, st)
+		}
+	}
+	r := wrights[2]
+	if got := git(t, r.Path, "rev-parse", "HEAD"); got != r.BaseSHA {
+		t.Errorf("a handback with no changes made a commit: %s, base %s", got, r.BaseSHA)
+	}
+}
+
+// lingeringRunner keeps a Wright's run alive after it has reported.
+type lingeringRunner struct {
+	Runner
+	release chan struct{}
+}
+
+func (l lingeringRunner) Run(ctx context.Context, req RunRequest) error {
+	err := l.Runner.Run(ctx, req)
+	<-l.release
+	return err
+}
+
+func TestAWrightsWorkIsCommittedBeforeItsDispatchReadsAsDone(t *testing.T) {
+	g := newGateRig(t, store.Gates{Test: "true"})
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	g.r.mu.Lock()
+	g.r.runner = lingeringRunner{Runner: g.runner, release: release}
+	g.r.mu.Unlock()
+	g.runner.WriteFiles(map[string]string{"work.txt": "w"})
+	var d DispatchInfo
+	g.ok(g.warden, "dispatch_wright", `{"piece":"p","brief":`+goodBrief+`}`, &d)
+	g.waitReported("p") // the Wright's run is still going: it has reported and no more
+	wts, err := g.st.Worktrees(g.job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range wts {
+		if w.Kind != store.KindWright {
+			continue
+		}
+		if got := git(t, w.Path, "log", "-1", "--format=%s"); got != "piece p (round 0)" {
+			t.Errorf("the piece reads as done but its work is not committed: HEAD is %q", got)
+		}
+		if st := git(t, w.Path, "status", "--porcelain"); strings.Contains(st, "work.txt") {
+			t.Errorf("work.txt is still uncommitted: %q", st)
+		}
+	}
+}

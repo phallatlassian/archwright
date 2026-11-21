@@ -415,6 +415,14 @@ func reportResult(c *callCtx, in json.RawMessage) (any, error) {
 	if err := a.Validate(); err != nil {
 		return nil, err
 	}
+	d, err := c.st.GetDispatch(c.run.ctx.DispatchID)
+	if err != nil {
+		return nil, err
+	}
+	c.runs.mu.Lock()
+	wt := c.runs.wrightWts[d.ID]
+	c.runs.mu.Unlock()
+	c.runs.commitWright(d, wt, a, c.runs.traceFor(c.run.id)) // before the dispatch reads as reported, so the Warden never acts on uncommitted work
 	raw, _ := json.Marshal(a)
 	if err := c.st.RecordResult(c.run.ctx.DispatchID, raw); err != nil {
 		return nil, err
@@ -565,8 +573,12 @@ func (r *Runs) start(d store.Dispatch) error {
 			runErr = runner.Run(ctx, RunRequest{Env: env, Job: d.JobID, Guild: d.Guild, Piece: d.Piece, DispatchID: d.ID, Worktree: wt, Brief: d.Rendered, ExtraEnv: extra, Trace: trace})
 		}
 		unreported := false
-		if cur, err := r.st.GetDispatch(d.ID); err == nil && cur.Status == store.DispatchRunning {
+		cur, curErr := r.st.GetDispatch(d.ID)
+		if curErr == nil && cur.Status == store.DispatchRunning {
 			unreported = true
+		}
+		if _, limited := asRateLimit(runErr); unreported && !limited {
+			r.commitWright(d, wt, WrightResult{Status: ResultFailed}, trace) // a run that never reported has failed; a requeued run carries on in the same worktree
 		}
 		r.End(env.Run)
 		r.mu.Lock()
@@ -622,6 +634,44 @@ func (r *Runs) traceFor(run string) Trace {
 			}
 		},
 	}
+}
+
+// commitWright commits what a Wright left in its worktree to its piece branch
+// when it reports, or when its run ends without reporting (ADR 0025).
+// The Wright never runs git add or commit. A failure is recorded on the run
+// and does not fail the dispatch: the handback gates run on what was committed.
+func (r *Runs) commitWright(d store.Dispatch, wt string, res WrightResult, trace Trace) {
+	r.mu.Lock()
+	sm := r.sites
+	r.mu.Unlock()
+	if sm == nil || wt == "" || isMergeBasePiece(d.Piece) { // a merge Wright commits for itself
+		return
+	}
+	status := res.Status
+	msg := fmt.Sprintf("%s (round %d)", d.Piece, d.Round)
+	if status == ResultDone {
+		msg = "piece " + msg
+	} else {
+		msg = "wip: piece " + msg + ", " + status
+	}
+	if res.Result != "" {
+		msg += "\n\nResult: " + res.Result
+	}
+	sha, err := sm.CommitWorktree(d.JobID, wt, msg)
+	switch {
+	case err != nil:
+		log.Printf("dispatch %s: committing the worktree: %v", d.ID, err)
+		trace.Emit("commit", "committing the worktree failed: "+err.Error(), commitRaw("failed", ""))
+	case sha == "":
+		trace.Emit("commit", "no changes to commit", commitRaw("unchanged", ""))
+	default:
+		trace.Emit("commit", "committed "+sha, commitRaw("committed", sha))
+	}
+}
+
+func commitRaw(outcome, sha string) json.RawMessage {
+	b, _ := json.Marshal(map[string]string{"type": "commit", "outcome": outcome, "sha": sha})
+	return b
 }
 
 // wrightWorktree gives a dispatch's Wright its own worktree on its own branch

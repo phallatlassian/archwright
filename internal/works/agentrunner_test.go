@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -152,6 +153,7 @@ func TestWrightRunsOnClaudeInItsOwnWorktreeAndReportsThroughTheSpool(t *testing.
 			t.Errorf("event %d (%s) lost its raw content", e.Seq, e.Kind)
 		}
 	}
+	kinds = slices.DeleteFunc(kinds, func(k string) bool { return k == "commit" }) // the Works' own commit follows the agent's result
 	if len(kinds) < 5 || kinds[0] != "posture" || kinds[len(kinds)-1] != "result" {
 		t.Errorf("timeline = %v", kinds)
 	}

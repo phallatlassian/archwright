@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/phallatlassian/archwright/internal/spool"
 	"github.com/phallatlassian/archwright/internal/store"
@@ -33,6 +34,14 @@ func newWrightRig(t *testing.T, gates store.Gates) *wrightRig {
 		t.Fatal(err)
 	}
 	wt := wtr.Path
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+		g.r.mu.Lock()
+		_, held := g.r.wrightWts[disp.ID]
+		g.r.mu.Unlock()
+		if !held { // the run's own release has happened, which would drop ours
+			break
+		}
+	}
 	g.r.mu.Lock()
 	g.r.wrightWts[disp.ID] = wt
 	g.r.mu.Unlock()
