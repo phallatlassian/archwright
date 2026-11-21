@@ -304,23 +304,9 @@ const views = {
 
   async run(id) {
     const jobId = location.hash.split('/')[3] || '';
-    const [evs, job] = await Promise.all([get(`/runs/${id}/events`), jobId ? get('/jobs/' + jobId).catch(() => null) : null]);
-    const trail = job ? [[job.title, '#/job/' + jobId], 'Run ' + id] : ['Run ' + id];
-    const out = [crumbs(...trail), h('h1', {}, 'Run ', h('span', { class: 'mono' }, id)),
-      h('p', { class: 'muted' }, 'Read-only timeline. Raw vendor events load on demand.')];
-    if (!evs.length) out.push(h('p', { class: 'muted' }, 'No events recorded.'));
-    for (const e of evs) {
-      const raw = h('div', {});
-      out.push(h('div', { class: 'panel' },
-        h('span', { class: 'muted mono' }, '#' + e.seq + ' '), tag(e.kind), ' ', e.summary,
-        e.has_raw
-          ? h('div', { class: 'row' }, h('button', { onclick: async (ev) => {
-            ev.target.disabled = true;
-            try { raw.replaceChildren(h('pre', {}, JSON.stringify(await get(`/runs/${id}/events/${e.seq}/raw`), null, 2))); } catch (er) { toast(er.message, true); }
-          } }, 'Show raw event'), raw)
-          : h('div', { class: 'muted' }, 'raw content pruned')));
-    }
-    return h('div', {}, out);
+    const [evs, job, runs, dispatches] = await Promise.all([get(`/runs/${id}/events`),
+      ...(jobId ? [get('/jobs/' + jobId), get(`/jobs/${jobId}/runs`), get(`/jobs/${jobId}/dispatches`)].map((p) => p.catch(() => null)) : [null, null, null])]);
+    return runTimeline(id, jobId, evs, job, runs, dispatches);
   },
 
   async usage() {
@@ -623,6 +609,103 @@ function askPanel(a, jobTitle) {
       h('button', { onclick: () => act('Accept defaults', 'POST', `/asks/${a.id}/accept-default`, {}) }, 'Accept recommended'),
       h('button', { onclick: () => act('Skip', 'POST', `/asks/${a.id}/skip`, {}) }, 'Skip'),
       h('button', { class: 'danger', onclick: () => confirm('Cancel this ask and its Job?') && act('Cancel', 'POST', `/asks/${a.id}/cancel`, {}) }, 'Cancel Job')));
+}
+
+// ---- run timeline -----------------------------------------------------------------
+// A list of events beside the selected event's detail. The view is built once per run and then updated in place:
+// a live refresh appends new events and refreshes the card, but never touches the selection, the detail, the
+// filter or either pane's scroll position, because none of those nodes is replaced.
+const ALL = 'All';
+let tl = null; // the timeline on screen; a new one starts when the run changes
+
+function newTimeline(runId) {
+  const t = { runId, seen: 0, rows: new Map(), kinds: '', kind: ALL, sel: null, raw: new Map() };
+  t.head = h('div', {});
+  t.card = h('div', {});
+  t.chips = h('div', { class: 'row', role: 'group', 'aria-label': 'Filter by kind' });
+  t.empty = h('p', { class: 'muted', hidden: true }, 'No events recorded.');
+  t.list = h('div', { class: 'tl-list', role: 'listbox', 'aria-label': 'Events' });
+  t.detail = h('div', { class: 'tl-detail panel' }, h('p', { class: 'muted' }, 'Select an event.'));
+  t.root = h('div', {}, t.head, t.card, t.chips, t.empty, h('div', { class: 'tl-split' }, t.list, t.detail));
+  return t;
+}
+
+function runCard(runId, run, dispatch) {
+  if (!run && !dispatch) return null;
+  const secs = run ? Math.max(0, Math.round(((run.ended_at ? new Date(run.ended_at) : new Date()) - new Date(run.started_at)) / 1000)) : 0;
+  const dur = secs >= 3600 ? Math.floor(secs / 3600) + 'h ' + Math.floor(secs % 3600 / 60) + 'm' : secs >= 60 ? Math.floor(secs / 60) + 'm ' + (secs % 60) + 's' : secs + 's';
+  const f = (label, ...v) => h('div', { class: 'tl-f' }, h('div', { class: 'muted' }, label), h('div', {}, ...v));
+  const guild = (run && run.guild) || (dispatch && dispatch.guild);
+  return h('div', { class: 'panel tl-card' },
+    f('Guild', h('strong', {}, guild || 'unknown')),
+    f('Wright', h('strong', {}, dispatch ? dispatch.piece : 'unknown'), dispatch ? h('span', { class: 'muted' }, ' round ' + dispatch.round) : null),
+    run ? f('Runner', run.runner || 'unknown') : null,
+    run ? f('Status', tag(run.status)) : null,
+    run ? f('Started', ago(run.started_at), h('span', { class: 'muted' }, ' \u00b7 ' + dur)) : null,
+    run ? f('Usage', `${tokens(run.input_tokens)} in / ${tokens(run.output_tokens)} out \u00b7 ${money(run.cost_usd)}`) : null);
+}
+
+// rawEvent returns the node for an event's raw content, fetching it once and caching the outcome.
+function rawEvent(t, e) {
+  if (!e.has_raw) return h('div', { class: 'muted' }, 'raw content pruned');
+  let r = t.raw.get(e.seq);
+  if (!r) {
+    r = { node: h('div', { class: 'muted' }, 'Loading raw event\u2026') };
+    t.raw.set(e.seq, r);
+    get(`/runs/${t.runId}/events/${e.seq}/raw`)
+      .then((v) => r.node.replaceChildren(h('pre', {}, JSON.stringify(v, null, 2))))
+      .catch((er) => { t.raw.delete(e.seq); r.node.replaceChildren(h('span', { class: 'bad' }, er.message)); })
+      .finally(() => { r.node.className = ''; });
+  }
+  return r.node;
+}
+
+function selectEvent(t, e) {
+  t.sel = e.seq;
+  for (const [seq, row] of t.rows) row.setAttribute('aria-selected', seq === e.seq);
+  t.detail.replaceChildren(h('div', { class: 'tl-dh' }, h('strong', {}, 'Event #' + e.seq), tag(e.kind)),
+    h('p', { class: 'tl-full' }, e.summary), h('h3', {}, 'Raw event'), rawEvent(t, e));
+  t.detail.scrollTop = 0;
+}
+
+function applyFilter(t) {
+  for (const row of t.rows.values()) row.hidden = t.kind !== ALL && row.dataset.kind !== t.kind;
+  for (const chip of t.chips.children) chip.setAttribute('aria-pressed', chip.dataset.kind === t.kind);
+  for (const chip of t.chips.children) chip.className = chip.dataset.kind === t.kind ? 'primary' : '';
+}
+
+function drawChips(t, kinds) {
+  const chip = (k) => h('button', { 'data-kind': k, onclick: () => { t.kind = k; applyFilter(t); } }, k);
+  t.chips.replaceChildren(chip(ALL), ...kinds.map(chip));
+}
+
+function runTimeline(runId, jobId, evs, job, runs, dispatches) {
+  if (!tl || tl.runId !== runId) tl = newTimeline(runId);
+  const t = tl;
+  const trail = job ? [[job.title, '#/job/' + jobId], 'Run ' + runId] : ['Run ' + runId];
+  t.head.replaceChildren(crumbs(...trail), h('h1', {}, 'Run ', h('span', { class: 'mono' }, runId)),
+    h('p', { class: 'muted' }, 'Read-only timeline. Raw vendor events load on selection.'));
+  const run = (runs || []).find((r) => r.run_id === runId);
+  const dispatch = run && (dispatches || []).find((d) => d.id === run.dispatch_id || d.run_id === runId);
+  const card = jobId ? runCard(runId, run, dispatch) : null;
+  t.card.replaceChildren(...(card ? [card] : []));
+
+  for (const e of evs) {
+    if (t.rows.has(e.seq)) continue; // appended once; an existing row is never rebuilt
+    const pick = () => selectEvent(t, e);
+    const row = h('div', { class: 'tl-row', role: 'option', tabindex: 0, 'aria-selected': false, 'data-kind': e.kind, onclick: pick,
+      onkeydown: (k) => { if (k.key === 'Enter' || k.key === ' ') { k.preventDefault(); pick(); } } },
+    h('span', { class: 'muted mono' }, '#' + e.seq), tag(e.kind), h('span', { class: 'tl-sum' }, e.summary));
+    t.rows.set(e.seq, row);
+    t.list.append(row);
+  }
+  t.empty.hidden = t.rows.size > 0;
+
+  const kinds = [...new Set(evs.map((e) => e.kind))];
+  if (t.kind !== ALL && !kinds.includes(t.kind)) t.kind = ALL; // its kind is gone: fall back to All
+  if (kinds.join('\n') !== t.kinds) { t.kinds = kinds.join('\n'); drawChips(t, kinds); }
+  applyFilter(t);
+  return t.root;
 }
 
 // ---- routing, rendering and live updates -------------------------------------------
