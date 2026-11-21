@@ -35,7 +35,7 @@ Exercise the Archwright software factory end-to-end against the fixture repo, wa
 - No `.otask-project` here, so plan lives in repo `docs/` (not committed unless user says).
 
 ## How to monitor (read-only)
-- State dir: `~/.local/state/archwright/` — `archwright.db` (sqlite; open with `sqlite3 -readonly`), `works.log`, `works.pid`, `clones/`, `worktrees/` (created on first Wright).
+- State dir: `~/.local/state/archwright/` — `archwright.db` (sqlite; open with `sqlite3 -readonly`), `works.log`, `events.log` (one line per event; follow with `tail -F`, it rolls to `events.log.1` at 5 MiB), `works.pid`, `clones/`, `worktrees/` (created on first Wright).
 - Useful tables: `jobs`, `plans`, `steps` (pending/running/handed_back/failed), `events` (append-only: at, job_id, type, payload), `asks`, `needs_you`, `gate_runs`, `reviews`, `handbacks`, `worktrees`, `flags`.
 - Fixture local checkout: `~/Development/personal/archwright-fixture`; Works clone: `clones/archwright-fixture.git`. Registered site `archwright-fixture` (base main, cap 3).
 - Registered site gates: `go vet ./...`, `golangci-lint run`, `go test ./...` (golangci-lint installed at ~/go/bin).

@@ -57,7 +57,7 @@ func (s *Store) StartRunRecord(runID, jobID, dispatchID, guild, runner string) e
 		runID, jobID, dispatchID, guild, runner, at); err != nil {
 		return err
 	}
-	if err := appendEvent(tx, at, jobID, "run.started", map[string]string{"run": runID, "guild": guild}); err != nil {
+	if err := appendEvent(tx, at, jobID, "run.started", map[string]string{"run": runID, "guild": guild, "runner": runner}); err != nil {
 		return err
 	}
 	return tx.Commit()

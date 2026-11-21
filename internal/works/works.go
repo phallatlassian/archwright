@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -139,6 +140,15 @@ func ServeWith(ctx context.Context, d paths.Dirs, ready chan<- struct{}, opts Op
 	pruned := make(chan struct{})
 	go func() { defer close(pruned); runs.pruneLoop(ctx) }()
 	defer func() { stop(); <-pruned }()
+	// Tee committed events to events.log; also stopped before the store closes.
+	teed := make(chan struct{})
+	if from, err := st.LastEventID(); err != nil {
+		log.Printf("events.log: %v", err)
+		close(teed)
+	} else {
+		go func() { defer close(teed); teeEvents(ctx, st, from, d.EventLog(), eventLogMax, eventLogEvery) }()
+	}
+	defer func() { stop(); <-teed }()
 	done := make(chan struct{})
 	srv := &http.Server{Handler: newHandler(st, runs, sm, token, os.Getpid(), stop, done)}
 	srv.RegisterOnShutdown(func() { close(done) }) // ends the event streams, which Shutdown would otherwise wait on
