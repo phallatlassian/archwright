@@ -88,9 +88,15 @@ func TestWrightBriefCarriesTheAgentRules(t *testing.T) {
 	if !strings.Contains(reqs[0].Brief, "archwright tool read_issue") {
 		t.Error("Wright brief does not name read_issue")
 	}
+	if _, ok := catalogue["run_gate"]; !ok || !strings.Contains(reqs[0].Brief, "archwright tool run_gate") {
+		t.Error("Wright brief does not name run_gate")
+	}
 }
 
 func TestReviewBriefCarriesTheAgentRules(t *testing.T) {
 	brief := renderReviewBrief(Guild{Name: "hallmark"}, store.Review{Seq: 1, SHA: "abc", Branch: "b"}, "/wt", "spec")
 	assertAgentRules(t, "review Warden", brief)
+	if strings.Contains(brief, "run_gate") {
+		t.Error("a review Warden cannot call run_gate, yet its brief names it")
+	}
 }
