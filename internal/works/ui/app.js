@@ -198,34 +198,38 @@ const views = {
     const byId = Object.fromEntries(board.map((j) => [j.id, j]));
     const title = (id) => (byId[id] ? byId[id].title : id);
     const out = [];
+    const entries = []; // PROTOTYPE: what each panel is about, for proto-needs.js
+    const add = (node, m) => { out.push(node); entries.push({ node, ...m }); };
 
     for (const j of board.filter((j) => j.plan_approval === 'pending' && !j.outcome)) {
       const plan = await get('/jobs/' + j.id + '/plan');
-      out.push(h('div', { class: 'panel attn' },
+      add(h('div', { class: 'panel attn' },
         h('h3', {}, 'Plan approval · ', jobLink(j.id, title(j.id))),
         jigTrack(plan.steps),
         h('div', { class: 'row' },
           h('button', { class: 'primary', onclick: () => act('Approve Plan', 'POST', `/jobs/${j.id}/plan/approve`, { updated_at: plan.updated_at }) }, 'Approve'),
-          h('button', { class: 'danger', onclick: () => act('Reject Plan', 'POST', `/jobs/${j.id}/plan/reject`, {}) }, 'Reject'))));
+          h('button', { class: 'danger', onclick: () => act('Reject Plan', 'POST', `/jobs/${j.id}/plan/reject`, {}) }, 'Reject'))), { key: 'plan' + j.id, kind: 'plan', jobId: j.id, at: j.created_at });
     }
 
-    for (const a of asks.filter((a) => a.holder === 'archwright')) out.push(askPanel(a, title(a.job_id)));
+    for (const a of asks.filter((a) => a.holder === 'archwright')) add(askPanel(a, title(a.job_id)), { key: 'ask' + a.id, kind: 'ask', jobId: a.job_id, guild: a.guild, piece: a.piece, dispatchId: a.dispatch_id, asker: a.asker, at: a.created_at });
 
     for (const j of board.filter((j) => j.state === 'parked')) {
-      out.push(h('div', { class: 'panel attn' },
+      add(h('div', { class: 'panel attn' },
         h('h3', {}, 'Parked · ', jobLink(j.id, title(j.id))),
         h('p', {}, j.parked_for),
         instructBox(j.id, 'Tell the Archwright what to do'),
-        h('div', { class: 'row' }, h('button', { class: 'danger', onclick: () => confirm('Cancel and discard this Job?') && act('Cancel Job', 'POST', `/jobs/${j.id}/cancel`, {}) }, 'Cancel Job'))));
+        h('div', { class: 'row' }, h('button', { class: 'danger', onclick: () => confirm('Cancel and discard this Job?') && act('Cancel Job', 'POST', `/jobs/${j.id}/cancel`, {}) }, 'Cancel Job'))), { key: 'parked' + j.id, kind: 'parked', jobId: j.id, at: j.parked_at || j.created_at });
     }
 
     for (const it of items.filter((it) => it.kind !== 'ask')) { // asks have their own panels above
-      out.push(h('div', { class: 'panel attn' },
+      add(h('div', { class: 'panel attn' },
         h('h3', {}, tag(it.kind), ' ', it.job_id ? jobLink(it.job_id, title(it.job_id)) : '', ' ', h('span', { class: 'muted' }, ago(it.created_at))),
         h('p', {}, it.summary),
         it.detail && Object.keys(it.detail).length ? h('pre', {}, JSON.stringify(it.detail, null, 2)) : null,
-        it.job_id ? instructBox(it.job_id, 'Tell the Archwright what to do about it') : null));
+        it.job_id ? instructBox(it.job_id, 'Tell the Archwright what to do about it') : null), { key: 'item' + it.id, kind: it.kind, jobId: it.job_id, guild: (it.detail || {}).guild, piece: (it.detail || {}).piece, at: it.created_at });
     }
+    const proto = await protoNeeds(entries, board); // PROTOTYPE hook: see proto-needs.js
+    if (proto) return h('div', {}, crumbs('Needs you'), h('h1', {}, 'Needs you'), proto);
     return h('div', {}, crumbs('Needs you'), h('h1', {}, 'Needs you'), out.length ? out : h('p', { class: 'muted' }, 'Nothing is waiting on you.'));
   },
 
