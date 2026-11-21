@@ -5,3 +5,5 @@ Agents run under exactly the permissions of the developer running `claude` or `c
 A never-list is hard-coded in the adapters and not configurable: never pass `bypassPermissions`, `--dangerously-skip-permissions`, `--yolo`, `danger-full-access`, a permission mode or approval policy more permissive than the runner's default, or `--approve-for-me`; never write any settings file (managed, user or project) or add an allow rule; never disable the sandbox or set `dangerouslyDisableSandbox`; never pass `--settings` or `--mcp-config` that overrides managed keys. Adapters refuse to spawn when asked to. Each run records its permission posture (runner, version, mode, sandbox, flags, managed-policy notices) as an event, and a runner that refuses to start because managed policy is unparseable fails visibly with nothing retried around it.
 
 Amended by ADR 0023: a Codex Wright step that writes gets `-s workspace-write` with Works-computed writable roots, a bounded exception to the rule above.
+
+Amended by ADR 0025: the Works also runs a Wright's gates and makes its commits, so a Wright's checks need no allow rule.

@@ -72,6 +72,14 @@ _Avoid_: notifications, alerts
 The one inspected result a Warden returns to the Archwright: done, partial or failed, with any flags.
 _Avoid_: report, response
 
+**Gate run**:
+The Works running a Site's registered gate commands (type-check, lint, test) on a snapshot of work in a throwaway checkout, outside any agent sandbox. A Wright may ask for one mid-piece; the one on handback is the authoritative check.
+_Avoid_: CI, test run, check
+
+**Snapshot**:
+A throwaway copy of a Wright's worktree, tracked and untracked files, that the Works takes so a gate run never touches the Wright's tree or git directory.
+_Avoid_: checkout, backup
+
 **Review**:
 A Plan step, started by the Archwright after Masonry's handback and run by a fresh read-only Warden that shares no context with the builder. It reports Standards and Spec independently as pass, fail or not evaluated, with findings tied to file and line. One fail sends the Job back to Masonry once, automatically; a second parks it. The PR go-ahead needs an overall pass (ADR 0012).
 _Avoid_: code review, QA, approval
