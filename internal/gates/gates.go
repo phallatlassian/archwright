@@ -37,13 +37,12 @@ func RunNamed(ctx context.Context, dir string, g store.Gates, timeout time.Durat
 		timeout = DefaultTimeout
 	}
 	var out []store.GateResult
-	for _, gate := range []struct{ name, command string }{
-		{store.GateTypecheck, g.Typecheck}, {store.GateLint, g.Lint}, {store.GateTest, g.Test},
-	} {
-		if only != "" && only != gate.name {
+	commands := map[string]string{store.GateTypecheck: g.Typecheck, store.GateLint: g.Lint, store.GateTest: g.Test}
+	for _, name := range Names {
+		if only != "" && only != name {
 			continue
 		}
-		out = append(out, runOne(ctx, dir, gate.name, gate.command, timeout))
+		out = append(out, runOne(ctx, dir, name, commands[name], timeout))
 	}
 	return out
 }

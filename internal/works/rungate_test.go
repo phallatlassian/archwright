@@ -130,3 +130,29 @@ func TestRunGateRunsOneAtATimePerJob(t *testing.T) {
 	release()
 	w.gate(`{}`)
 }
+
+func TestRunGateDoesNotFollowSymlinkedDirectoriesOutOfTheWorktree(t *testing.T) {
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "verdict.txt"), []byte("secret"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	w := newWrightRig(t, store.Gates{Test: "true"})
+	if err := os.MkdirAll(filepath.Join(w.wt, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	w.write("sub/leak.txt", "x")
+	git(t, w.wt, "add", "sub")
+	if err := os.RemoveAll(filepath.Join(w.wt, "sub")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(w.wt, "sub")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(outside, "leak.txt"), []byte("orig"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	w.gate(`{}`)
+	if b, _ := os.ReadFile(filepath.Join(outside, "leak.txt")); string(b) != "orig" {
+		t.Fatalf("the snapshot wrote through a symlinked directory: %q", b)
+	}
+}

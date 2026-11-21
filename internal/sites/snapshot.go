@@ -76,7 +76,7 @@ func isScaffold(rel string) bool {
 }
 
 // mirror makes dst's files match src's: tracked and untracked (not ignored)
-// files are copied, and files src deleted are removed from dst.
+// files are copied (gitignored ones are not, nor submodules), and files src deleted are removed from dst.
 func mirror(src, dst string) error {
 	list := func(args ...string) ([]string, error) {
 		out, err := git(src, args...)
@@ -97,8 +97,8 @@ func mirror(src, dst string) error {
 	}
 	want := map[string]bool{}
 	for _, rel := range present {
-		if _, err := os.Lstat(filepath.Join(src, rel)); err != nil {
-			continue // tracked, then deleted
+		if !plainPath(src, rel) {
+			continue // deleted, or reached through a symlinked directory that could lead outside the worktree
 		}
 		want[rel] = true
 	}
@@ -119,6 +119,21 @@ func mirror(src, dst string) error {
 		}
 	}
 	return nil
+}
+
+// plainPath says whether rel exists in src with no symlink among its parent
+// directories; the last element may itself be a symlink (it is copied as one).
+func plainPath(src, rel string) bool {
+	parts := strings.Split(rel, "/")
+	p := src
+	for i, part := range parts {
+		p = filepath.Join(p, part)
+		info, err := os.Lstat(p)
+		if err != nil || (i < len(parts)-1 && !info.IsDir()) {
+			return false
+		}
+	}
+	return true
 }
 
 func copyEntry(from, to string) error {
