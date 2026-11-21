@@ -221,8 +221,8 @@ func dispatchWright(c *callCtx, in json.RawMessage) (any, error) {
 	if err := requireField("piece", a.Piece); err != nil {
 		return nil, err
 	}
-	if isMergeBasePiece(a.Piece) {
-		return nil, fmt.Errorf("%w: the %q piece prefix is reserved for merge_base", errInvalidInput, mergeBasePiece+"-")
+	if isMergeWright(a.Piece) {
+		return nil, fmt.Errorf("%w: the %q and %q piece prefixes are reserved for merge Wrights", errInvalidInput, mergeBasePiece+"-", mergePiecePiece+"-")
 	}
 	g, err := c.warden()
 	if err != nil {
@@ -259,8 +259,8 @@ func reworkWright(c *callCtx, in json.RawMessage) (any, error) {
 	if err := requireField("reason", a.Reason); err != nil {
 		return nil, err
 	}
-	if isMergeBasePiece(a.Piece) {
-		return nil, fmt.Errorf("%w: merge_base pieces cannot be reworked; call merge_base again", errInvalidInput)
+	if isMergeWright(a.Piece) {
+		return nil, fmt.Errorf("%w: merge Wright pieces cannot be reworked; call merge_base or accept_piece again", errInvalidInput)
 	}
 	g, err := c.warden()
 	if err != nil {
@@ -323,25 +323,6 @@ func inspectWright(c *callCtx, in json.RawMessage) (any, error) {
 		}
 	}
 	return out, nil
-}
-
-func acceptPiece(c *callCtx, in json.RawMessage) (any, error) {
-	var a struct {
-		Piece string `json:"piece"`
-	}
-	if err := decode(in, &a); err != nil {
-		return nil, err
-	}
-	if _, err := c.warden(); err != nil {
-		return nil, err
-	}
-	if _, err := c.pieceOf(a.Piece); err != nil {
-		return nil, err
-	}
-	if err := c.st.AcceptPiece(c.run.ctx.Job, a.Piece, resultIsDone); err != nil {
-		return nil, err
-	}
-	return c.st.GetPiece(c.run.ctx.Job, a.Piece)
 }
 
 func handback(c *callCtx, in json.RawMessage) (any, error) {
@@ -644,7 +625,7 @@ func (r *Runs) commitWright(d store.Dispatch, wt string, res WrightResult, trace
 	r.mu.Lock()
 	sm := r.sites
 	r.mu.Unlock()
-	if sm == nil || wt == "" || isMergeBasePiece(d.Piece) { // a merge Wright commits for itself
+	if sm == nil || wt == "" || isMergeWright(d.Piece) { // a merge Wright commits for itself
 		return
 	}
 	status := res.Status
@@ -686,7 +667,7 @@ func (r *Runs) wrightWorktree(d store.Dispatch) (string, error) {
 	if _, err := os.Stat(kept); kept != "" && err == nil {
 		return kept, nil // requeued after a rate limit: the same worktree, not another
 	}
-	if isMergeBasePiece(d.Piece) { // a merge Wright commits on the integration branch itself, so the push is a fast-forward (ADR 0022)
+	if isMergeWright(d.Piece) { // a merge Wright commits on the integration branch itself, so the push is a fast-forward (ADR 0022)
 		path, err := sm.IntegrationWorktree(d.JobID)
 		if err != nil {
 			return "", fmt.Errorf("finding the integration worktree: %w", err)
@@ -700,5 +681,8 @@ func (r *Runs) wrightWorktree(d store.Dispatch) (string, error) {
 	r.mu.Lock()
 	r.wrightWts[d.ID] = wt.Path
 	r.mu.Unlock()
+	if err := r.st.SetDispatchBranch(d.ID, wt.Branch); err != nil { // accept_piece merges this branch
+		return "", fmt.Errorf("recording the Wright's branch: %w", err)
+	}
 	return wt.Path, nil
 }

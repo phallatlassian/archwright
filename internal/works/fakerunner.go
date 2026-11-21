@@ -95,12 +95,15 @@ func (f *FakeRunner) Run(ctx context.Context, req RunRequest) error {
 		}
 		return nil
 	}
-	if isMergeBasePiece(req.Piece) && req.Worktree != "" {
+	if isMergeWright(req.Piece) && req.Worktree != "" {
 		if err := fakeMerge(req); err != nil {
 			return err
 		}
 	}
 	for rel, content := range f.files {
+		if isMergeWright(req.Piece) { // a merge Wright's work is the merge; the files are for Wrights that write
+			break
+		}
 		p := filepath.Join(req.Worktree, rel)
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 			return err
@@ -130,9 +133,12 @@ func (f *FakeRunner) Run(ctx context.Context, req RunRequest) error {
 // commits. It only merges: no rebase, reset, amend or push.
 func fakeMerge(req RunRequest) error {
 	_, ref, ok := strings.Cut(req.Brief, "- base ref: ")
+	if !ok {
+		_, ref, ok = strings.Cut(req.Brief, "- branch to merge: ")
+	}
 	ref, _, _ = strings.Cut(ref, "\n")
 	if !ok || ref == "" {
-		return fmt.Errorf("fake merge Wright: the brief names no base ref")
+		return fmt.Errorf("fake merge Wright: the brief names no ref to merge")
 	}
 	git := func(args ...string) error {
 		cmd := exec.Command("git", append([]string{"-C", req.Worktree, "-c", "user.name=fake merge Wright", "-c", "user.email=fake@archwright.invalid"}, args...)...)
