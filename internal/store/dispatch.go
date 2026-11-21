@@ -52,6 +52,7 @@ type Dispatch struct {
 	Rendered  string          `json:"rendered"` // the brief as the Wright saw it, Guild standards included
 	Status    string          `json:"status"`
 	Result    json.RawMessage `json:"result,omitempty"`
+	Branch    string          `json:"branch,omitempty"` // the branch the Wright's work is committed to
 	CreatedAt time.Time       `json:"created_at"`
 }
 
@@ -76,12 +77,12 @@ type Handback struct {
 	CreatedAt time.Time       `json:"created_at"`
 }
 
-const dispatchCols = "id, job_id, piece, guild, round, run_id, brief, rendered, status, COALESCE(result,''), created_at"
+const dispatchCols = "id, job_id, piece, guild, round, run_id, brief, rendered, status, COALESCE(result,''), branch, created_at"
 
 func scanDispatch(r scanner) (Dispatch, error) {
 	var d Dispatch
 	var brief, result, at string
-	if err := r.Scan(&d.ID, &d.JobID, &d.Piece, &d.Guild, &d.Round, &d.RunID, &brief, &d.Rendered, &d.Status, &result, &at); err != nil {
+	if err := r.Scan(&d.ID, &d.JobID, &d.Piece, &d.Guild, &d.Round, &d.RunID, &brief, &d.Rendered, &d.Status, &result, &d.Branch, &at); err != nil {
 		return Dispatch{}, err
 	}
 	d.Brief = json.RawMessage(brief)
@@ -178,6 +179,12 @@ func (s *Store) GetDispatch(id string) (Dispatch, error) {
 		return Dispatch{}, fmt.Errorf("dispatch %q: %w", id, ErrNotFound)
 	}
 	return d, err
+}
+
+// SetDispatchBranch records the branch a dispatch's Wright works on.
+func (s *Store) SetDispatchBranch(id, branch string) error {
+	res, err := s.db.Exec("UPDATE dispatches SET branch = ? WHERE id = ?", branch, id)
+	return mustChange(res, err, id)
 }
 
 // LatestDispatch reads a piece's most recent dispatch.

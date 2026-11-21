@@ -73,7 +73,7 @@ func runGate(c *callCtx, in json.RawMessage) (any, error) {
 	if sm == nil {
 		return nil, fmt.Errorf("%w: no Site manager is configured, so there is nowhere to run gates", errInvalidInput)
 	}
-	if isMergeBasePiece(d.Piece) { // a merge Wright works in the integration worktree
+	if isMergeWright(d.Piece) { // a merge Wright works in the integration worktree
 		if wt, err = sm.IntegrationWorktree(job.ID); err != nil {
 			return nil, err
 		}
