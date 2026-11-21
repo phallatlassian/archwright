@@ -98,7 +98,7 @@ func acceptPiece(c *callCtx, in json.RawMessage) (any, error) {
 }
 
 // conflictingPiece dispatches the merge Wright for a piece whose branch does
-// not merge cleanly, unless one is already working on the Job.
+// not merge cleanly; accept_piece has already ruled out a running one.
 func (c *callCtx) conflictingPiece(g Guild, p store.Piece, d store.Dispatch, pm sites.PieceMerge, out AcceptInfo) (any, error) {
 	out.Piece, out.Merge, out.Conflicts = p, sites.PieceConflict, pm.Conflicts
 	pieces, err := c.st.Pieces(p.JobID)
@@ -110,11 +110,6 @@ func (c *callCtx) conflictingPiece(g Guild, p store.Piece, d store.Dispatch, pm 
 		if strings.HasPrefix(mp.Piece, mergePiecePiece+"-") {
 			n++
 		}
-	}
-	if md, err := c.activeMergeWright(p.JobID); err != nil {
-		return nil, err
-	} else if md != nil {
-		return c.mergingInfo(p, md, out), nil
 	}
 	b := pieceMergeBrief(p.Piece, d.Branch, pm)
 	raw, _ := json.Marshal(b)
