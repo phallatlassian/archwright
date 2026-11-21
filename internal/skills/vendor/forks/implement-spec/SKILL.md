@@ -25,7 +25,7 @@ All Works calls go through `archwright tool NAME` with JSON on stdin. The Works 
    - Not good: `rework_wright` with the reason and a complete amended brief. Rework is a fresh run, not a resume. The Guild allows a fixed number of rework rounds; when they are used up the Works marks the piece failed. Do not argue past that limit.
    - A piece that reports `partial` or `failed`, or that fails after its rework rounds, is never silently retried. Record it for the handback and carry on with every ticket that does not depend on it.
 
-5. When accepting a piece changes the frontier, dispatch the newly unblocked tickets. Merge accepted work into the Job's integration branch by dispatching a merge Wright; the Works holds the branches.
+5. When accepting a piece changes the frontier, dispatch the newly unblocked tickets. `accept_piece` lands the accepted piece on the Job's integration branch itself; a merge Wright is dispatched only for a conflict.
 
 6. Once every ticket is accepted or failed, dispatch a `code-review` piece on the integration branch, then dispatch one fresh Wright to fix everything it raised. Do not open the PR: that waits for the Archwright's go-ahead.
 
