@@ -74,6 +74,11 @@ func acceptPiece(c *callCtx, in json.RawMessage) (any, error) {
 		if err := c.jobRunnable(); err != nil {
 			return nil, err
 		}
+		if md, err := c.activeMergeWright(p.JobID); err != nil {
+			return nil, err
+		} else if md != nil {
+			return c.mergingInfo(p, md, out), nil
+		}
 		pm, err := sm.MergePiece(p.JobID, d.Branch)
 		if err != nil {
 			return nil, err
@@ -106,16 +111,10 @@ func (c *callCtx) conflictingPiece(g Guild, p store.Piece, d store.Dispatch, pm 
 			n++
 		}
 	}
-	for _, mp := range pieces { // a merge Wright of either kind holds the integration worktree
-		if !isMergeWright(mp.Piece) {
-			continue
-		}
-		if md, err := c.st.LatestDispatch(p.JobID, mp.Piece); err == nil && (md.Status == store.DispatchQueued || md.Status == store.DispatchRunning || md.Status == store.DispatchBlocked) {
-			info := DispatchInfo{DispatchID: md.ID, Piece: md.Piece, Round: md.Round, Status: md.Status}
-			out.Status, out.Dispatch = AcceptMerging, &info
-			out.Message = fmt.Sprintf("Piece %q conflicts with the integration branch, but merge Wright piece %q is already working on it; inspect_wright it, accept it, then accept %q again.", p.Piece, md.Piece, p.Piece)
-			return out, nil
-		}
+	if md, err := c.activeMergeWright(p.JobID); err != nil {
+		return nil, err
+	} else if md != nil {
+		return c.mergingInfo(p, md, out), nil
 	}
 	b := pieceMergeBrief(p.Piece, d.Branch, pm)
 	raw, _ := json.Marshal(b)
@@ -135,6 +134,33 @@ func (c *callCtx) conflictingPiece(g Guild, p store.Piece, d store.Dispatch, pm 
 	out.Status, out.Dispatch = AcceptConflict, &info
 	out.Message = fmt.Sprintf("Piece %q conflicts with the integration branch (%s); nothing was merged and the piece is still open. A merge Wright was started as piece %q: inspect_wright it, accept it, then accept %q again.", p.Piece, strings.Join(pm.Conflicts, ", "), piece, p.Piece)
 	return out, nil
+}
+
+// activeMergeWright is the merge Wright of either kind that holds the Job's
+// integration worktree (queued, running or blocked), or nil.
+func (c *callCtx) activeMergeWright(jobID string) (*store.Dispatch, error) {
+	pieces, err := c.st.Pieces(jobID)
+	if err != nil {
+		return nil, err
+	}
+	for _, mp := range pieces {
+		if !isMergeWright(mp.Piece) {
+			continue
+		}
+		if md, err := c.st.LatestDispatch(jobID, mp.Piece); err == nil && (md.Status == store.DispatchQueued || md.Status == store.DispatchRunning || md.Status == store.DispatchBlocked) {
+			return &md, nil
+		}
+	}
+	return nil, nil
+}
+
+// mergingInfo answers accept_piece while a merge Wright holds the integration
+// worktree: nothing is merged or started, the piece stays as it was.
+func (c *callCtx) mergingInfo(p store.Piece, md *store.Dispatch, out AcceptInfo) AcceptInfo {
+	info := DispatchInfo{DispatchID: md.ID, Piece: md.Piece, Round: md.Round, Status: md.Status}
+	out.Piece, out.Status, out.Dispatch = p, AcceptMerging, &info
+	out.Message = fmt.Sprintf("Merge Wright piece %q is working on the integration branch; nothing was merged. inspect_wright it, accept it, then accept %q again.", md.Piece, p.Piece)
+	return out
 }
 
 // pieceMergeBrief is the brief of the merge Wright for a conflicting piece.
