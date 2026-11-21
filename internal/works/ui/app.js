@@ -304,11 +304,16 @@ const views = {
 
   async run(id) {
     const jobId = location.hash.split('/')[3] || '';
-    const [evs, job] = await Promise.all([get(`/runs/${id}/events`), jobId ? get('/jobs/' + jobId).catch(() => null) : null]);
+    const [evs, job, jobRuns, jobDs] = await Promise.all([get(`/runs/${id}/events`), jobId ? get('/jobs/' + jobId).catch(() => null) : null,
+      jobId ? get(`/jobs/${jobId}/runs`).catch(() => []) : [], jobId ? get(`/jobs/${jobId}/dispatches`).catch(() => []) : []]); // runs and dispatches: PROTOTYPE, for the run card
+    const meta = { run: jobRuns.find((r) => r.run_id === id), job };
+    meta.dispatch = jobDs.find((d) => d.id === (meta.run && meta.run.dispatch_id) || d.run_id === id);
     const trail = job ? [[job.title, '#/job/' + jobId], 'Run ' + id] : ['Run ' + id];
     const out = [crumbs(...trail), h('h1', {}, 'Run ', h('span', { class: 'mono' }, id)),
       h('p', { class: 'muted' }, 'Read-only timeline. Raw vendor events load on demand.')];
     if (!evs.length) out.push(h('p', { class: 'muted' }, 'No events recorded.'));
+    const proto = evs.length ? protoRun(id, evs, meta) : null; // PROTOTYPE hook: see proto-run.js
+    if (proto) { out.push(proto); return h('div', {}, out); }
     for (const e of evs) {
       const raw = h('div', {});
       out.push(h('div', { class: 'panel' },

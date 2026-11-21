@@ -1,0 +1,25 @@
+/* PROTOTYPE (throwaway): see proto-run.js */
+#proto-bar { display:none; position:fixed; bottom:1rem; left:50%; transform:translateX(-50%); z-index:20; align-items:center; gap:.8rem; background:#111; color:#fff; padding:.35rem .6rem; border-radius:999px; box-shadow:0 4px 18px rgba(0,0,0,.4); }
+#proto-bar.on { display:flex; }
+#proto-bar button { margin:0; background:transparent; color:#fff; border-color:#555; border-radius:999px; }
+.pl-split { display:grid; grid-template-columns:minmax(280px, 38%) 1fr; gap:.8rem; height:calc(100vh - 11rem); min-height:20rem; }
+.pl-list, .pl-detail { overflow:auto; background:var(--card); border:1px solid var(--line); border-radius:6px; }
+.pl-detail { margin:0; }
+.pl-row { display:flex; gap:.5rem; align-items:baseline; padding:.4rem .6rem; border-bottom:1px solid var(--line); cursor:pointer; }
+.pl-row:hover { background:color-mix(in srgb, var(--accent) 8%, transparent); }
+.pl-row.on { background:color-mix(in srgb, var(--accent) 16%, transparent); box-shadow:inset 3px 0 var(--accent); }
+.pl-row:focus-visible, .pi-row:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }
+.pl-row .tag { margin:0; flex:0 0 auto; }
+.pl-sum, .pi-sum { flex:1 1 0; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.pl-dh { display:flex; gap:.6rem; align-items:center; }
+.pl-full { white-space:pre-wrap; word-break:break-word; }
+.pl-detail pre, .pi-body pre { max-height:none; }
+.pi-log { background:var(--card); border:1px solid var(--line); border-radius:6px; }
+.pi-row { display:flex; gap:.5rem; align-items:baseline; padding:.3rem .6rem; border-bottom:1px solid var(--line); cursor:pointer; }
+.pi-row:hover { background:color-mix(in srgb, var(--accent) 8%, transparent); }
+.pi-row .tag { margin:0; flex:0 0 auto; }
+.pi-car { width:1rem; color:var(--muted); flex:0 0 auto; }
+.pi-body { padding:.4rem .9rem .7rem 2rem; border-bottom:1px solid var(--line); background:var(--bg); }
+.pl-split.filt { height:calc(100vh - 19rem); }
+.pc { display:flex; flex-wrap:wrap; gap:.4rem 2rem; }
+.pc-f { font-size:.9rem; } .pc-f .muted { font-size:.75rem; }
