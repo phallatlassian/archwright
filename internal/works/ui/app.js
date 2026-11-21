@@ -197,36 +197,44 @@ const views = {
     const [board, items, asks] = await Promise.all([get('/board'), get('/needs-you'), get('/asks?status=open')]);
     const byId = Object.fromEntries(board.map((j) => [j.id, j]));
     const title = (id) => (byId[id] ? byId[id].title : id);
-    const out = [];
+    if (!ny) ny = newInbox();
+    const entries = [];
 
     for (const j of board.filter((j) => j.plan_approval === 'pending' && !j.outcome)) {
-      const plan = await get('/jobs/' + j.id + '/plan');
-      out.push(h('div', { class: 'panel attn' },
-        h('h3', {}, 'Plan approval · ', jobLink(j.id, title(j.id))),
-        jigTrack(plan.steps),
-        h('div', { class: 'row' },
-          h('button', { class: 'primary', onclick: () => act('Approve Plan', 'POST', `/jobs/${j.id}/plan/approve`, { updated_at: plan.updated_at }) }, 'Approve'),
-          h('button', { class: 'danger', onclick: () => act('Reject Plan', 'POST', `/jobs/${j.id}/plan/reject`, {}) }, 'Reject'))));
+      entries.push({ key: 'plan:' + j.id, kind: 'plan', jobId: j.id, at: j.updated_at, byArchwright: true, build: async () => {
+        const plan = await get('/jobs/' + j.id + '/plan');
+        return h('div', { class: 'panel attn' },
+          h('h3', {}, 'Plan approval · ', jobLink(j.id, title(j.id))),
+          jigTrack(plan.steps),
+          h('div', { class: 'row' },
+            h('button', { class: 'primary', onclick: () => act('Approve Plan', 'POST', `/jobs/${j.id}/plan/approve`, { updated_at: plan.updated_at }) }, 'Approve'),
+            h('button', { class: 'danger', onclick: () => act('Reject Plan', 'POST', `/jobs/${j.id}/plan/reject`, {}) }, 'Reject')));
+      } });
     }
 
-    for (const a of asks.filter((a) => a.holder === 'archwright')) out.push(askPanel(a, title(a.job_id)));
+    for (const a of asks.filter((a) => a.holder === 'archwright')) {
+      entries.push({ key: 'ask:' + a.id, kind: 'ask', jobId: a.job_id, at: a.created_at, guild: a.guild, piece: a.piece, dispatchId: a.dispatch_id, build: () => askPanel(a, title(a.job_id)) });
+    }
 
     for (const j of board.filter((j) => j.state === 'parked')) {
-      out.push(h('div', { class: 'panel attn' },
+      entries.push({ key: 'parked:' + j.id, kind: 'parked', jobId: j.id, at: j.updated_at, latest: true, build: () => h('div', { class: 'panel attn' },
         h('h3', {}, 'Parked · ', jobLink(j.id, title(j.id))),
         h('p', {}, j.parked_for),
         instructBox(j.id, 'Tell the Archwright what to do'),
-        h('div', { class: 'row' }, h('button', { class: 'danger', onclick: () => confirm('Cancel and discard this Job?') && act('Cancel Job', 'POST', `/jobs/${j.id}/cancel`, {}) }, 'Cancel Job'))));
+        h('div', { class: 'row' }, h('button', { class: 'danger', onclick: () => confirm('Cancel and discard this Job?') && act('Cancel Job', 'POST', `/jobs/${j.id}/cancel`, {}) }, 'Cancel Job'))) });
     }
 
     for (const it of items.filter((it) => it.kind !== 'ask')) { // asks have their own panels above
-      out.push(h('div', { class: 'panel attn' },
+      const detail = it.detail || it.payload || {};
+      entries.push({ key: 'item:' + it.id, kind: it.kind, jobId: it.job_id || '', at: it.created_at, guild: detail.guild, piece: detail.piece, latest: true, build: () => h('div', { class: 'panel attn' },
         h('h3', {}, tag(it.kind), ' ', it.job_id ? jobLink(it.job_id, title(it.job_id)) : '', ' ', h('span', { class: 'muted' }, ago(it.created_at))),
         h('p', {}, it.summary),
         it.detail && Object.keys(it.detail).length ? h('pre', {}, JSON.stringify(it.detail, null, 2)) : null,
-        it.job_id ? instructBox(it.job_id, 'Tell the Archwright what to do about it') : null));
+        it.job_id ? instructBox(it.job_id, 'Tell the Archwright what to do about it') : null) });
     }
-    return h('div', {}, crumbs('Needs you'), h('h1', {}, 'Needs you'), out.length ? out : h('p', { class: 'muted' }, 'Nothing is waiting on you.'));
+
+    await updateInbox(ny, await resolveOrigins(entries, byId));
+    return ny.root;
   },
 
   async job(id) {
@@ -706,6 +714,124 @@ function runTimeline(runId, jobId, evs, job, runs, dispatches) {
   if (kinds.join('\n') !== t.kinds) { t.kinds = kinds.join('\n'); drawChips(t, kinds); }
   applyFilter(t);
   return t.root;
+}
+
+// ---- needs-you inbox ----------------------------------------------------------------
+// Items waiting on the user, grouped by Job, beside the selected item's action panel. Like the run timeline,
+// the view is built once and updated in place: a live refresh adds, updates and removes rows, but never
+// replaces the selection, the detail panel (and the form in it) or either pane, so scroll positions hold.
+let ny = null;
+
+function newInbox() {
+  const n = { sel: null, rows: new Map(), groups: new Map(), panels: new Map() };
+  n.empty = h('p', { class: 'muted', hidden: true }, 'Nothing is waiting on you.');
+  n.list = h('div', { class: 'tl-list', role: 'listbox', 'aria-label': 'Waiting on you' });
+  n.trail = h('div', { class: 'ny-trail' });
+  n.panel = h('div', {});
+  n.detail = h('div', { class: 'tl-detail panel' }, h('p', { class: 'muted' }, 'Select an item.'));
+  n.split = h('div', { class: 'tl-split' }, n.list, n.detail);
+  n.root = h('div', {}, crumbs('Needs you'), h('h1', {}, 'Needs you'), n.empty, n.split);
+  return n;
+}
+
+// resolveOrigins says where each entry came from: its Job, the Guild and the Wright (a piece's dispatch and
+// run). A Plan approval comes from the Archwright's planning. An item with no dispatch of its own gets the
+// Job's latest one, marked as a guess.
+async function resolveOrigins(entries, byId) {
+  const ctx = {};
+  await Promise.all([...new Set(entries.filter((e) => e.jobId && !e.byArchwright).map((e) => e.jobId))].map(async (id) => {
+    const [ds, runs] = await Promise.all([get(`/jobs/${id}/dispatches`).catch(() => []), get(`/jobs/${id}/runs`).catch(() => [])]);
+    ctx[id] = { ds, runs };
+  }));
+  return entries.map((e) => {
+    const { ds, runs } = ctx[e.jobId] || { ds: [], runs: [] };
+    const byRound = (a, b) => b.round - a.round;
+    let d = e.dispatchId ? ds.find((x) => x.id === e.dispatchId) : null;
+    if (!d && e.piece) d = ds.filter((x) => x.piece === e.piece && (!e.guild || x.guild === e.guild)).sort(byRound)[0];
+    const guess = !d && !e.piece && !e.guild && e.latest && !e.byArchwright;
+    if (guess) d = [...ds].sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
+    const run = d && (runs.find((r) => r.dispatch_id === d.id) || runs.find((r) => r.run_id === d.run_id));
+    const job = byId[e.jobId];
+    return { ...e, jobTitle: job ? job.title : e.jobId || 'No Job', jobState: job && job.state,
+      guild: e.guild || (d && d.guild) || '', piece: e.piece || (d && d.piece) || '', round: d && d.round,
+      runner: run && run.runner, runId: (run && run.run_id) || (d && d.run_id) || '', guess };
+  });
+}
+
+const wrightLabel = (r) => r.piece + (r.round ? ' r' + r.round : '');
+
+// originTrail is Job › Guild › Wright, each a link where it has a page.
+function originTrail(r) {
+  const sep = () => h('span', { class: 'muted' }, ' › ');
+  const parts = [r.jobId ? jobLink(r.jobId, r.jobTitle) : h('span', { class: 'muted' }, 'No Job')];
+  if (r.byArchwright) parts.push(h('span', { class: 'muted' }, 'Archwright (planning)'));
+  else {
+    parts.push(r.guild ? h('strong', {}, r.guild) : h('span', { class: 'muted' }, 'no Guild'));
+    const text = r.piece ? wrightLabel(r) + (r.runner ? ' · ' + r.runner : '') + (r.guess ? ' (latest)' : '') : '';
+    parts.push(!text ? h('span', { class: 'muted' }, 'no Wright') : r.runId ? h('a', { href: `#/run/${r.runId}/${r.jobId}` }, text) : h('span', {}, text));
+  }
+  return parts.flatMap((p, i) => (i ? [sep(), p] : [p]));
+}
+
+function selectItem(n, key) {
+  n.sel = key;
+  for (const [k, row] of n.rows) row.setAttribute('aria-selected', k === key);
+  const r = n.items.get(key);
+  n.detail.replaceChildren(n.trail, n.panel);
+  n.trail.replaceChildren(...originTrail(r));
+  n.panel.replaceChildren(h('p', { class: 'muted' }, 'Loading…'));
+  n.detail.scrollTop = 0;
+  Promise.resolve(n.panels.get(key) || r.build()).then((node) => {
+    n.panels.set(key, node);
+    if (n.sel === key) n.panel.replaceChildren(node);
+  }).catch((e) => { if (n.sel === key) n.panel.replaceChildren(h('span', { class: 'bad' }, e.message)); });
+}
+
+function clearSelection(n) {
+  n.sel = null;
+  for (const row of n.rows.values()) row.setAttribute('aria-selected', false);
+  n.detail.replaceChildren(h('p', { class: 'muted' }, 'Select an item.'));
+}
+
+function inboxRow(n, r) {
+  const pick = () => selectItem(n, r.key);
+  return h('div', { class: 'tl-row ny-row', role: 'option', tabindex: 0, 'aria-selected': false, onclick: pick,
+    onkeydown: (k) => { if (k.key === 'Enter' || k.key === ' ') { k.preventDefault(); pick(); } } });
+}
+
+function inboxGroup(r) {
+  const g = { rows: h('div', {}), state: h('span', {}), count: h('span', { class: 'muted' }) };
+  g.title = h('strong', { class: 'ny-title' });
+  g.el = h('div', { class: 'ny-group' }, h('div', { class: 'ny-head' }, g.title, g.state, g.count), g.rows);
+  return g;
+}
+
+// updateInbox reconciles the list with the items now waiting; nodes that persist are updated, not replaced.
+async function updateInbox(n, entries) {
+  n.items = new Map(entries.map((r) => [r.key, r]));
+  for (const [k, row] of n.rows) if (!n.items.has(k)) { row.remove(); n.rows.delete(k); n.panels.delete(k); }
+  if (n.sel && !n.items.has(n.sel)) clearSelection(n);
+
+  const jobs = new Map();
+  for (const r of entries) jobs.set(r.jobId, [...(jobs.get(r.jobId) || []), r]);
+  for (const [id, g] of n.groups) if (!jobs.has(id)) { g.el.remove(); n.groups.delete(id); }
+  for (const [id, mine] of jobs) {
+    let g = n.groups.get(id);
+    if (!g) { g = inboxGroup(mine[0]); n.groups.set(id, g); n.list.append(g.el); }
+    g.title.textContent = mine[0].jobTitle;
+    g.state.className = mine[0].jobState ? 'tag ' + mine[0].jobState : '';
+    g.state.textContent = mine[0].jobState || '';
+    g.count.textContent = mine.length + ' waiting';
+    for (const r of mine) {
+      let row = n.rows.get(r.key);
+      if (!row) { row = inboxRow(n, r); n.rows.set(r.key, row); g.rows.append(row); }
+      row.replaceChildren(tag(r.kind), h('span', { class: 'muted' }, ago(r.at)),
+        h('span', { class: 'ny-where' }, r.byArchwright ? 'Archwright (planning)' : (r.guild || 'no Guild') + (r.piece ? ' › ' + wrightLabel(r) : '')));
+    }
+  }
+  if (n.sel) n.trail.replaceChildren(...originTrail(n.items.get(n.sel)));
+  n.empty.hidden = entries.length > 0;
+  n.split.hidden = entries.length === 0;
 }
 
 // ---- routing, rendering and live updates -------------------------------------------
