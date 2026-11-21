@@ -39,8 +39,10 @@ const agentRules = "## Working rules\n\n" +
 	"- Run one simple command per Bash call: no pipes, heredocs, `cd`, command substitution or chaining with `&&`, `;` or `||`. Use absolute paths instead of `cd`. The one exception is a tool call, `echo '{...}' | archwright tool NAME`: keep the JSON in single quotes with no apostrophes, and put nothing else in that command.\n\n"
 
 // wrightRules is what only a Wright's brief adds (ADR 0025): the Works runs
-// the Site's checks for it, since its sandbox denies go and make.
-const wrightRules = "- Never run `go`, `make` or the Site's test, lint or type-check commands yourself: your sandbox denies them. To check your work, call `archwright tool run_gate` with `{}` on stdin to run every gate, or `{\"gate\":\"test\"}` (also `lint`, `typecheck`) to run one. The Works runs it on a snapshot of your worktree, uncommitted files included, and returns each gate's result. Calls are limited, so make your changes before each call.\n"
+// the Site's checks for it, since its sandbox denies go and make, and makes
+// its commits.
+const wrightRules = "- Never run `go`, `make` or the Site's test, lint or type-check commands yourself: your sandbox denies them. To check your work, call `archwright tool run_gate` with `{}` on stdin to run every gate, or `{\"gate\":\"test\"}` (also `lint`, `typecheck`) to run one. The Works runs it on a snapshot of your worktree, uncommitted files included, and returns each gate's result. Calls are limited, so make your changes before each call.\n" +
+	"- Never run `git add` or `git commit` for your changes (unless this brief itself tells you to make a commit, such as a merge): leave them in the worktree. When you report, the Works commits it to your branch, never committing run scaffolding such as `.agents/` or `.claude/`.\n"
 
 func blank(s string) bool { return strings.TrimSpace(s) == "" }
 

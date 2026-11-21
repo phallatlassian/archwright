@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -21,12 +23,20 @@ type FakeRunner struct {
 	asks   map[string][]string // per piece, the ask input a run raises instead of reporting
 	briefs []RunRequest
 	delay  time.Duration
+	files  map[string]string // path -> content the fake Wright leaves in its worktree
 }
 
 // WithDelay makes each run wait before it reports, so a Wright can be in
 // flight long enough to be interrupted.
 func (f *FakeRunner) WithDelay(d time.Duration) *FakeRunner {
 	f.delay = d
+	return f
+}
+
+// WriteFiles makes each run leave these files, by worktree-relative path, in
+// its worktree before it reports, as a Wright leaves its work uncommitted.
+func (f *FakeRunner) WriteFiles(files map[string]string) *FakeRunner {
+	f.files = files
 	return f
 }
 
@@ -87,6 +97,15 @@ func (f *FakeRunner) Run(ctx context.Context, req RunRequest) error {
 	}
 	if isMergeBasePiece(req.Piece) && req.Worktree != "" {
 		if err := fakeMerge(req); err != nil {
+			return err
+		}
+	}
+	for rel, content := range f.files {
+		p := filepath.Join(req.Worktree, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
 			return err
 		}
 	}

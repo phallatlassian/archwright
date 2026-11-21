@@ -91,6 +91,9 @@ func TestWrightBriefCarriesTheAgentRules(t *testing.T) {
 	if _, ok := catalogue["run_gate"]; !ok || !strings.Contains(reqs[0].Brief, "archwright tool run_gate") {
 		t.Error("Wright brief does not name run_gate")
 	}
+	if !strings.Contains(reqs[0].Brief, "Never run `git add` or `git commit`") {
+		t.Error("Wright brief does not tell the Wright to leave committing to the Works")
+	}
 }
 
 func TestReviewBriefCarriesTheAgentRules(t *testing.T) {
