@@ -415,6 +415,14 @@ func reportResult(c *callCtx, in json.RawMessage) (any, error) {
 	if err := a.Validate(); err != nil {
 		return nil, err
 	}
+	d, err := c.st.GetDispatch(c.run.ctx.DispatchID)
+	if err != nil {
+		return nil, err
+	}
+	c.runs.mu.Lock()
+	wt := c.runs.wrightWts[d.ID]
+	c.runs.mu.Unlock()
+	c.runs.commitWright(d, wt, a, c.runs.traceFor(c.run.id)) // before the dispatch reads as reported, so the Warden never acts on uncommitted work
 	raw, _ := json.Marshal(a)
 	if err := c.st.RecordResult(c.run.ctx.DispatchID, raw); err != nil {
 		return nil, err
@@ -569,8 +577,8 @@ func (r *Runs) start(d store.Dispatch) error {
 		if curErr == nil && cur.Status == store.DispatchRunning {
 			unreported = true
 		}
-		if _, limited := asRateLimit(runErr); !limited || !unreported {
-			r.commitWright(d, wt, cur, trace) // a requeued run carries on in the same worktree
+		if _, limited := asRateLimit(runErr); unreported && !limited {
+			r.commitWright(d, wt, WrightResult{Status: ResultFailed}, trace) // a run that never reported has failed; a requeued run carries on in the same worktree
 		}
 		r.End(env.Run)
 		r.mu.Lock()
@@ -629,21 +637,17 @@ func (r *Runs) traceFor(run string) Trace {
 }
 
 // commitWright commits what a Wright left in its worktree to its piece branch
-// when its run ends, whether it reported done, blocked or failed (ADR 0025).
+// when it reports, or when its run ends without reporting (ADR 0025).
 // The Wright never runs git add or commit. A failure is recorded on the run
 // and does not fail the dispatch: the handback gates run on what was committed.
-func (r *Runs) commitWright(d store.Dispatch, wt string, cur store.Dispatch, trace Trace) {
+func (r *Runs) commitWright(d store.Dispatch, wt string, res WrightResult, trace Trace) {
 	r.mu.Lock()
 	sm := r.sites
 	r.mu.Unlock()
 	if sm == nil || wt == "" || isMergeBasePiece(d.Piece) { // a merge Wright commits for itself
 		return
 	}
-	status := ResultFailed // a run that never reported has failed
-	var res WrightResult
-	if json.Unmarshal(cur.Result, &res) == nil && res.Status != "" {
-		status = res.Status
-	}
+	status := res.Status
 	msg := fmt.Sprintf("%s (round %d)", d.Piece, d.Round)
 	if status == ResultDone {
 		msg = "piece " + msg

@@ -357,3 +357,43 @@ func TestTheWorksCommitsAWrightsWorktreeWhenItReports(t *testing.T) {
 		t.Errorf("a handback with no changes made a commit: %s, base %s", got, r.BaseSHA)
 	}
 }
+
+// lingeringRunner keeps a Wright's run alive after it has reported.
+type lingeringRunner struct {
+	Runner
+	release chan struct{}
+}
+
+func (l lingeringRunner) Run(ctx context.Context, req RunRequest) error {
+	err := l.Runner.Run(ctx, req)
+	<-l.release
+	return err
+}
+
+func TestAWrightsWorkIsCommittedBeforeItsDispatchReadsAsDone(t *testing.T) {
+	g := newGateRig(t, store.Gates{Test: "true"})
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	g.r.mu.Lock()
+	g.r.runner = lingeringRunner{Runner: g.runner, release: release}
+	g.r.mu.Unlock()
+	g.runner.WriteFiles(map[string]string{"work.txt": "w"})
+	var d DispatchInfo
+	g.ok(g.warden, "dispatch_wright", `{"piece":"p","brief":`+goodBrief+`}`, &d)
+	g.waitReported("p") // the Wright's run is still going: it has reported and no more
+	wts, err := g.st.Worktrees(g.job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range wts {
+		if w.Kind != store.KindWright {
+			continue
+		}
+		if got := git(t, w.Path, "log", "-1", "--format=%s"); got != "piece p (round 0)" {
+			t.Errorf("the piece reads as done but its work is not committed: HEAD is %q", got)
+		}
+		if st := git(t, w.Path, "status", "--porcelain"); strings.Contains(st, "work.txt") {
+			t.Errorf("work.txt is still uncommitted: %q", st)
+		}
+	}
+}
