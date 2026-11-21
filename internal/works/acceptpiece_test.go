@@ -95,3 +95,29 @@ func TestAcceptPieceOnAConflictLeavesThePieceOpenAndDispatchesAMergeWright(t *te
 		t.Error("accepting after the merge Wright moved the branch")
 	}
 }
+
+func TestReworkRoundStartsFromThePreviousRoundsCommittedWork(t *testing.T) {
+	g := newGateRig(t, store.Gates{})
+	g.runner.script = map[string][]WrightResult{"p": {{Status: ResultBlocked, Uncertainty: "cannot run the suite"}, doneResult}}
+	g.runner.WriteFiles(map[string]string{"fix.txt": "round 0 work\n"})
+	g.dispatch("p")
+	round0 := g.waitReported("p")
+
+	var d DispatchInfo
+	g.ok(g.warden, "rework_wright", `{"piece":"p","reason":"missed tests","diagnosis":"d","brief":`+goodBrief+`}`, &d)
+	round1 := g.waitReported("p")
+	if round1.Round != 1 || round0.Branch == "" || round1.Branch == "" || round1.Branch == round0.Branch {
+		t.Fatalf("each round has its own branch: %q %q", round0.Branch, round1.Branch)
+	}
+	want := git(t, g.repo, "rev-parse", round0.Branch)
+	if base := git(t, g.repo, "merge-base", round1.Branch, round0.Branch); base != want {
+		t.Errorf("round 1 did not branch from round 0's committed work: base %s, want %s", base, want)
+	}
+	if got := git(t, g.repo, "show", round1.Branch+":fix.txt"); got != "round 0 work" {
+		t.Errorf("round 1 does not hold round 0's file: %q", got)
+	}
+	reqs := g.runner.Requests()
+	if brief := reqs[len(reqs)-1].Brief; !strings.Contains(brief, "continues from the previous round's work") || !strings.Contains(brief, round0.Branch) {
+		t.Errorf("the rework brief does not say what it continues from:\n%s", brief)
+	}
+}
