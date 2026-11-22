@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"time"
 
 	"github.com/phallatlassian/archwright/internal/defs"
 	"github.com/phallatlassian/archwright/internal/store"
@@ -298,9 +299,17 @@ type Inspection struct {
 	Dispatches []store.Dispatch `json:"dispatches"`
 }
 
+// maxWaitSeconds caps inspect_wright's blocking wait below the spool client's
+// default patience (spool.DefaultWait), so the call always answers in time.
+const maxWaitSeconds = 45
+
+// waitPoll is how often a blocking inspect_wright re-reads the dispatches.
+var waitPoll = 250 * time.Millisecond
+
 func inspectWright(c *callCtx, in json.RawMessage) (any, error) {
 	var a struct {
-		Piece string `json:"piece"`
+		Piece       string `json:"piece"`
+		WaitSeconds int    `json:"wait_seconds"`
 	}
 	if err := decode(in, &a); err != nil {
 		return nil, err
@@ -312,17 +321,49 @@ func inspectWright(c *callCtx, in json.RawMessage) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	all, err := c.st.Dispatches(p.JobID)
-	if err != nil {
-		return nil, err
+	if a.WaitSeconds < 0 || a.WaitSeconds > maxWaitSeconds {
+		return nil, fmt.Errorf("%w: wait_seconds must be between 0 and %d", errInvalidInput, maxWaitSeconds)
 	}
+	deadline := time.NewTimer(time.Duration(a.WaitSeconds) * time.Second)
+	defer deadline.Stop()
+	tick := time.NewTicker(waitPoll)
+	defer tick.Stop()
+	for {
+		out, err := inspection(c.st, p)
+		if err != nil || a.WaitSeconds == 0 || !wrightWorking(out) {
+			return out, err
+		}
+		select { // block here, in the foreground, so the Warden never has to sleep in the background
+		case <-deadline.C:
+			return out, nil
+		case <-c.run.stop:
+			return out, nil
+		case <-tick.C:
+		}
+		if p, err = c.pieceOf(a.Piece); err != nil {
+			return nil, err
+		}
+	}
+}
+
+func inspection(st *store.Store, p store.Piece) (Inspection, error) {
+	all, err := st.Dispatches(p.JobID)
 	out := Inspection{Piece: p, Dispatches: []store.Dispatch{}}
 	for _, d := range all {
 		if d.Piece == p.Piece {
 			out.Dispatches = append(out.Dispatches, d)
 		}
 	}
-	return out, nil
+	return out, err
+}
+
+// wrightWorking reports whether the piece's latest dispatch is still queued or running.
+func wrightWorking(in Inspection) bool {
+	if len(in.Dispatches) == 0 {
+		return false
+	}
+	st := in.Dispatches[len(in.Dispatches)-1].Status
+	return st == store.DispatchQueued || st == store.DispatchRunning
 }
 
 func handback(c *callCtx, in json.RawMessage) (any, error) {
