@@ -427,3 +427,55 @@ func TestParkedJobRefusesFurtherDispatch(t *testing.T) {
 	g.fails(g.warden, "dispatch_wright", `{"piece":"r","brief":`+goodBrief+`}`, spool.CodeConflict)
 	g.fails(g.warden, "handback", handbackJSON("partial", `"x"`, ""), spool.CodeConflict)
 }
+
+// gatedRunner holds every Wright until released, like a Wright that runs longer than a few polls.
+type gatedRunner struct {
+	*FakeRunner
+	release chan struct{}
+}
+
+func (g *gatedRunner) Run(ctx context.Context, req RunRequest) error {
+	select {
+	case <-g.release:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	return g.FakeRunner.Run(ctx, req)
+}
+
+func TestInspectWrightWaitBlocksUntilTheWrightReports(t *testing.T) {
+	g := newRig(t, nil)
+	gate := &gatedRunner{FakeRunner: g.runner, release: make(chan struct{})}
+	g.r.Configure(func(name string) (Guild, error) { return Guild{Name: name}, nil }, gate)
+	waitPoll = 5 * time.Millisecond
+	t.Cleanup(func() { waitPoll = 250 * time.Millisecond })
+
+	var d DispatchInfo
+	g.ok(g.warden, "dispatch_wright", `{"piece":"slow","brief":`+goodBrief+`}`, &d)
+
+	// a plain inspect answers at once with the Wright still working
+	var insp Inspection
+	g.ok(g.warden, "inspect_wright", `{"piece":"slow"}`, &insp)
+	if !wrightWorking(insp) {
+		t.Fatalf("%+v", insp)
+	}
+	// a bounded wait gives up with the Wright still working
+	g.ok(g.warden, "inspect_wright", `{"piece":"slow","wait_seconds":1}`, &insp)
+	if !wrightWorking(insp) {
+		t.Fatalf("%+v", insp)
+	}
+
+	// the Wright reports while the Warden is blocked in the wait: the wait returns the result, well before its timeout
+	go func() { time.Sleep(100 * time.Millisecond); close(gate.release) }()
+	start := time.Now()
+	g.ok(g.warden, "inspect_wright", `{"piece":"slow","wait_seconds":30}`, &insp)
+	if wrightWorking(insp) || time.Since(start) > 10*time.Second {
+		t.Fatalf("%v %+v", time.Since(start), insp)
+	}
+	if last := insp.Dispatches[len(insp.Dispatches)-1]; last.Status != store.DispatchReported || len(last.Result) == 0 {
+		t.Fatalf("%+v", last)
+	}
+
+	g.fails(g.warden, "inspect_wright", `{"piece":"slow","wait_seconds":600}`, spool.CodeInvalidInput)
+	g.fails(g.warden, "inspect_wright", `{"piece":"slow","wait_seconds":-1}`, spool.CodeInvalidInput)
+}
