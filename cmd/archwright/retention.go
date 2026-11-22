@@ -25,7 +25,7 @@ func confirmed(stdin io.Reader, stdout io.Writer, what, question string) (bool, 
 	return answer == "y" || answer == "Y" || answer == "yes", nil
 }
 
-// prune is `archwright prune [--dry-run] [--days N]`: remove the raw run
+// prune is `archwright job prune [--dry-run] [--days N]`: remove the raw run
 // content of Jobs that ended long enough ago (ADR 0017).
 func prune(args []string, connect func() (*works.Client, error), emit func(any) error) error {
 	fs := flag.NewFlagSet("prune", flag.ContinueOnError)
@@ -98,7 +98,7 @@ func jobPurgeOrDelete(verb string, args []string, stdin io.Reader, stdout io.Wri
 	return emit(out)
 }
 
-// upgrade is `archwright upgrade`: restart the Works on this binary, which
+// upgrade is `archwright works upgrade`: restart the Works on this binary, which
 // migrates the database after copying it aside (ADR 0016). It refuses while
 // runs are active unless the developer confirms at a terminal.
 func upgrade(dirs paths.Dirs, stdin io.Reader, stdout io.Writer, connect func() (*works.Client, error), emit func(any) error) error {
