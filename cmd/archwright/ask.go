@@ -111,7 +111,7 @@ func askCommand(args []string, stdin io.Reader, stdout io.Writer, dirs paths.Dir
 	case "accept-default", "skip", "cancel":
 		return call("POST", "/asks/"+url.PathEscape(id)+"/"+sub, nil)
 	}
-	return errors.New(usage)
+	return unknownCommand(args)
 }
 
 // recordSubmission records what the developer submitted on an ask's Lavish

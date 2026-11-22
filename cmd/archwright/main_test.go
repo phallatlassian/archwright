@@ -47,7 +47,7 @@ func newSandbox(t *testing.T) *sandbox {
 	root := t.TempDir()
 	s := &sandbox{t: t, cfg: filepath.Join(root, "cfg"), st: filepath.Join(root, "state")}
 	s.env = append(os.Environ(), "ARCHWRIGHT_CONFIG_HOME="+s.cfg, "ARCHWRIGHT_STATE_HOME="+s.st)
-	t.Cleanup(func() { s.run("stop") })
+	t.Cleanup(func() { s.run("works", "stop") })
 	return s
 }
 
@@ -164,7 +164,7 @@ func TestXDGDefaultsWithoutOverrides(t *testing.T) {
 	s := &sandbox{t: t}
 	s.env = append(os.Environ(), "ARCHWRIGHT_CONFIG_HOME=", "ARCHWRIGHT_STATE_HOME=",
 		"XDG_CONFIG_HOME="+filepath.Join(root, "c"), "XDG_STATE_HOME="+filepath.Join(root, "s"))
-	t.Cleanup(func() { s.run("stop") })
+	t.Cleanup(func() { s.run("works", "stop") })
 	s.run("job", "list")
 	if _, err := os.Stat(filepath.Join(root, "s", "archwright", "archwright.db")); err != nil {
 		t.Fatal(err)
@@ -447,5 +447,135 @@ func TestAsksReachTheDeveloperThroughLavishOrPlainText(t *testing.T) {
 	}
 	if out := s.run("job", "show", job.ID); !strings.Contains(out, `"outcome": "discarded"`) {
 		t.Fatalf("%s", out)
+	}
+}
+
+// split runs the binary and returns stdout, stderr and the exit code apart.
+func (s *sandbox) split(args ...string) (stdout, stderr string, code int) {
+	c := exec.Command(binary, args...)
+	c.Env = s.env
+	var o, e strings.Builder
+	c.Stdout, c.Stderr = &o, &e
+	err := c.Run()
+	if ee, ok := err.(*exec.ExitError); ok {
+		code = ee.ExitCode()
+	} else if err != nil {
+		s.t.Fatal(err)
+	}
+	return o.String(), e.String(), code
+}
+
+func TestTopLevelHelpIsGroupedWithoutFlags(t *testing.T) {
+	s := newSandbox(t)
+	for _, args := range [][]string{{"help"}, {"--help"}, {"-h"}} {
+		out, errOut, code := s.split(args...)
+		if code != 0 || errOut != "" {
+			t.Fatalf("%v: exit %d, stderr %q", args, code, errOut)
+		}
+		// Sections appear in workflow order, each command once under its section.
+		last := -1
+		for _, h := range []string{"\nStart\n", "\nSites\n", "\nJobs\n", "\nAsks\n", "\nWorks\n"} {
+			i := strings.Index(out, h)
+			if i <= last {
+				t.Fatalf("%v: section %q missing or out of order:\n%s", args, h, out)
+			}
+			last = i
+		}
+		for _, want := range []string{"job prune", "works stop", "works upgrade", "plan start", "needs-you list", "approval set", "queue show"} {
+			if !strings.Contains(out, want) {
+				t.Errorf("%v: no %q", args, want)
+			}
+		}
+		for _, bad := range []string{"--", "jig start", "hook", "ask record", "ask end"} {
+			if strings.Contains(out, bad) {
+				t.Errorf("%v: top-level help shows %q:\n%s", args, bad, out)
+			}
+		}
+		if !strings.HasSuffix(out, "All output is JSON. The Works starts on demand.\n") {
+			t.Errorf("%v: footer missing:\n%s", args, out)
+		}
+	}
+}
+
+func TestEveryGroupPrintsFullUsageThreeWays(t *testing.T) {
+	s := newSandbox(t)
+	for group, want := range map[string]string{
+		"site": "--typecheck C", "job": "[--dry-run] [--days N]", "plan": "[--param NAME=VALUE]", "worktree": "--base-ref REF",
+		"ask": "[--status S] [--holder H] [--job ID]", "works": "works upgrade", "queue": "queue show", "catalogue": "catalogue reload",
+		"needs-you": "needs-you list", "approval": "approval set",
+	} {
+		var first string
+		for i, args := range [][]string{{"help", group}, {group}, {group, "--help"}} {
+			out, errOut, code := s.split(args...)
+			if code != 0 || errOut != "" || !strings.Contains(out, want) || !strings.HasPrefix(out, "usage: archwright "+group) {
+				t.Fatalf("%v: exit %d, stderr %q, stdout:\n%s", args, code, errOut, out)
+			}
+			if i == 0 {
+				first = out
+			} else if out != first {
+				t.Errorf("%v differs from help %s", args, group)
+			}
+		}
+	}
+	// A section name prints all its groups; agent-only verbs stay out of a group.
+	if out := s.run("help", "jobs"); !strings.Contains(out, "worktree cleanup") || !strings.Contains(out, "plan start") {
+		t.Errorf("help jobs:\n%s", out)
+	}
+	if out := s.run("help", "ask"); strings.Contains(out, "ask record") {
+		t.Errorf("help ask shows an agent-only verb:\n%s", out)
+	}
+}
+
+func TestHelpJSONAndInternal(t *testing.T) {
+	s := newSandbox(t)
+	var top struct {
+		Sections []struct {
+			Name     string `json:"name"`
+			Commands []struct{ Name, Usage, Summary string }
+		}
+	}
+	if err := json.Unmarshal([]byte(s.run("help", "--json")), &top); err != nil || len(top.Sections) != 5 || top.Sections[2].Name != "Jobs" {
+		t.Fatalf("help --json: %v %+v", err, top)
+	}
+	out := s.run("help", "internal")
+	for _, want := range []string{"hook", "tool", "ask record", "ask end"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("help internal lacks %q:\n%s", want, out)
+		}
+	}
+	if err := json.Unmarshal([]byte(s.run("help", "internal", "--json")), &top); err != nil || len(top.Sections) != 1 {
+		t.Fatalf("help internal --json: %v", err)
+	}
+}
+
+func TestUnknownCommandsExitOneWithAHint(t *testing.T) {
+	s := newSandbox(t)
+	for _, args := range [][]string{{"frobnicate"}, {"site", "frobnicate"}, {"help", "frobnicate"}} {
+		out, errOut, code := s.split(args...)
+		if code != 1 || out != "" || !strings.Contains(errOut, "archwright help") || strings.Contains(errOut, "All output is JSON") {
+			t.Errorf("%v: exit %d, stdout %q, stderr %q", args, code, out, errOut)
+		}
+	}
+}
+
+func TestOldNamesStillWorkAndWarnOnStderr(t *testing.T) {
+	s := newSandbox(t)
+	for old, new := range map[string]string{"prune": "job prune", "upgrade": "works upgrade", "stop": "works stop"} {
+		oldOut, oldErr, code := s.split(old)
+		if !json.Valid([]byte(oldOut)) {
+			t.Errorf("%s: stdout is not JSON: %q", old, oldOut)
+		}
+		if code != 0 || !strings.Contains(oldErr, "'"+old+"' is deprecated") || !strings.Contains(oldErr, "use '"+new+"'") {
+			t.Errorf("%s: exit %d, stderr %q", old, code, oldErr)
+		}
+		_, newErr, code := s.split(strings.Fields(new)...)
+		if code != 0 || newErr != "" {
+			t.Errorf("%s: exit %d, stderr %q", new, code, newErr)
+		}
+	}
+	// jig start is now plan start; with no ID both refuse the same way.
+	_, errOut, code := s.split("jig", "start")
+	if code != 1 || !strings.Contains(errOut, "'jig start' is deprecated") || !strings.Contains(errOut, "use 'plan start'") || !strings.Contains(errOut, "missing ID") {
+		t.Errorf("jig start: exit %d, stderr %q", code, errOut)
 	}
 }

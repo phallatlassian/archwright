@@ -26,74 +26,6 @@ import (
 	"github.com/phallatlassian/archwright/internal/works"
 )
 
-const usage = `usage: archwright [command]
-
-  (no command)                             launch the Archwright: your claude or codex (runner in config.toml),
-                                           in the neutral factory home; the current directory is the Site hint
-  hook session-start|prompt|stop           the Archwright's runner hooks (rehydrate, inbox); not for people
-
-  site detect URL                          propose Site values and gate commands from a remote's base branch
-  site register --url U --typecheck C --lint C --test C [--name N] [--base-branch B] [--cap N]
-                                           register a remote repository as a Site (the trust act); the Works
-                                           keeps its own clone; gates must be given. Local paths are refused
-  site gates NAME [--typecheck C] [--lint C] [--test C]
-                                           propose new gate commands (unset ones stay); takes effect only once approved
-  site gate-changes [--status pending|approved|rejected]
-                                           list proposed gate changes
-  site gate-approve ID                     approve a proposed change (confirms at a terminal and asks for your approval credential)
-  site gate-reject ID                      reject a proposed change
-  approval set                             set (or change) your approval credential, a secret only you know, at a terminal;
-                                           gate changes cannot be approved until you have set one
-  site list                                list Sites
-  site remove NAME                         unregister a Site and delete its clone (Job history is kept)
-  site resolve DIR                         show the Site whose remote is DIR's git origin; refused if unregistered
-  job create --title T [--description D] [--issue URL] [--site NAME | --path DIR]
-                                           create a Job (on a registered Site; --path matches DIR's git origin)
-  job close ID accepted|discarded          end a Job and remove its remaining worktrees
-  job purge ID                             remove a Job's raw run content now, keeping its summary (confirms at a terminal)
-  job delete ID                            remove a Job entirely (confirms at a terminal)
-  prune [--dry-run] [--days N]             remove raw run content of Jobs that ended over retention_days (default 30) ago;
-                                           never a Job with active runs; --dry-run shows what would go and changes nothing
-  upgrade                                  restart the Works on this binary (migrating the database, keeping the three most
-                                           recent pre-migration copies); refuses while runs are active unless you confirm
-  worktree create ID integration|wright|readonly [--base-ref REF]
-                                           create a Job's worktree from the Works' clone, after a fetch
-  worktree list ID                         list a Job's worktrees
-  worktree cleanup ID                      remove worktrees of Wrights merged into the integration branch
-  job list                                 list Jobs
-  job show ID                              show a Job and its Plan
-  plan set ID [FILE]                       set a Job's Plan from JSON ({"steps":[...]}); stdin if no FILE
-  plan show ID                             show a Job's Plan
-  plan approve ID | reject ID             the developer's go or no-go on a Job's ad hoc Plan (approve asks you to confirm
-                                           at a terminal); a Jig Plan needs neither, and no work is dispatched before a go
-  jig start ID JIG [--param NAME=VALUE]    start a Job's Plan from a Jig; it starts without approval
-  catalogue show                           the loaded Guilds and Jigs, and any definitions that failed to load
-  catalogue reload                         re-read definitions from the config directory; an invalid one keeps its
-                                           previous good version and is reported
-  queue show                               show running and queued Wrights, the caps and any runner pause
-  ask list [--status S] [--holder H] [--job ID]
-                                           list asks (an agent's structured questions; ADR 0015)
-  ask show ID                              an ask and its plain-text form
-  ask page ID                              put an ask to the developer as a Lavish page (lavish-axi),
-                                           or as plain text if Lavish is unavailable
-  ask record ID                            inside a run: record the page's submitted answer (JSON on stdin)
-                                           through the tool API, and end the page; a rejected one is reported
-  ask end ID                               end an ask's Lavish page
-  ask answer ID                            answer an ask as the developer ({"answers":[...]} on stdin)
-  ask accept-default ID | skip ID | cancel ID
-                                           accept the recommended defaults, skip, or cancel the Job
-  needs-you list                           list the Needs-you inbox (such as scope-overlap warnings)
-  tool NAME [--id ID] [--wait D]           call a Works tool inside a run: JSON on stdin, JSON on stdout
-                                           (exit 75 if the Works does not answer within D, default 60s)
-  doctor                                   check everything a run depends on, read-only; prints the exact fix for
-                                           anything wrong (exit 1 if a check fails; runs refuse to start until none does)
-  dashboard                                print the dashboard's URL (the token rides in the fragment, which browsers
-                                           never send); open it in a browser. The Works starts on demand
-  works status                             report whether the Works is running
-  stop                                     stop the Works
-
-All output is JSON. The Works starts on demand.`
-
 // exitWorksUnreachable is the exit code of a tool call the Works never answered (EX_TEMPFAIL).
 const exitWorksUnreachable = 75
 
@@ -118,14 +50,15 @@ func main() {
 }
 
 func run(args []string, stdin io.Reader, stdout io.Writer) error {
+	args = resolveAlias(args, os.Stderr)
+	if handled, err := helpRequest(args, stdout); handled {
+		return err
+	}
 	if len(args) > 0 && args[0] == "tool" {
 		return tool(args[1:], stdin, stdout)
 	}
 	if len(args) > 0 && args[0] == "hook" {
 		return hook(args[1:], stdout)
-	}
-	if len(args) > 0 && (args[0] == "help" || args[0] == "-h" || args[0] == "--help") {
-		return errors.New(usage)
 	}
 	dirs, err := paths.Resolve(os.Getenv)
 	if err != nil {
@@ -172,16 +105,25 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 			return err
 		}
 		return emit(map[string]string{"url": fmt.Sprintf("http://127.0.0.1:%d/#token=%s", c.Info.Port, url.QueryEscape(c.Info.Token))})
-	case "prune":
-		return prune(args[1:], connect, emit)
-	case "upgrade":
-		if len(args) > 1 {
-			return errors.New("upgrade takes no arguments\n" + usage)
-		}
-		return upgrade(dirs, stdin, stdout, connect, emit)
 	}
 
 	switch key(args, 2) {
+	case "job prune":
+		return prune(args[2:], connect, emit)
+	case "works upgrade":
+		if len(args) > 2 {
+			return errors.New("works upgrade takes no arguments")
+		}
+		return upgrade(dirs, stdin, stdout, connect, emit)
+	case "works stop":
+		c, ok := works.Running(dirs)
+		if !ok {
+			return emit(map[string]bool{"stopped": false})
+		}
+		if err := c.Do("POST", "/shutdown", nil, nil); err != nil {
+			return err
+		}
+		return emit(map[string]bool{"stopped": true})
 	case "works serve":
 		return serve(dirs)
 	case "works status":
@@ -412,7 +354,7 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 		return call("GET", "/catalogue", nil)
 	case "catalogue reload":
 		return call("POST", "/catalogue/reload", nil)
-	case "jig start":
+	case "plan start":
 		id, err := arg(args, 2)
 		if err != nil {
 			return err
@@ -421,7 +363,7 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 		if err != nil {
 			return err
 		}
-		fs := flag.NewFlagSet("jig start", flag.ContinueOnError)
+		fs := flag.NewFlagSet("plan start", flag.ContinueOnError)
 		params := map[string]string{}
 		fs.Func("param", "a Jig parameter, NAME=VALUE (repeatable)", func(v string) error {
 			k, val, ok := strings.Cut(v, "=")
@@ -492,17 +434,7 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 		}
 		return call("PUT", "/jobs/"+id+"/plan", plan)
 	}
-	if args[0] == "stop" {
-		c, ok := works.Running(dirs)
-		if !ok {
-			return emit(map[string]bool{"stopped": false})
-		}
-		if err := c.Do("POST", "/shutdown", nil, nil); err != nil {
-			return err
-		}
-		return emit(map[string]bool{"stopped": true})
-	}
-	return errors.New(usage)
+	return unknownCommand(args)
 }
 
 // isTerminal reports whether r is an interactive terminal.
@@ -590,7 +522,7 @@ func key(args []string, n int) string {
 
 func arg(args []string, i int) (string, error) {
 	if len(args) <= i {
-		return "", errors.New("missing ID\n" + usage)
+		return "", errors.New("missing ID; " + hint)
 	}
 	return args[i], nil
 }
@@ -611,7 +543,7 @@ func serve(dirs paths.Dirs) error {
 // tool makes one call to the Works over the run's spool (ADR 0014, 0018).
 func tool(args []string, stdin io.Reader, stdout io.Writer) error {
 	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
-		return errors.New("missing tool name\n" + usage)
+		return errors.New("missing tool name; " + hint)
 	}
 	name := args[0]
 	fs := flag.NewFlagSet("tool", flag.ContinueOnError)

@@ -60,13 +60,13 @@ func TestPruneDryRunThenRealLeavesMarker(t *testing.T) {
 			JobID string `json:"job_id"`
 		}
 	}
-	if err := json.Unmarshal([]byte(s.run("prune", "--dry-run")), &rep); err != nil || !rep.DryRun || len(rep.Pruned) != 1 || rep.Pruned[0].JobID != old {
+	if err := json.Unmarshal([]byte(s.run("job", "prune", "--dry-run")), &rep); err != nil || !rep.DryRun || len(rep.Pruned) != 1 || rep.Pruned[0].JobID != old {
 		t.Fatalf("%+v %v", rep, err)
 	}
 	if s.rendered(old) != "RAW BRIEF" {
 		t.Fatal("dry run changed something")
 	}
-	if err := json.Unmarshal([]byte(s.run("prune")), &rep); err != nil || len(rep.Pruned) != 1 {
+	if err := json.Unmarshal([]byte(s.run("job", "prune")), &rep); err != nil || len(rep.Pruned) != 1 {
 		t.Fatalf("%+v %v", rep, err)
 	}
 	if s.rendered(old) != "" || s.rendered(open) != "RAW BRIEF" {
@@ -95,7 +95,7 @@ func TestUpgradeRefusesWithActiveRunsAndRestartsWithout(t *testing.T) {
 	id := s.seedJob("j", "running")
 	var before struct{ PID int }
 	json.Unmarshal([]byte(s.run("works", "status")), &before)
-	if out, err := s.cmd("y\n", "upgrade"); err == nil || !strings.Contains(out, "active") {
+	if out, err := s.cmd("y\n", "works", "upgrade"); err == nil || !strings.Contains(out, "active") {
 		t.Fatalf("upgrade with a run active: %v\n%s", err, out)
 	}
 	var still struct{ PID int }
@@ -109,7 +109,7 @@ func TestUpgradeRefusesWithActiveRunsAndRestartsWithout(t *testing.T) {
 		Restarted bool
 		PID       int
 	}
-	if err := json.Unmarshal([]byte(s.run("upgrade")), &up); err != nil || !up.Restarted || up.PID == before.PID {
+	if err := json.Unmarshal([]byte(s.run("works", "upgrade")), &up); err != nil || !up.Restarted || up.PID == before.PID {
 		t.Fatalf("%+v %v", up, err)
 	}
 }
