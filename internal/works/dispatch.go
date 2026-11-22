@@ -722,6 +722,9 @@ func (r *Runs) wrightWorktree(d store.Dispatch) (path, from string, err error) {
 		}
 		return path, "", nil
 	}
+	if err := sm.EnsureIntegration(d.JobID); err != nil {
+		return "", "", fmt.Errorf("creating the integration worktree: %w", err)
+	}
 	from = r.previousBranch(d)
 	wt, err := sm.CreateWorktree(d.JobID, store.KindWright, from)
 	if err != nil && from != "" {

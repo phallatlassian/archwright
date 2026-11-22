@@ -135,3 +135,25 @@ func TestMergePieceRefusesADirtyIntegrationWorktree(t *testing.T) {
 		t.Fatal("merged into a dirty worktree")
 	}
 }
+
+func TestEnsureIntegrationIsIdempotentAndEnablesMerge(t *testing.T) {
+	e := setup(t)
+	j := e.job(t)
+	w, err := e.m.CreateWorktree(j.ID, store.KindWright, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitFile(t, e, j, w.Path, "b.txt", "b")
+	if _, err := e.m.MergePiece(j.ID, w.Branch); err == nil {
+		t.Fatal("merge without an integration worktree should conflict")
+	}
+	for i := 0; i < 2; i++ {
+		if err := e.m.EnsureIntegration(j.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := e.m.MergePiece(j.ID, w.Branch)
+	if err != nil || got.Status != PieceMerged {
+		t.Fatalf("merge: %+v %v", got, err)
+	}
+}

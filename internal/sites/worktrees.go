@@ -119,6 +119,30 @@ func (m *Manager) CreateWorktree(jobID, kind, baseRef string) (store.Worktree, e
 	return rec, nil
 }
 
+// EnsureIntegration makes the Job's integration worktree, based on the Site's
+// base branch, unless it already has one. It is idempotent, so the Works can
+// call it before the first Wright is dispatched and again before a piece is
+// accepted without any agent running `worktree create`.
+func (m *Manager) EnsureIntegration(jobID string) error {
+	m.mu.Lock()
+	wts, err := m.st.Worktrees(jobID)
+	m.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	if len(activeOf(wts, store.KindIntegration)) > 0 {
+		return nil
+	}
+	if _, err := m.CreateWorktree(jobID, store.KindIntegration, ""); err != nil {
+		// lost a race with a concurrent creator: the worktree exists now
+		if wts, e := m.st.Worktrees(jobID); e == nil && len(activeOf(wts, store.KindIntegration)) > 0 {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
 // resolveBase resolves a base ref to a commit in the Site's clone. A branch
 // name means the remote's branch (refs/remotes/origin/<name>); anything else
 // (the Job's own factory branches, a SHA or tag) is resolved as given. The
