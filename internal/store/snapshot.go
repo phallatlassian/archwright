@@ -48,7 +48,7 @@ func OpenSnapshot(path string) (*Snapshot, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
-	s := &Store{db: db, now: time.Now}
+	s := &Store{db: guardedDB{DB: db}, now: time.Now}
 	v, err := s.version()
 	if err != nil {
 		db.Close()

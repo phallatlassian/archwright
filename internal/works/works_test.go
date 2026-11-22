@@ -287,3 +287,34 @@ func TestJobSourceIssueOverAPIAndTool(t *testing.T) {
 		t.Fatalf("%+v %v", list, err)
 	}
 }
+
+// A WAL replaced under the running Works (#131) stops it with an error naming
+// the cause, instead of letting it keep writing into a log no path names.
+func TestWorksStopsWhenTheWALIsReplaced(t *testing.T) {
+	d := dirs(t)
+	ready := make(chan struct{})
+	done := make(chan error, 1)
+	go func() { done <- Serve(context.Background(), d, ready) }()
+	select {
+	case <-ready:
+	case err := <-done:
+		t.Fatal(err)
+	}
+	db := d.Database()
+	for _, suffix := range []string{"-wal", "-shm"} {
+		if err := os.Rename(db+suffix, db+suffix+".orphan"); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(db+suffix, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	select {
+	case err := <-done:
+		if !errors.Is(err, store.ErrWALReplaced) {
+			t.Fatalf("Serve returned %v, want ErrWALReplaced", err)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("the Works kept running on a replaced WAL")
+	}
+}

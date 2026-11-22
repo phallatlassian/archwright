@@ -112,6 +112,9 @@ func mustChange(res sql.Result, err error, runID string) error {
 
 // AddRunEvent appends one entry to a run's timeline and returns its seq.
 func (s *Store) AddRunEvent(runID, kind, summary string, raw json.RawMessage) (int, error) {
+	if err := s.db.check(); err != nil {
+		return 0, err
+	}
 	var seq int
 	err := s.db.QueryRow(`INSERT INTO run_events (run_id, seq, kind, summary, raw, at)
 		VALUES (?, (SELECT COALESCE(MAX(seq)+1, 1) FROM run_events WHERE run_id = ?), ?, ?, ?, ?) RETURNING seq`,
