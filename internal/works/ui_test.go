@@ -129,3 +129,22 @@ func TestRunDrillDownAndUsageComeFromTheRun(t *testing.T) {
 		t.Fatalf("board cost %v", b.CostUSD)
 	}
 }
+
+func TestDashboardReadsStepStatusFromTheAPIsStepStates(t *testing.T) {
+	d := newDash(t, Limits{})
+	_, js := d.do("GET", "/ui/app.js", "", map[string]string{"Authorization": ""})
+	_, css := d.do("GET", "/ui/style.css", "", map[string]string{"Authorization": ""})
+	for _, want := range []string{"job.step_states", "'handed_back'", "failed: 'failed'"} {
+		if !strings.Contains(js, want) {
+			t.Errorf("app.js does not use %s", want)
+		}
+	}
+	if strings.Contains(js[strings.Index(js, "function stepStatuses"):strings.Index(js, "const STATUS_LABEL")], "piece") {
+		t.Error("app.js still guesses step status from dispatch pieces")
+	}
+	for _, want := range []string{".dot.failed", ".tag.failed"} {
+		if !strings.Contains(css, want) {
+			t.Errorf("style.css has no %s", want)
+		}
+	}
+}
