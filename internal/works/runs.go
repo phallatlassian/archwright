@@ -79,6 +79,8 @@ type run struct {
 	id, role, token, dir string
 	ctx                  RunContext
 	stop                 chan struct{}
+	ending               chan struct{} // closed when finish begins, without ru.mu, so a blocked tool call can give up
+	endingOnce           sync.Once
 	done                 chan struct{}
 
 	mu    sync.Mutex
@@ -205,7 +207,7 @@ func (r *Runs) StartFor(role, root string, rc RunContext) (RunEnv, error) {
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		return RunEnv{}, err
 	}
-	ru := &run{id: id, role: role, ctx: rc, token: token, dir: dir, stop: make(chan struct{}), done: make(chan struct{}), answered: map[string]spool.Response{}}
+	ru := &run{id: id, role: role, ctx: rc, token: token, dir: dir, stop: make(chan struct{}), ending: make(chan struct{}), done: make(chan struct{}), answered: map[string]spool.Response{}}
 	r.mu.Lock()
 	r.runs[id] = ru
 	r.mu.Unlock()
@@ -243,6 +245,7 @@ func (r *Runs) Close() {
 }
 
 func (ru *run) finish() {
+	ru.endingOnce.Do(func() { close(ru.ending) })
 	ru.mu.Lock()
 	if ru.ended {
 		ru.mu.Unlock()

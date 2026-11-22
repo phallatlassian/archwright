@@ -336,7 +336,7 @@ func inspectWright(c *callCtx, in json.RawMessage) (any, error) {
 		select { // block here, in the foreground, so the Warden never has to sleep in the background
 		case <-deadline.C:
 			return out, nil
-		case <-c.run.stop:
+		case <-c.run.ending:
 			return out, nil
 		case <-tick.C:
 		}
