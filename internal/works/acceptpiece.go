@@ -79,6 +79,9 @@ func acceptPiece(c *callCtx, in json.RawMessage) (any, error) {
 		} else if md != nil {
 			return c.mergingInfo(p, md, out), nil
 		}
+		if err := sm.EnsureIntegration(p.JobID); err != nil {
+			return nil, err
+		}
 		pm, err := sm.MergePiece(p.JobID, d.Branch)
 		if err != nil {
 			return nil, err
