@@ -49,7 +49,7 @@ func newDoctorEnv(t *testing.T, mode string, lavish bool) *doctorEnv {
 	gitDir, _ := exec.LookPath("git")
 	e.env = []string{"PATH=" + e.bin + ":" + filepath.Dir(gitDir) + ":/usr/bin:/bin", "HOME=" + root, "TMPDIR=" + os.TempDir(),
 		"ARCHWRIGHT_CONFIG_HOME=" + e.cfg, "ARCHWRIGHT_STATE_HOME=" + e.st, "STUB_MODE_FILE=" + e.modeFile}
-	t.Cleanup(func() { e.cmd("stop") })
+	t.Cleanup(func() { e.cmd("works", "stop") })
 	return e
 }
 
@@ -126,7 +126,7 @@ func TestDoctorLeavesEveryFileAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.cmd("job", "list") // a populated state directory, then stop the Works so nothing else writes
-	e.cmd("stop")
+	e.cmd("works", "stop")
 	snap := func() map[string]string {
 		out := map[string]string{}
 		for _, root := range []string{e.cfg, e.st} {

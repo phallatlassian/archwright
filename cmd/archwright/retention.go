@@ -52,7 +52,7 @@ func prune(args []string, connect func() (*works.Client, error), emit func(any) 
 // confirm first, at a terminal.
 func jobPurgeOrDelete(verb string, args []string, stdin io.Reader, stdout io.Writer, connect func() (*works.Client, error), emit func(any) error) error {
 	if len(args) < 1 {
-		return errors.New("missing ID\n" + usage)
+		return errors.New("missing ID; " + hint)
 	}
 	id := args[0]
 	if !isTerminal(stdin) {

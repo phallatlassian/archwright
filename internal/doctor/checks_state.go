@@ -89,7 +89,7 @@ func checkWorks(r *collector, d Deps) {
 	}
 	if _, err := os.Stat(d.Dirs.PidFile()); err == nil {
 		r.warn("works", "a pid file exists but nothing answers on it; the Works died",
-			"nothing to do: the next command starts it again and recovers (ADR 0002); to clear it now run `archwright stop`, then any command")
+			"nothing to do: the next command starts it again and recovers (ADR 0002); to clear it now run `archwright works stop`, then any command")
 		return
 	}
 	r.pass("works", "not running; any command starts it on demand")
