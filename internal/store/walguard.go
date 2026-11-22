@@ -126,6 +126,20 @@ func (d guardedDB) Exec(query string, args ...any) (sql.Result, error) {
 	return d.DB.Exec(query, args...)
 }
 
+func (d guardedDB) BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error) {
+	if err := d.check(); err != nil {
+		return nil, err
+	}
+	return d.DB.BeginTx(ctx, opts)
+}
+
+func (d guardedDB) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	if err := d.check(); err != nil {
+		return nil, err
+	}
+	return d.DB.ExecContext(ctx, query, args...)
+}
+
 // check is the gate for statements that write outside Begin and Exec, such as
 // INSERT ... RETURNING through QueryRow. A handle with no guard (the migration
 // at open, a snapshot copy) passes.
@@ -138,10 +152,21 @@ func (d guardedDB) check() error {
 
 // Failed is closed once the database's WAL or shm file has been replaced or
 // removed under the open connection. Writes then fail with ErrWALReplaced.
-func (s *Store) Failed() <-chan struct{} { return s.guard.failed }
+// A Store with no guard (a snapshot copy) never fails.
+func (s *Store) Failed() <-chan struct{} {
+	if s.guard == nil {
+		return nil
+	}
+	return s.guard.failed
+}
 
 // Failure is the reason Failed was closed, or nil.
-func (s *Store) Failure() error { return s.guard.failure() }
+func (s *Store) Failure() error {
+	if s.guard == nil {
+		return nil
+	}
+	return s.guard.failure()
+}
 
 // checkWAL runs the guard now.
 func (s *Store) checkWAL() error { return s.guard.check() }
@@ -163,10 +188,15 @@ func (s *Store) watchWAL(stop <-chan struct{}) {
 	}
 }
 
-// checkpoint folds the WAL into the database file and truncates it, so a
-// stopped Works leaves one self-contained file. It reports a checkpoint that
-// could not finish (a foreign reader holds the log) rather than hiding it.
-func (s *Store) checkpoint() error {
+// Checkpoint folds the WAL into the database file and truncates it, so a
+// stopped Works leaves one self-contained file. Only the Works calls it, on a
+// clean stop; a short-lived CLI process that opens the database does not. It
+// reports a checkpoint that could not finish (another connection holds the
+// database) rather than hiding it, and refuses once the WAL was replaced.
+func (s *Store) Checkpoint() error {
+	if err := s.db.check(); err != nil {
+		return err
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	var busy, logFrames, moved int

@@ -92,8 +92,12 @@ func ServeWith(ctx context.Context, d paths.Dirs, ready chan<- struct{}, opts Op
 		return err
 	}
 	defer func() {
-		// Closing checkpoints the WAL; say so when it could not.
-		if err := st.Close(); err != nil {
+		// A clean stop leaves one self-contained database file; say so when
+		// it could not. A replaced WAL was already logged as FATAL.
+		if err := st.Checkpoint(); err != nil && !errors.Is(err, store.ErrWALReplaced) {
+			log.Printf("checkpointing the database: %v", err)
+		}
+		if err := st.Close(); err != nil && !errors.Is(err, store.ErrWALReplaced) {
 			log.Printf("closing the database: %v", err)
 		}
 	}()

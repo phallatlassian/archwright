@@ -33,7 +33,11 @@ func TestWritesRefusedOnceTheWALIsReplaced(t *testing.T) {
 	}
 	replaceWAL(t, path)
 
-	// Before the guard this succeeded silently into a WAL no path named.
+	// SQLite itself does not object: this write succeeds into a WAL no path
+	// names, and a restart would not see it. That is what the guard prevents.
+	if _, err := s.db.DB.Exec("UPDATE jobs SET title = 'lost'"); err != nil {
+		t.Fatalf("the unguarded handle was expected to write silently: %v", err)
+	}
 	if _, err := s.CreateJob("after", ""); !errors.Is(err, ErrWALReplaced) {
 		t.Fatalf("write after replacement: want ErrWALReplaced, got %v", err)
 	}
@@ -78,16 +82,22 @@ func TestReplacementIsDetectedWithoutAWrite(t *testing.T) {
 	}
 }
 
-func TestCloseCheckpointsTheWAL(t *testing.T) {
+func TestCheckpointEmptiesTheWAL(t *testing.T) {
 	s, path := open(t)
 	if _, err := s.CreateJob("kept", ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Close(); err != nil {
+	if fi, err := os.Stat(path + "-wal"); err != nil || fi.Size() == 0 {
+		t.Fatalf("expected a non-empty WAL before the checkpoint: %v %v", fi, err)
+	}
+	if err := s.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}
-	if fi, err := os.Stat(path + "-wal"); err == nil && fi.Size() != 0 {
-		t.Fatalf("WAL holds %d bytes after a clean Close", fi.Size())
+	if fi, err := os.Stat(path + "-wal"); err != nil || fi.Size() != 0 {
+		t.Fatalf("WAL after checkpoint: %v %v", fi, err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
 	}
 	s2, err := Open(path)
 	if err != nil {
@@ -99,10 +109,15 @@ func TestCloseCheckpointsTheWAL(t *testing.T) {
 	}
 }
 
-func TestCloseSkipsTheCheckpointOnceFailed(t *testing.T) {
+func TestCheckpointAndCloseLeaveAReplacedWALAlone(t *testing.T) {
 	s, path := open(t)
 	replaceWAL(t, path)
-	s.checkWAL()
+	if err := s.checkWAL(); !errors.Is(err, ErrWALReplaced) {
+		t.Fatalf("checkWAL: %v", err)
+	}
+	if err := s.Checkpoint(); !errors.Is(err, ErrWALReplaced) {
+		t.Fatalf("Checkpoint after failure: want ErrWALReplaced, got %v", err)
+	}
 	if err := s.Close(); !errors.Is(err, ErrWALReplaced) {
 		t.Fatalf("Close after failure: want ErrWALReplaced, got %v", err)
 	}

@@ -108,10 +108,9 @@ func Open(path string) (*Store, error) {
 	return s, nil
 }
 
-// Close checkpoints the WAL into the database file and releases the database.
-// After the WAL was replaced it checkpoints nothing and leaves the handle
-// alone, so SQLite's close cannot truncate or delete whichever file now sits
-// at the WAL path; it returns the failure.
+// Close releases the database. After the WAL was replaced it leaves the handle
+// alone, so SQLite's close cannot truncate or delete whichever file now sits at
+// the WAL path; it returns the failure.
 func (s *Store) Close() error {
 	s.closeOnce.Do(func() {
 		if s.stopWatch != nil {
@@ -123,11 +122,8 @@ func (s *Store) Close() error {
 				s.closeErr = err
 				return
 			}
-			s.closeErr = s.checkpoint()
 		}
-		if err := s.db.Close(); s.closeErr == nil {
-			s.closeErr = err
-		}
+		s.closeErr = s.db.Close()
 	})
 	return s.closeErr
 }
