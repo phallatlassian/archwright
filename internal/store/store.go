@@ -56,8 +56,16 @@ func loadMigrations() ([]migration, error) {
 
 // Store wraps the database handle.
 type Store struct {
-	db  *sql.DB
+	db  guardedDB
 	now func() time.Time
+
+	// guard and the watcher notice the WAL being replaced under the open
+	// connection (#131). Snapshots have neither: they read a private copy.
+	guard     *walGuard
+	stopWatch chan struct{}
+	watched   sync.WaitGroup
+	closeOnce sync.Once
+	closeErr  error
 
 	approvalMu          sync.Mutex
 	approvalFailures    int
@@ -86,17 +94,39 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
-	s := &Store{db: db, now: time.Now}
+	s := &Store{db: guardedDB{DB: db}, now: time.Now}
 	if err := s.migrate(path); err != nil {
 		db.Close()
 		return nil, err
 	}
 	_ = os.Chmod(path, 0o600)
+	s.guard = newWALGuard(path)
+	s.db.g = s.guard
+	s.stopWatch = make(chan struct{})
+	s.watched.Add(1)
+	go func() { defer s.watched.Done(); s.watchWAL(s.stopWatch) }()
 	return s, nil
 }
 
-// Close releases the database.
-func (s *Store) Close() error { return s.db.Close() }
+// Close releases the database. After the WAL was replaced it leaves the handle
+// alone, so SQLite's close cannot truncate or delete whichever file now sits at
+// the WAL path; it returns the failure.
+func (s *Store) Close() error {
+	s.closeOnce.Do(func() {
+		if s.stopWatch != nil {
+			close(s.stopWatch)
+			s.watched.Wait()
+		}
+		if s.guard != nil {
+			if err := s.guard.check(); err != nil {
+				s.closeErr = err
+				return
+			}
+		}
+		s.closeErr = s.db.Close()
+	})
+	return s.closeErr
+}
 
 func (s *Store) version() (int, error) {
 	var v int

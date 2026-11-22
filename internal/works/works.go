@@ -91,7 +91,16 @@ func ServeWith(ctx context.Context, d paths.Dirs, ready chan<- struct{}, opts Op
 	if err != nil {
 		return err
 	}
-	defer st.Close()
+	defer func() {
+		// A clean stop leaves one self-contained database file; say so when
+		// it could not. A replaced WAL was already logged as FATAL.
+		if err := st.Checkpoint(); err != nil && !errors.Is(err, store.ErrWALReplaced) {
+			log.Printf("checkpointing the database: %v", err)
+		}
+		if err := st.Close(); err != nil && !errors.Is(err, store.ErrWALReplaced) {
+			log.Printf("closing the database: %v", err)
+		}
+	}()
 	if err := st.InterruptReviews(); err != nil {
 		return err
 	}
@@ -135,6 +144,16 @@ func ServeWith(ctx context.Context, d paths.Dirs, ready chan<- struct{}, opts Op
 	}
 	ctx, stop := context.WithCancel(ctx)
 	defer stop()
+	// A WAL replaced under the open database loses every later commit (#131):
+	// say so in the log and stop, rather than keep accepting work it cannot keep.
+	go func() {
+		select {
+		case <-st.Failed():
+			log.Printf("FATAL: %v; stopping the Works. Restart it; state committed since the replacement is lost. Do not open archwright.db while the Works runs.", st.Failure())
+			stop()
+		case <-ctx.Done():
+		}
+	}()
 	// Prune at start and daily until the Works stops (ADR 0017); the database
 	// stays open until the loop has returned.
 	pruned := make(chan struct{})
@@ -183,7 +202,11 @@ func ServeWith(ctx context.Context, d paths.Dirs, ready chan<- struct{}, opts Op
 	release()
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	return srv.Shutdown(shutdownCtx)
+	err = srv.Shutdown(shutdownCtx)
+	if failure := st.Failure(); failure != nil {
+		return failure
+	}
+	return err
 }
 
 // LogFile opens the daemon log for appending.
