@@ -426,25 +426,23 @@ function layers(steps) {
   return out.filter(Boolean);
 }
 
-// stepStatuses says where each Plan step stands: done, running, blocked or pending. The API only reports
-// a running step (step_states), so the rest is read from the Job's dispatches, matching a dispatch to a step
-// by piece name; a step whose latest dispatch is live is running, one that ended on an ask is blocked, one
-// that reported is done, and anything else is pending. An accepted Job has every step done.
+// stepStatuses says where each Plan step stands: done, running, blocked, failed or pending. It reads the
+// API's step_states (a started step's own status: running, handed_back, failed; anything else is not
+// started). A running step whose Guild has an open blocking ask is blocked. An accepted Job has every step done.
 function stepStatuses(steps, ds, job) {
+  const states = job.step_states || {};
+  const asks = job.asks || [];
   const out = {};
   for (const s of steps) {
-    const mine = ds.filter((d) => d.piece === s.id).sort((a, b) => b.round - a.round || b.created_at.localeCompare(a.created_at));
-    const d = mine[0];
-    out[s.id] = job.outcome === 'accepted' ? 'done'
-      : !d ? 'pending'
-      : d.status === 'queued' || d.status === 'running' ? 'running'
-      : d.status === 'blocked' ? 'blocked'
-      : d.status === 'reported' || d.status === 'answered' ? 'done'
+    const st = states[s.id];
+    out[s.id] = job.outcome === 'accepted' || st === 'handed_back' ? 'done'
+      : st === 'failed' ? 'failed'
+      : st === 'running' ? (asks.some((a) => a.guild === s.guild && a.blocking && a.dispatch_id) ? 'blocked' : 'running')
       : 'pending';
   }
   return out;
 }
-const STATUS_LABEL = { done: 'completed', running: 'executing', blocked: 'blocked', pending: 'pending' };
+const STATUS_LABEL = { done: 'completed', running: 'executing', blocked: 'blocked', failed: 'failed', pending: 'pending' };
 
 // jigTrack draws a Jig for the catalogue: dots joined by a line, one column per depth with the step name as
 // its header. Steps that can run in parallel stack in one column, and the line curves from each step into
@@ -569,7 +567,7 @@ function sharedSteps(plans) {
 
 // legend explains the dot colours.
 function legend() {
-  return h('span', { class: 'legend' }, ['done', 'running', 'blocked', 'pending'].map((k) => h('span', {}, h('span', { class: 'dot sw ' + k }), ' ' + STATUS_LABEL[k])));
+  return h('span', { class: 'legend' }, ['done', 'running', 'blocked', 'failed', 'pending'].map((k) => h('span', {}, h('span', { class: 'dot sw ' + k }), ' ' + STATUS_LABEL[k])));
 }
 
 // jigHeader is the row of column headers over a group's compact lanes: one column per step in ord, at the
