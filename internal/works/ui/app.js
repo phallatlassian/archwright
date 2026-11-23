@@ -21,7 +21,7 @@ function h(tag, attrs, ...kids) {
 // ---- token and API ----------------------------------------------------------------
 if (location.hash.startsWith('#token=')) {
   sessionStorage.setItem('aw-token', decodeURIComponent(location.hash.slice(7)));
-  history.replaceState(null, '', location.pathname);
+  history.replaceState(null, '', location.pathname + location.search); // PROTOTYPE: keep ?variant=
 }
 const token = sessionStorage.getItem('aw-token') || '';
 
@@ -284,6 +284,8 @@ const views = {
       return [g, [...new Set(mine.map((d) => d.piece))].length, mine.filter((d) => live.includes(d)).length, money(rs.reduce((a, r) => a + r.cost_usd, 0))];
     })) : h('p', { class: 'muted' }, 'No Warden has dispatched work.'));
 
+    if (typeof protoRunList === 'function') parts.push(...protoRunList({ full, ds, runs })); // PROTOTYPE: prototype-runs.js
+    else {
     parts.push(h('h2', {}, 'Pieces and Wright runs'));
     parts.push(ds.length ? table(['Piece', 'Guild', 'Round', 'Status', 'Run', 'Runner', 'Tokens in/out', 'Cost'], ds.map((d) => {
       const r = runs.find((x) => x.dispatch_id === d.id);
@@ -294,6 +296,7 @@ const views = {
       const run = (runs.find((x) => x.dispatch_id === d.id) || {}).run_id || d.run_id;
       return run ? '#/run/' + run + '/' + id : '';
     })) : h('p', { class: 'muted' }, 'No Wrights dispatched.'));
+    }
 
     if (reviews.reviews && reviews.reviews.length) {
       parts.push(h('h2', {}, 'Reviews'));

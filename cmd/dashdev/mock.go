@@ -32,6 +32,7 @@ type mockWorld struct {
 	Sites     []store.Site
 	NeedsYou  []store.NeedsYouItem
 	Events    map[string][]store.RunEvent
+	Raw       map[string]json.RawMessage // raw vendor event by "run/seq"; absent for the generic mock events
 	Catalogue works.Catalogue
 	Queue     works.QueueStatus
 	seq       int // numbers what the simulation creates
@@ -134,7 +135,7 @@ func (w *mockWorld) usage() []store.UsageRow {
 }
 
 func newWorld(scenario string) *mockWorld {
-	w := &mockWorld{Events: map[string][]store.RunEvent{}}
+	w := &mockWorld{Events: map[string][]store.RunEvent{}, Raw: map[string]json.RawMessage{}}
 	w.Catalogue = mockCatalogue()
 	w.Queue = works.QueueStatus{Limits: works.Limits{Total: 4, PerSite: 3, PerWarden: 2}, Running: []works.QueueEntry{}, Queued: []works.QueueEntry{}}
 	w.Sites = []store.Site{
@@ -202,6 +203,105 @@ func run(id, jobID, dispatchID, guild, runner string, in, out int, cost float64,
 	return r
 }
 
+// ---- scripted run transcripts -------------------------------------------------------------------------
+// A turn is one run event in the shape the real runner reports it: its kind and one-line summary, and the raw
+// vendor event behind it (assistant text, a tool call, the tool's output, the final result).
+type turn struct {
+	kind, summary string
+	raw           any
+}
+
+func firstLine(s string) string {
+	for i, c := range s {
+		if c == '\n' {
+			s = s[:i]
+			break
+		}
+	}
+	if len(s) > 200 {
+		s = s[:200] + "…"
+	}
+	return s
+}
+
+func tNote(kind, summary string) turn { return turn{kind: kind, summary: summary} }
+func tMsg(text string) turn {
+	return turn{"message", firstLine(text), map[string]any{"type": "assistant", "message": map[string]any{"content": []map[string]any{{"type": "text", "text": text}}}}}
+}
+func tUse(id, cmd string) turn {
+	return turn{"tool_use", "Bash: " + firstLine(cmd), map[string]any{"type": "assistant", "message": map[string]any{"content": []map[string]any{{"type": "tool_use", "id": id, "name": "Bash", "input": map[string]string{"command": cmd}}}}}}
+}
+func tRes(id, out string, isErr bool) turn {
+	sum := firstLine(out)
+	if isErr {
+		sum = "error: " + sum
+	}
+	return turn{"tool_result", sum, map[string]any{"type": "user", "message": map[string]any{"content": []map[string]any{{"type": "tool_result", "tool_use_id": id, "content": out, "is_error": isErr}}}}}
+}
+func tFinal(text string) turn {
+	return turn{"result", firstLine(text), map[string]any{"type": "result", "result": text}}
+}
+
+// script records a run's turns, one every gap from start; n < len(turns) cuts it short, like a run still going.
+func (w *mockWorld) script(runID string, start time.Time, gap time.Duration, turns []turn, n int) {
+	if n <= 0 || n > len(turns) {
+		n = len(turns)
+	}
+	var evs []store.RunEvent
+	for i, t := range turns[:n] {
+		evs = append(evs, store.RunEvent{RunID: runID, Seq: i + 1, Kind: t.kind, Summary: t.summary, HasRaw: t.raw != nil, At: start.Add(time.Duration(i) * gap)})
+		if t.raw != nil {
+			b, _ := json.Marshal(t.raw)
+			w.Raw[fmt.Sprintf("%s/%d", runID, i+1)] = b
+		}
+	}
+	w.Events[runID] = evs
+}
+
+// wardenRun scripts a Warden carrying out the Plan step for piece: dispatch a Wright, wait, accept, hand back.
+func (w *mockWorld) wardenRun(runID, guild, piece string, start time.Time, gap time.Duration, n int) {
+	t := func(i int) string { return fmt.Sprintf("%s-t%d", runID, i) }
+	w.script(runID, start, gap, []turn{
+		tNote("posture", "claude 2.1.285 (Claude Code): default mode, inherited sandbox"),
+		tNote("started", "session started"),
+		tMsg("I'll read the step brief, then dispatch one " + guild + " Wright for " + piece + " and check its work before handing back."),
+		tUse(t(1), `echo '{"piece":"`+piece+`","brief":{"objective":"`+piece+`","scope":{"in":["internal/"]},"constraints":[],"inputs":["the step brief"],"definition_of_done":["the step is done"],"return_shape":"a pointer to the result","limits":{"timeout_minutes":30}}}' | archwright tool dispatch_wright`),
+		tRes(t(1), "{\n  \"ok\": true,\n  \"dispatch\": \"dsp-"+runID+"\",\n  \"status\": \"queued\"\n}", false),
+		tUse(t(2), `echo '{"piece":"`+piece+`","wait_seconds":45}' | archwright tool inspect_wright`),
+		tRes(t(2), "{\n  \"piece\": \""+piece+"\",\n  \"dispatches\": [{\"round\": 0, \"status\": \"reported\"}]\n}", false),
+		tUse(t(3), `echo '{"piece":"`+piece+`"}' | archwright tool accept_piece`),
+		tRes(t(3), "{\n  \"ok\": true,\n  \"merged\": \"aw/integration\"\n}", false),
+		tUse(t(4), `echo '{"status":"done","results":["aw/integration"],"checked":["inspected `+piece+`"],"rejected":[],"uncertainty":"","flags":[]}' | archwright tool handback`),
+		tRes(t(4), "{\n  \"handback_id\": 12,\n  \"status\": \"done\",\n  \"flags_recorded\": 0\n}", false),
+		tMsg("Accepted " + piece + " and handed back done."),
+		tFinal("Accepted " + piece + "; the handback is filed."),
+	}, n)
+}
+
+// wrightRun scripts a Wright doing the piece: read the code, change it, run the tests.
+func (w *mockWorld) wrightRun(runID, guild, piece string, start time.Time, gap time.Duration, n int) {
+	t := func(i int) string { return fmt.Sprintf("%s-t%d", runID, i) }
+	posture := "claude 2.1.285 (Claude Code): default mode, inherited sandbox"
+	if guild == "survey" || guild == "hallmark" {
+		posture = "claude 2.1.285 (Claude Code): plan mode, inherited sandbox"
+	}
+	w.script(runID, start, gap, []turn{
+		tNote("posture", posture),
+		tNote("started", "session started"),
+		tMsg("Reading the code around " + piece + " first."),
+		tUse(t(1), "git log --oneline -5"),
+		tRes(t(1), "3490797 fix(works): wake idle session\n98d848d fix(jigs): add the open-pr step\n3cf33f0 fix(works): nudge with an NDJSON user message", false),
+		tUse(t(2), "grep -rn \"Page(\" internal/inventory"),
+		tRes(t(2), "internal/inventory/inventory.go:83:func (s *Store) Page(page, size int) []Item {", false),
+		tMsg("The end bound is clamped to len-1, but the slice upper bound is exclusive, so the last Item is dropped. I'll fix it and add a table-driven test."),
+		tUse(t(3), "go test ./internal/inventory/..."),
+		tRes(t(3), "--- FAIL: TestPageRemainder (0.00s)\n    inventory_test.go:41: page 3 of 5 items size 2: got [], want [e]\nFAIL", true),
+		tUse(t(4), "go test ./internal/inventory/..."),
+		tRes(t(4), "ok  \tgithub.com/example/pantry/internal/inventory\t0.004s", false),
+		tFinal(piece + " done: the fix is in and the new test passes."),
+	}, n)
+}
+
 func runEvents(runID string, start time.Time, n int, prune bool) []store.RunEvent {
 	kinds := []string{"message", "tool_call", "tool_result", "tool_call", "tool_result", "message", "usage"}
 	sums := []string{"Reading the task and the surrounding code", "Read internal/works/dispatch.go", "412 lines", "Edit internal/works/dispatch.go",
@@ -232,8 +332,13 @@ func seed(w *mockWorld) {
 		{ID: "wt-1", JobID: j1.Job.ID, Site: "billing-api", Kind: store.KindIntegration, Path: "/home/dev/.archwright/work/billing-api/j-7f3a21", Branch: "aw/j-7f3a21", BaseRef: "trunk", BaseSHA: "a1b2c3d", CreatedAt: ago(39 * time.Minute)},
 		{ID: "wt-2", JobID: j1.Job.ID, Site: "billing-api", Kind: store.KindWright, Path: "/home/dev/.archwright/work/billing-api/j-7f3a21-implement", Branch: "aw/j-7f3a21/implement", BaseRef: "aw/j-7f3a21", BaseSHA: "e4f5a6b", CreatedAt: ago(6 * time.Minute)},
 	}
-	w.Events["r-101"] = runEvents("r-101", ago(38*time.Minute), 7, false)
-	w.Events["r-102"] = runEvents("r-102", ago(6*time.Minute), 12, false)
+	j1.Runs = append(j1.Runs,
+		run("r-w101", j1.Job.ID, "", "survey", "claude", 18200, 2300, 0.1204, "done", ago(39*time.Minute), 6*time.Minute),
+		run("r-w102", j1.Job.ID, "", "masonry", "claude", 14100, 1700, 0.0982, "running", ago(7*time.Minute), 0))
+	w.wardenRun("r-w101", "survey", "explore", ago(39*time.Minute), 25*time.Second, 0)
+	w.wrightRun("r-101", "survey", "explore", ago(38*time.Minute), 18*time.Second, 0)
+	w.wardenRun("r-w102", "masonry", "implement", ago(7*time.Minute), 20*time.Second, 7)
+	w.wrightRun("r-102", "masonry", "implement", ago(6*time.Minute), 18*time.Second, 9)
 	add(j1)
 
 	// 2. Needs you: an ad hoc Plan waits for approval.
@@ -291,6 +396,8 @@ func seed(w *mockWorld) {
 			CreatedAt: at, FinishedAt: tptr(at.Add(2 * time.Minute))}
 	}
 	j4.Reviews = []store.Review{failing(1, ago(3*time.Hour), "WAL checkpoint is skipped on startup"), failing(2, ago(2*time.Hour), "Migration breaks WAL checkpointing on startup")}
+	j4.Runs = append(j4.Runs, run("r-w401", j4.Job.ID, "", "masonry", "claude", 31000, 4200, 0.2210, "done", ago(4*time.Hour+time.Minute), 72*time.Minute))
+	w.wardenRun("r-w401", "masonry", "implement", ago(4*time.Hour+time.Minute), 4*time.Minute, 0)
 	w.Events["r-401"] = runEvents("r-401", ago(4*time.Hour), 8, true)
 	add(j4)
 	w.NeedsYou = append(w.NeedsYou, store.NeedsYouItem{ID: 1, Kind: store.NeedsReviewParked, JobID: j4.Job.ID, Site: "archwright",
@@ -353,11 +460,64 @@ func seed(w *mockWorld) {
 		did, rid := fmt.Sprintf("d-110%d", i), fmt.Sprintf("r-110%d", i)
 		j11.Dispatches = append(j11.Dispatches, dispatch(did, j11.Job.ID, st.piece, st.guild, 0, store.DispatchReported, rid, at))
 		j11.Runs = append(j11.Runs, run(rid, j11.Job.ID, did, st.guild, "claude", 20000+i*7000, 2500+i*900, 0.15+float64(i)*0.11, "done", at, 5*time.Minute))
-		w.Events[rid] = runEvents(rid, at, 5, true)
+		wid := fmt.Sprintf("r-w110%d", i)
+		j11.Runs = append(j11.Runs, run(wid, j11.Job.ID, "", st.guild, "claude", 9000+i*1500, 1200+i*300, 0.06+float64(i)*0.03, "done", at.Add(-time.Minute), 7*time.Minute))
+		w.wardenRun(wid, st.guild, st.piece, at.Add(-time.Minute), 30*time.Second, 0)
+		w.wrightRun(rid, st.guild, st.piece, at, 25*time.Second, 0)
 	}
 	j11.Reviews = []store.Review{{ID: "rv-11", JobID: j11.Job.ID, Seq: 1, Branch: "aw/j-c4d9e1", SHA: "7a6b5c4", Status: store.ReviewReported, SpecBasis: store.SpecWrit, Overall: store.VerdictPass,
 		Standards: &store.Axis{Verdict: store.VerdictPass, Findings: []store.Finding{}}, Spec: &store.Axis{Verdict: store.VerdictPass, Findings: []store.Finding{}}, CreatedAt: ago(25 * time.Hour)}}
 	add(j11)
+
+	// 13. A long-running Job: eight steps over most of a working day, with rework rounds and a long wait for the developer.
+	j13 := &mockJob{Job: store.Job{ID: "j-9a77c3", Title: "Migrate the billing ledger to double-entry bookkeeping", Description: "Every ledger write becomes a balanced journal entry; history is backfilled.", Site: "billing-api", Writ: "BILL-340", CreatedAt: ago(11 * time.Hour)}}
+	p13 := steps("explore", "survey", "Map every ledger write",
+		"design", "chancery", "Draft the double-entry design",
+		"schema", "masonry", "Add the journal tables and migration",
+		"backfill", "masonry", "Backfill history into journal entries",
+		"api", "masonry", "Switch the API to post journal entries",
+		"ui", "masonry", "Update the statements view",
+		"review", "hallmark", "Review against the design",
+		"open-pr", "masonry", "Open the pull request")
+	for i := 1; i < len(p13); i++ {
+		p13[i].BlockedBy = []string{p13[i-1].ID}
+	}
+	j13.Plan = &store.Plan{JobID: j13.Job.ID, Steps: p13, Jig: "build", Approval: store.ApprovalNotRequired, UpdatedAt: ago(11 * time.Hour)}
+	type leg struct {
+		step, guild string
+		startMin    int   // minutes after the Job started
+		rounds      []int // Wright minutes per round; every round but the last was sent back
+	}
+	t13 := ago(11 * time.Hour)
+	for li, l := range []leg{{"explore", "survey", 0, []int{14}}, {"design", "chancery", 20, []int{26, 18}}, {"schema", "masonry", 285, []int{31}},
+		{"backfill", "masonry", 330, []int{48, 36, 22}}, {"api", "masonry", 470, []int{41, 27}}, {"ui", "masonry", 545, []int{35}},
+		{"review", "hallmark", 595, []int{19, 12}}, {"open-pr", "masonry", 652, []int{6}}} {
+		final := li == 7 // the last step is still running
+		wstart := t13.Add(time.Duration(l.startMin) * time.Minute)
+		cur := wstart.Add(time.Minute)
+		for ri, mins := range l.rounds {
+			did, rid := fmt.Sprintf("d-13%02d%d", li, ri), fmt.Sprintf("r-13%02d%d", li, ri)
+			dst, rst := store.DispatchRejected, "done"
+			if ri == len(l.rounds)-1 {
+				dst = store.DispatchReported
+			}
+			dur := time.Duration(mins) * time.Minute
+			if final {
+				dst, rst, dur = store.DispatchRunning, "running", 0
+			}
+			j13.Dispatches = append(j13.Dispatches, dispatch(did, j13.Job.ID, l.step, l.guild, ri, dst, rid, cur))
+			j13.Runs = append(j13.Runs, run(rid, j13.Job.ID, did, l.guild, "claude", 30000+mins*900, 3000+mins*120, 0.05*float64(mins), rst, cur, dur))
+			w.wrightRun(rid, l.guild, l.step, cur, 20*time.Second, map[bool]int{true: 8, false: 0}[final])
+			cur = cur.Add(dur + 3*time.Minute)
+		}
+		wid, wst, wdur := fmt.Sprintf("r-w13%02d", li), "done", cur.Sub(wstart)
+		if final {
+			wst, wdur = "running", 0
+		}
+		j13.Runs = append(j13.Runs, run(wid, j13.Job.ID, "", l.guild, "claude", 12000, 1800, 0.09, wst, wstart, wdur))
+		w.wardenRun(wid, l.guild, l.step, wstart, 30*time.Second, map[bool]int{true: 7, false: 0}[final])
+	}
+	add(j13)
 
 	// 12. A second ad hoc Plan, with different steps from j-2c9d04: a fan-out then a join.
 	j12 := &mockJob{Job: store.Job{ID: "j-e05b62", Title: "Audit and bump vulnerable dependencies", Description: "npm audit reports 3 high severity advisories.", Site: "billing-api", CreatedAt: ago(70 * time.Minute)}}
@@ -381,9 +541,16 @@ func seed(w *mockWorld) {
 	j12.Asks = []store.Ask{{ID: "ask-2", JobID: j12.Job.ID, Asker: "wright", Guild: "masonry", Piece: "bump-dev", DispatchID: "d-1203", Kind: store.AskDecision, Blocking: true,
 		Why: "Upgrading the test runner is a major version bump.", Holder: store.HolderWarden, Status: store.AskOpen, Answers: []store.Answer{}, CreatedAt: ago(14 * time.Minute),
 		Questions: []store.Question{{ID: "q1", Text: "Take the major bump of the test runner?", Options: []string{"Yes", "No, pin the current major"}, Default: "No, pin the current major"}}}}
-	w.Events["r-1201"] = runEvents("r-1201", ago(64*time.Minute), 4, false)
-	w.Events["r-1202"] = runEvents("r-1202", ago(12*time.Minute), 7, false)
-	w.Events["r-1203"] = runEvents("r-1203", ago(20*time.Minute), 6, false)
+	j12.Runs = append(j12.Runs,
+		run("r-w1201", j12.Job.ID, "", "survey", "codex", 8000, 900, 0, "done", ago(65*time.Minute), 5*time.Minute),
+		run("r-w1203", j12.Job.ID, "", "masonry", "claude", 12000, 1500, 0.0880, "done", ago(21*time.Minute), 7*time.Minute),
+		run("r-w1202", j12.Job.ID, "", "masonry", "claude", 10400, 1300, 0.0731, "running", ago(13*time.Minute), 0))
+	w.wardenRun("r-w1201", "survey", "audit", ago(65*time.Minute), 25*time.Second, 0)
+	w.wrightRun("r-1201", "survey", "audit", ago(64*time.Minute), 18*time.Second, 0)
+	w.wardenRun("r-w1203", "masonry", "bump-dev", ago(21*time.Minute), 25*time.Second, 0)
+	w.wrightRun("r-1203", "masonry", "bump-dev", ago(20*time.Minute), 20*time.Second, 0)
+	w.wardenRun("r-w1202", "masonry", "bump-runtime", ago(13*time.Minute), 20*time.Second, 6)
+	w.wrightRun("r-1202", "masonry", "bump-runtime", ago(12*time.Minute), 20*time.Second, 8)
 	add(j12)
 
 	w.Queue.Running = []works.QueueEntry{
