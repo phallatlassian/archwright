@@ -308,7 +308,7 @@ func forStep(r store.RunRecord, step string) store.RunRecord    { r.Step = step;
 func under(r store.RunRecord, wardenRun string) store.RunRecord { r.ParentRun = wardenRun; return r }
 
 func runEvents(runID string, start time.Time, n int, prune bool) []store.RunEvent {
-	kinds := []string{"message", "tool_call", "tool_result", "tool_call", "tool_result", "message", "usage"}
+	kinds := []string{"message", "tool_use", "tool_result", "tool_use", "tool_result", "message", "result"}
 	sums := []string{"Reading the task and the surrounding code", "Read internal/works/dispatch.go", "412 lines", "Edit internal/works/dispatch.go",
 		"Applied 1 edit", "Tests pass, writing the handback", "in=18,204 out=2,311"}
 	var out []store.RunEvent

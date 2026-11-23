@@ -1,4 +1,4 @@
-// The Job detail's run list and a run's transcript (ADR 0007). Loaded before app.js and uses its globals
+// The Job detail's run list and a run's transcript (ADR 0016: plain JavaScript, no build step). Loaded before app.js and uses its globals
 // (h, get, tag, money, tokens, withTip) only when called, never while loading.
 'use strict';
 
@@ -38,6 +38,9 @@ function runSpan(rows) {
   const t0 = Math.min(...rows.map((r) => r.start));
   return { t0, span: Math.max(1, Math.max(...rows.map((r) => r.end)) - t0) };
 }
+
+// The timeline entries whose full text is in their raw vendor event.
+const TEXT_KINDS = ['message', 'result', 'tool_use', 'tool_result'];
 
 const BAR_MIN = 0.7; // percent of the axis, so a short run stays visible
 const LABEL_LEFT_FROM = 55; // a bar starting past this percent has its label on its left
@@ -112,13 +115,12 @@ function transcriptItems(evs, raws) {
   let fromSummary = 0;
   for (const e of evs) {
     const rawKey = raws.has(e.seq) ? (typeof raws.get(e.seq) === 'string' ? raws.get(e.seq) : JSON.stringify(raws.get(e.seq))) : null;
-    const got = ['message', 'result', 'tool_use', 'tool_result'].includes(e.kind) ? read(e, raws.get(e.seq), rawKey) : null;
-    if (['message', 'result', 'tool_use', 'tool_result'].includes(e.kind) && !got) fromSummary++;
+    const wantsText = TEXT_KINDS.includes(e.kind);
+    const got = wantsText ? read(e, raws.get(e.seq), rawKey) : null;
+    if (wantsText && !got) fromSummary++;
+    if (!e.summary && !wantsText) continue; // an empty vendor event says nothing
     switch (e.kind) {
-      case 'other':
-        if (e.summary) items.push({ type: 'note', text: e.summary });
-        break;
-      case 'posture': case 'started':
+      case 'other': case 'posture': case 'started':
         items.push({ type: 'note', text: e.summary });
         break;
       case 'message':
@@ -208,7 +210,7 @@ const clock = (at) => new Date(at).toLocaleTimeString([], { hour12: false });
 async function loadRaws(runId, evs, fetchRaw = (seq) => get(`/runs/${runId}/events/${seq}/raw`)) {
   const raws = new Map();
   let failed = 0;
-  const want = evs.filter((e) => e.has_raw && ['message', 'result', 'tool_use', 'tool_result'].includes(e.kind));
+  const want = evs.filter((e) => e.has_raw && TEXT_KINDS.includes(e.kind));
   let i = 0;
   await Promise.all(Array.from({ length: Math.min(6, want.length) }, async () => {
     while (i < want.length) {
@@ -246,8 +248,8 @@ function openTranscript(row, guilds) {
     const { raws, failed } = await loadRaws(run.run_id, evs);
     const { items, fromSummary } = transcriptItems(evs, raws);
     const notes = [];
-    if (evs.some((e) => !e.has_raw && ['message', 'result', 'tool_use', 'tool_result'].includes(e.kind))) notes.push('The raw content of this run was pruned: showing the summaries that were kept.');
-    else if (failed) notes.push(`${failed} full message${failed === 1 ? '' : 's'} could not be loaded: showing summaries for them.`);
+    if (evs.some((e) => !e.has_raw && TEXT_KINDS.includes(e.kind))) notes.push('The raw content of this run was pruned: showing the summaries that were kept.');
+    if (failed) notes.push(`${failed} full message${failed === 1 ? '' : 's'} could not be loaded: showing summaries for them.`);
     const cards = [];
     body.replaceChildren(...notes.map((n) => h('p', { class: 'tx-pruned muted' }, n)), h('div', { class: 'tx-chat' }, items.length ? items.map((it) => transcriptItem(it, run, cards)) : h('p', { class: 'muted' }, 'This run recorded nothing.')));
     if (cards.length) {

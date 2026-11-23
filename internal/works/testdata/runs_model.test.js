@@ -1,4 +1,4 @@
-// Tests of the dashboard's run list and transcript model (ui/runs.js), run by ui_runs_test.go with node.
+// Tests of the dashboard's run list and transcript model (ui/runs.js), run by TestRunListAndTranscriptModel (ui_test.go) with node.
 // Usage: node runs_model.test.js path/to/runs.js
 'use strict';
 const assert = require('node:assert/strict');
