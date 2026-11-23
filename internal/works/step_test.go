@@ -343,7 +343,7 @@ func TestResumeEndsTheRunningStepOfAClosedJob(t *testing.T) {
 // its brief must say how to call the tools, or it looks for MCP tools, finds
 // none and ends without handing back.
 func TestStepBriefStatesTheToolCallingConvention(t *testing.T) {
-	brief := renderStepBrief(store.Job{ID: "j1", Title: "Add login"}, store.Step{ID: "a", Title: "Build the form"}, Guild{Name: "masonry"}, "")
+	brief := renderStepBrief(store.Job{ID: "j1", Title: "Add login"}, store.Step{ID: "a", Title: "Build the form"}, Guild{Name: "masonry"}, "", "")
 	if strings.TrimSpace(wardenMD) == "" || !strings.Contains(brief, strings.TrimSpace(wardenMD)) {
 		t.Fatalf("the embedded warden.md is not in the step brief:\n%s", brief)
 	}
@@ -357,5 +357,17 @@ func TestStepBriefStatesTheToolCallingConvention(t *testing.T) {
 		if !strings.Contains(brief, want) {
 			t.Errorf("step brief lacks %q:\n%s", want, brief)
 		}
+	}
+}
+
+// A step's Inputs are only labels; the brief must name the accepted pieces so
+// a reviewing Warden can inspect them.
+func TestStepBriefNamesPriorWork(t *testing.T) {
+	brief := renderStepBrief(store.Job{ID: "j1", Title: "Fix"}, store.Step{ID: "review", Title: "Review"}, Guild{Name: "hallmark"}, "", "- fix-pagination (masonry Guild)")
+	if !strings.Contains(brief, "## Work so far") || !strings.Contains(brief, "fix-pagination") {
+		t.Fatalf("brief lacks the prior work:\n%s", brief)
+	}
+	if none := renderStepBrief(store.Job{ID: "j1"}, store.Step{ID: "a"}, Guild{Name: "m"}, "", ""); strings.Contains(none, "Work so far") {
+		t.Fatalf("empty prior work rendered:\n%s", none)
 	}
 }
