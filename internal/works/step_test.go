@@ -348,7 +348,7 @@ func TestStepBriefStatesTheToolCallingConvention(t *testing.T) {
 		t.Fatalf("the embedded warden.md is not in the step brief:\n%s", brief)
 	}
 	for _, want := range []string{
-		"`archwright tool NAME`", "JSON on stdin", "JSON on stdout", "Bash", "not MCP",
+		"`archwright tool NAME`", "Plan mode", "does not stop these calls", "`status: failed`", "JSON on stdin", "JSON on stdout", "Bash", "not MCP",
 		`dispatch_wright`, `"piece"`, `"brief"`, `"objective"`, `"scope"`, `"constraints"`, `"inputs"`, `"definition_of_done"`, `"return_shape"`, `"limits"`, `"timeout_minutes"`,
 		`inspect_wright`, `rework_wright`, `"reason"`, `"diagnosis"`,
 		`accept_piece`,
