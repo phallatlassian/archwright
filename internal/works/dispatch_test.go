@@ -521,3 +521,38 @@ func TestWrightRunsRecordTheWardenRunThatDispatchedThem(t *testing.T) {
 		}
 	}
 }
+
+func TestAWrightRunRecordsTheBriefItWasStartedWith(t *testing.T) {
+	g := newRig(t, map[string][]WrightResult{"a": {failedResult, doneResult}})
+	g.dispatch("a")
+	g.rework("a")
+	reqs := g.runner.Requests()
+	if len(reqs) != 2 {
+		t.Fatalf("%d requests", len(reqs))
+	}
+	runs, err := g.st.RunRecords(g.job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := 0
+	for _, rec := range runs {
+		if rec.DispatchID == "" {
+			continue
+		}
+		b, err := g.st.RunBrief(rec.RunID)
+		if err != nil || b.Source != store.BriefRecorded {
+			t.Fatalf("%s: %+v %v", rec.RunID, b, err)
+		}
+		matched := false
+		for _, req := range reqs {
+			matched = matched || req.Env.Run == rec.RunID && req.Brief == b.Text
+		}
+		if !matched {
+			t.Fatalf("run %s: the recorded brief is not what its runner got: %q", rec.RunID, b.Text)
+		}
+		seen++
+	}
+	if seen != 2 {
+		t.Fatalf("%d Wright runs recorded a brief, want 2", seen)
+	}
+}

@@ -295,6 +295,7 @@ func (r *Runs) summon(sr store.StepRun, resumed bool) error {
 	if err := r.st.StartRunRecord(env.Run, sr.JobID, "", sr.Guild, "", sr.Step, ""); err != nil {
 		log.Printf("run %s: recording it for the dashboard: %v", env.Run, err)
 	}
+	r.recordBrief(env.Run, brief)
 	go func() {
 		defer r.wg.Done()
 		wt, runErr := r.wardenWorkspace(env.Run, root)

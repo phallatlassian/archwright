@@ -616,6 +616,7 @@ func (r *Runs) start(d store.Dispatch) error {
 		if runErr == nil && d.Round > 0 && !isMergeWright(d.Piece) && wt != "" {
 			brief += startingPoint(from)
 		}
+		r.recordBrief(env.Run, brief)
 		var extra map[string]string
 		if runErr == nil {
 			extra, runErr = r.deliverSkillsFor(d, env.Run, wt)
@@ -671,6 +672,14 @@ func (r *Runs) start(d store.Dispatch) error {
 		r.sched.finished(d.ID, runErr == nil)
 	}()
 	return nil
+}
+
+// recordBrief keeps the exact prompt a run is started with, for the dashboard's
+// transcript. A failure is logged: the run goes on without it.
+func (r *Runs) recordBrief(run, brief string) {
+	if err := r.st.SetRunBrief(run, brief); err != nil {
+		log.Printf("run %s: recording its brief: %v", run, err)
+	}
 }
 
 // lastWordsMax caps how much of a Wright's last message a failure keeps.

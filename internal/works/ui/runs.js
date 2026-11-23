@@ -221,6 +221,27 @@ async function loadRaws(runId, evs, fetchRaw = (seq) => get(`/runs/${runId}/even
   return { raws, failed };
 }
 
+// briefView says what the transcript's Brief section shows of GET /runs/{id}/brief: the text, how many lines it
+// has, and whether it is the exact prompt (a run from before it was recorded has its dispatch's or step's brief).
+function briefView(b) {
+  const text = b && typeof b.brief === 'string' ? b.brief : '';
+  if (!text) return { available: false, text: 'The brief this agent was started with is not available.' };
+  const lines = text.replace(/\n+$/, '').split('\n').length;
+  const exact = b.source === 'recorded';
+  const from = b.source === 'dispatch' ? 'dispatch' : 'step';
+  return { available: true, text, lines, exact, note: exact ? '' : `The exact prompt was not recorded for this run: this is the brief its ${from} kept, which can lack what was added when the run started.` };
+}
+
+// briefSection is the collapsed Brief block above a transcript's first entry.
+function briefSection(b) {
+  const v = briefView(b);
+  if (!v.available) return h('div', { class: 'tx-note muted tx-brief-none' }, v.text);
+  return h('details', { class: 'tx-brief' },
+    h('summary', {}, h('span', { class: 'tx-brief-name' }, 'Brief'), h('span', { class: 'muted' }, `sent to the agent · ${v.lines} line${v.lines === 1 ? '' : 's'}`)),
+    v.note ? h('div', { class: 'muted tx-label' }, v.note) : null,
+    h('pre', { class: 'tx-brief-text' }, v.text));
+}
+
 // openTranscript shows a run as a conversation in a dialog. Esc, the Close button or a click outside closes
 // it, and focus goes back to the row it was opened from.
 function openTranscript(row, guilds) {
@@ -244,14 +265,17 @@ function openTranscript(row, guilds) {
   document.body.append(dlg);
   dlg.showModal();
 
+  // A brief that cannot be loaded is not the transcript's failure: it is said once and the entries still show.
+  const briefReq = get(`/runs/${run.run_id}/brief`).catch(() => null);
   get(`/runs/${run.run_id}/events`).then(async (evs) => {
+    const brief = await briefReq;
     const { raws, failed } = await loadRaws(run.run_id, evs);
     const { items, fromSummary } = transcriptItems(evs, raws);
     const notes = [];
     if (evs.some((e) => !e.has_raw && TEXT_KINDS.includes(e.kind))) notes.push('The raw content of this run was pruned: showing the summaries that were kept.');
     if (failed) notes.push(`${failed} full message${failed === 1 ? '' : 's'} could not be loaded: showing summaries for them.`);
     const cards = [];
-    body.replaceChildren(...notes.map((n) => h('p', { class: 'tx-pruned muted' }, n)), h('div', { class: 'tx-chat' }, items.length ? items.map((it) => transcriptItem(it, run, cards)) : h('p', { class: 'muted' }, 'This run recorded nothing.')));
+    body.replaceChildren(...notes.map((n) => h('p', { class: 'tx-pruned muted' }, n)), h('div', { class: 'tx-chat' }, briefSection(brief), items.length ? items.map((it) => transcriptItem(it, run, cards)) : h('p', { class: 'muted' }, 'This run recorded nothing.')));
     if (cards.length) {
       let open = false;
       toggle.hidden = false;
