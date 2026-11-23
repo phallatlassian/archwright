@@ -133,7 +133,7 @@ const ago = (iso) => {
   return Math.round(s / 86400) + 'd ago';
 };
 const tag = (s) => h('span', { class: 'tag ' + s }, s);
-const prLink = (url) => h('a', { href: url, target: '_blank', rel: 'noopener', onclick: (e) => e.stopPropagation() }, 'PR ' + url.replace(/^https?:\/\/(www\.)?/, ''));
+const prLink = (url) => !/^https?:\/\//i.test(url) ? h('span', {}, 'PR ' + url) : h('a', { href: url, target: '_blank', rel: 'noopener', onclick: (e) => e.stopPropagation() }, 'PR ' + url.replace(/^https?:\/\/(www\.)?/, ''));
 const jobLink = (id, text) => h('a', { href: '#/job/' + id }, text || id);
 
 
