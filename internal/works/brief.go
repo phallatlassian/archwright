@@ -138,6 +138,8 @@ func (b Brief) Render(guild, standards string, round int, reason string) string 
 	w.WriteString("\n## Returning your result\n\nWhen finished, call `archwright tool report_result` with JSON on stdin:\n" +
 		"`{\"status\":\"done|blocked|failed\",\"result\":\"<pointer to the result>\",\"evidence\":[...],\"observations\":[...],\"uncertainty\":\"...\"}`.\n" +
 		"Return large artifacts by pointer. Put anything outside your remit under `observations`.\n" +
+		"You may be running in plan mode, which limits file edits only: this call is always allowed, and it is how you end. " +
+		"A run that ends without it is recorded as failed. Put your findings or review in `result` and `evidence`, not only in your last message.\n" +
 		"\n## Asking\n\nIf you need a human decision, a manual step done, or something clarified, call `archwright tool ask` with JSON on stdin:\n" +
 		"`{\"kind\":\"decision|manual-step|clarification\",\"blocking\":true,\"why\":\"...\",\"questions\":[{\"id\":\"q1\",\"text\":\"...\",\"options\":[...],\"default\":\"<recommended option>\"}]}`.\n" +
 		"With `blocking` true, stop right after the call and end your run without reporting a result: your task is parked, and a fresh run starts with this brief plus the answers. " +

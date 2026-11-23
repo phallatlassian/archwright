@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/phallatlassian/archwright/internal/defs"
@@ -596,7 +598,8 @@ func (r *Runs) start(d store.Dispatch) error {
 	if err := r.st.StartRunRecord(env.Run, d.JobID, d.ID, d.Guild, "", "", d.WardenRun); err != nil {
 		log.Printf("run %s: recording it for the dashboard: %v", env.Run, err)
 	}
-	trace := r.traceFor(env.Run)
+	last := &lastWords{}
+	trace := last.wrap(r.traceFor(env.Run))
 	// Each run has its own context so the developer can cancel one Wright.
 	ctx, cancel := context.WithCancel(r.bg)
 	r.mu.Lock()
@@ -660,12 +663,86 @@ func (r *Runs) start(d store.Dispatch) error {
 			msg := "the run ended without reporting a result"
 			if runErr != nil {
 				msg = "the run failed: " + runErr.Error()
+			} else if t := last.text(); t != "" {
+				msg += "; its last message was:\n" + clipRunes(t, lastWordsMax) // a Wright that wrote its findings but never reported them
 			}
 			r.failDispatch(d.ID, msg)
 		}
 		r.sched.finished(d.ID, runErr == nil)
 	}()
 	return nil
+}
+
+// lastWordsMax caps how much of a Wright's last message a failure keeps.
+const lastWordsMax = 8000
+
+// lastWords remembers a run's last message, so a Wright that ends without
+// calling report_result does not lose what it wrote (a read-only reviewer's
+// findings, say): the failure carries it to the Warden.
+type lastWords struct {
+	mu  sync.Mutex
+	msg string
+}
+
+func (l *lastWords) text() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.msg
+}
+
+// wrap returns t that also notes each message and final result the runner reports.
+func (l *lastWords) wrap(t Trace) Trace {
+	next := t.Event
+	t.Event = func(kind, summary string, raw json.RawMessage) {
+		if kind == "message" || kind == "result" {
+			if m := eventText(summary, raw); m != "" {
+				l.mu.Lock()
+				l.msg = m
+				l.mu.Unlock()
+			}
+		}
+		if next != nil {
+			next(kind, summary, raw)
+		}
+	}
+	return t
+}
+
+// eventText is the full text of a message or result event: the vendor's own
+// result string, or its text blocks, falling back to the one-line summary.
+func eventText(summary string, raw json.RawMessage) string {
+	var ev struct {
+		Result  string `json:"result"`
+		Message struct {
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"message"`
+	}
+	if json.Unmarshal(raw, &ev) == nil {
+		if strings.TrimSpace(ev.Result) != "" {
+			return ev.Result
+		}
+		var parts []string
+		for _, b := range ev.Message.Content {
+			if b.Type == "text" && strings.TrimSpace(b.Text) != "" {
+				parts = append(parts, b.Text)
+			}
+		}
+		if len(parts) > 0 {
+			return strings.Join(parts, "\n\n")
+		}
+	}
+	return summary
+}
+
+// clipRunes cuts s to at most n runes, saying so.
+func clipRunes(s string, n int) string {
+	if r := []rune(s); len(r) > n {
+		return string(r[:n]) + "\n[cut: the message was longer]"
+	}
+	return s
 }
 
 // traceFor is where a run's timeline and usage are recorded for the dashboard.
