@@ -67,15 +67,30 @@ func TestVerifyCatchesTampering(t *testing.T) {
 func TestForksOverrideUpstreamAndRecordTheirBase(t *testing.T) {
 	c := Vendored()
 	prov, _ := c.Provenance()
-	forked := map[string]bool{}
+	forked := map[string]Fork{}
 	for _, f := range prov.Forks {
-		forked[f.Name] = true
+		forked[f.Name] = f
 		if len(f.UpstreamFiles) == 0 {
 			t.Errorf("fork %s records no upstream hashes", f.Name)
 		}
+		if len(strings.Fields(f.Edited)) < 5 {
+			t.Errorf("fork %s has no edit note: %q", f.Name, f.Edited)
+		}
+		// the base hashes are the upstream files the fork was made from, all of them
+		for rel, sum := range f.UpstreamFiles {
+			if prov.Files[rel] != sum {
+				t.Errorf("fork %s records %s as %s, but the vendored upstream is %s", f.Name, rel, sum, prov.Files[rel])
+			}
+		}
+		for rel := range prov.Files {
+			if strings.HasPrefix(rel, f.Name+"/") && f.UpstreamFiles[rel] == "" {
+				t.Errorf("fork %s does not record its upstream %s", f.Name, rel)
+			}
+		}
 	}
-	for _, name := range []string{"implement-spec", "code-review", "triage", "pr"} {
-		if !forked[name] {
+	// Forks the Works dispatches through, and forks a Wright follows.
+	for _, name := range []string{"implement-spec", "code-review", "triage", "pr", "implement", "tdd", "codebase-design", "research"} {
+		if _, ok := forked[name]; !ok {
 			t.Errorf("%s is not recorded as a fork", name)
 		}
 		fork, err := c.Skill(name)
@@ -87,18 +102,93 @@ func TestForksOverrideUpstreamAndRecordTheirBase(t *testing.T) {
 			t.Fatal(err)
 		}
 		up, _ := os.ReadFile(filepath.Join("vendor", "upstream", name, "SKILL.md"))
-		if string(b) == string(up) || !strings.Contains(string(b), "archwright tool") {
-			t.Errorf("%s is not the Works-dispatching fork", name)
+		if string(b) == string(up) || !strings.Contains(string(b), "Factory fork of upstream `"+name+"`") {
+			t.Errorf("%s is not the factory's fork", name)
 		}
 	}
-	tdd, _ := c.Skill("tdd")
-	b, _ := readFile(tdd, "SKILL.md")
-	up, _ := os.ReadFile(filepath.Join("vendor", "upstream", "tdd", "SKILL.md"))
-	if string(b) != string(up) {
-		t.Error("an unforked skill is vendored verbatim")
+	for _, name := range []string{"implement-spec", "code-review", "triage", "pr", "implement"} {
+		fork, _ := c.Skill(name)
+		b, _ := readFile(fork, "SKILL.md")
+		if !strings.Contains(string(b), "archwright tool") {
+			t.Errorf("%s does not use the Works' tools", name)
+		}
+	}
+	// diagnosing-bugs and prototype wait for #164 and #165: still verbatim upstream.
+	for _, name := range []string{"diagnosing-bugs", "prototype"} {
+		skill, err := c.Skill(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := readFile(skill, "SKILL.md")
+		up, _ := os.ReadFile(filepath.Join("vendor", "upstream", name, "SKILL.md"))
+		if string(b) != string(up) {
+			t.Errorf("%s is forked, but it is vendored verbatim until its grilling ticket is decided", name)
+		}
+		if _, ok := forked[name]; ok {
+			t.Errorf("%s is recorded as a fork", name)
+		}
 	}
 	if _, err := c.Skill("no-such-skill"); err == nil {
 		t.Error("unknown skill")
+	}
+}
+
+// Upstream implement tells the agent to do five things a Wright must not
+// (#160); the fork must not carry them.
+func TestImplementForkLacksTheInstructionsAWrightCannotFollow(t *testing.T) {
+	fork, err := Vendored().Skill("implement")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := readFile(fork, "SKILL.md")
+	text := string(b)
+	for _, banned := range []string{
+		"fetch it from the issue tracker",
+		"Run typechecking regularly, single test files regularly",
+		`call the Skill tool with "code-review"`,
+		"Commit your work to the current branch",
+		"If the reference is ambiguous, ask.",
+	} {
+		if strings.Contains(strings.ToLower(text), strings.ToLower(banned)) {
+			t.Errorf("implement still says %q", banned)
+		}
+	}
+	for _, want := range []string{"read_issue", "run_gate", "archwright tool ask", "Never run `git add` or `git commit`"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("implement does not say %q", want)
+		}
+	}
+	if strings.Contains(text, "code-review") {
+		t.Error("implement names code-review, which is not in Masonry's set")
+	}
+}
+
+// Every fork a Wright or Warden of Masonry, Survey or Hallmark follows reads
+// the Job's issue with read_issue and asks with archwright tool ask (#160).
+func TestForksOfTheSkillUsingGuildsUseTheWorksTools(t *testing.T) {
+	for _, guild := range skillUsingGuilds {
+		for _, s := range shippedGuildSkills(t, guild) {
+			b, _ := readFile(s, "SKILL.md")
+			for _, want := range []string{"read_issue", "archwright tool ask"} {
+				if !strings.Contains(string(b), want) {
+					t.Errorf("%s (%s) does not mention %s", s.Name, guild, want)
+				}
+			}
+		}
+	}
+}
+
+func TestResearchForkDoesTheResearchItself(t *testing.T) {
+	fork, err := Vendored().Skill("research")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := readFile(fork, "SKILL.md")
+	if strings.Contains(strings.ToLower(string(b)), "spin up") {
+		t.Error("research still spins up an agent")
+	}
+	if !strings.Contains(string(b), "no background agent") {
+		t.Error("research does not say the run does the research itself")
 	}
 }
 

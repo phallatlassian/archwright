@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/phallatlassian/archwright/internal/skills"
 )
 
 // Brief is what a Warden gives a Wright through dispatch_wright (ADR 0006).
@@ -43,6 +45,23 @@ const agentRules = "## Working rules\n\n" +
 // its commits.
 const wrightRules = "- Never run `go`, `make` or the Site's test, lint or type-check commands yourself: your sandbox denies them. To check your work, call `archwright tool run_gate` with `{}` on stdin to run every gate, or `{\"gate\":\"test\"}` (also `lint`, `typecheck`) to run one. The Works runs it on a snapshot of your worktree, uncommitted files included, and returns each gate's result. Calls are limited, so make your changes before each call.\n" +
 	"- Never run `git add` or `git commit` for your changes (unless this brief itself tells you to make a commit, such as a merge): leave them in the worktree. When you report, the Works commits it to your branch, never committing run scaffolding such as `.agents/` or `.claude/`.\n"
+
+// skillsSection tells an agent which skills it was given and to use them
+// (#160): a run that is merely handed skills never calls one. It lists only
+// the skills the agent can invoke, and is empty when there are none. handback
+// is where the agent names the ones it used.
+func skillsSection(invocable []skills.Info, handback string) string {
+	if len(invocable) == 0 {
+		return ""
+	}
+	var w strings.Builder
+	w.WriteString("## Skills\n\nThese skills are installed for this run:\n\n")
+	for _, s := range invocable {
+		fmt.Fprintf(&w, "- `%s`: %s\n", s.Name, s.Description)
+	}
+	fmt.Fprintf(&w, "\nBefore you start, if one of these fits what you are about to do, invoke it with the Skill tool and follow it. Name the skills you used in your handback, under %s.\n", handback)
+	return w.String()
+}
 
 func blank(s string) bool { return strings.TrimSpace(s) == "" }
 
@@ -106,9 +125,10 @@ func bullets(w *strings.Builder, items []string) {
 }
 
 // Render writes the brief the Wright receives: the Warden's fields, the
-// Guild's standards, and how to return the result. round and reason are set
-// for a rework, which is a fresh run (ADR 0003) and so is told what was wrong.
-func (b Brief) Render(guild, standards string, round int, reason string) string {
+// Guild's standards, the Guild's skills the Wright can invoke, and how to
+// return the result. round and reason are set for a rework, which is a fresh
+// run (ADR 0003) and so is told what was wrong.
+func (b Brief) Render(guild, standards string, invocable []skills.Info, round int, reason string) string {
 	var w strings.Builder
 	w.WriteString("# Brief\n\n")
 	if round > 0 {
@@ -133,6 +153,9 @@ func (b Brief) Render(guild, standards string, round int, reason string) string 
 		w.WriteString(s + "\n")
 	} else {
 		w.WriteString("(the Guild states no standards)\n")
+	}
+	if s := skillsSection(invocable, "`observations` or `evidence`"); s != "" {
+		w.WriteString("\n" + s)
 	}
 	w.WriteString("\n" + strings.TrimSuffix(agentRules, "\n") + wrightRules + "\n")
 	w.WriteString("\n## Returning your result\n\nWhen finished, call `archwright tool report_result` with JSON on stdin:\n" +

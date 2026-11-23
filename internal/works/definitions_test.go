@@ -64,15 +64,15 @@ func TestGuildsFromRegistryBindsAndFailsOnUnmetCapability(t *testing.T) {
 	cfg := t.TempDir()
 	reg := defs.New(defs.Shipped(), cfg)
 	reg.Reload()
-	g, err := GuildsFromRegistry(reg, DefaultProfiles())("survey")
+	g, err := GuildsFromRegistry(reg, DefaultProfiles(), nil)("survey")
 	if err != nil || g.Binding.Access != defs.ReadOnly || !g.Binding.DetachedWorktree || g.Standards == "" {
 		t.Fatalf("%+v %v", g, err)
 	}
-	if _, err := GuildsFromRegistry(reg, DefaultProfiles())("nowhere"); !errors.Is(err, errInvalidInput) {
+	if _, err := GuildsFromRegistry(reg, DefaultProfiles(), nil)("nowhere"); !errors.Is(err, errInvalidInput) {
 		t.Errorf("unknown guild: %v", err)
 	}
 	weak := map[string]defs.Profile{"claude": {}, "codex": {}}
-	if _, err := GuildsFromRegistry(reg, weak)("survey"); !errors.Is(err, errInvalidInput) {
+	if _, err := GuildsFromRegistry(reg, weak, nil)("survey"); !errors.Is(err, errInvalidInput) {
 		t.Errorf("read-only guild bound to a runner that cannot enforce it: %v", err)
 	}
 	// A developer override that widens nothing the runner lacks still loads;
@@ -85,7 +85,7 @@ func TestGuildsFromRegistryBindsAndFailsOnUnmetCapability(t *testing.T) {
 	if errs := reg.Reload(); len(errs) != 1 {
 		t.Fatalf("errors: %v", errs)
 	}
-	if g, _ := GuildsFromRegistry(reg, DefaultProfiles())("survey"); g.Standards == "x" {
+	if g, _ := GuildsFromRegistry(reg, DefaultProfiles(), nil)("survey"); g.Standards == "x" {
 		t.Error("invalid override took effect")
 	}
 }
