@@ -87,6 +87,40 @@ func TestBoardPlacesJobsByState(t *testing.T) {
 	}
 }
 
+func TestBoardNamesAJobWhoseStepsAllHandedBack(t *testing.T) {
+	d := newDash(t, Limits{})
+	if _, err := d.st.SetPlan(d.job.ID, []store.Step{{ID: "a", Guild: "masonry", Title: "build"}}); err != nil {
+		t.Fatal(err)
+	}
+	p, _ := d.st.GetPlan(d.job.ID)
+	d.post("/jobs/"+d.job.ID+"/plan/approve", `{"updated_at":"`+p.UpdatedAt.Format("2006-01-02T15:04:05.999999999Z07:00")+`"}`)
+	allow := func(plan store.Plan, runs []store.StepRun) (string, string, error) { return "masonry", "b", nil }
+	if _, err := d.st.StartStep(d.job.ID, "a", allow); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.st.FailStep(d.job.ID, "a", "boom"); err != nil {
+		t.Fatal(err)
+	}
+	if got := d.board()[d.job.ID].State; got != BoardIdle {
+		t.Fatalf("a failed step is not handed back: %s", got)
+	}
+	if _, err := d.st.StartStep(d.job.ID, "a", allow); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.st.HandBackStep(d.job.ID, "a", 0, "done", "built", nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := d.board()[d.job.ID].State; got != BoardComplete {
+		t.Fatalf("every step handed back, no PR: %s", got)
+	}
+	if err := d.st.RecordPR(d.job.ID, "https://github.com/o/r/pull/9"); err != nil {
+		t.Fatal(err)
+	}
+	if b := d.board()[d.job.ID]; b.State != BoardPROpen || b.PR != "https://github.com/o/r/pull/9" {
+		t.Fatalf("every step handed back, PR recorded: %+v", b)
+	}
+}
+
 func TestRunDrillDownAndUsageComeFromTheRun(t *testing.T) {
 	d := newDash(t, Limits{})
 	d.send("p1")

@@ -11,21 +11,24 @@ const (
 	BoardPaused    = "paused"      // the developer paused it
 	BoardRunning   = "running"     // a Wright or Review is queued or running
 	BoardPlanning  = "planning"    // no Plan yet
+	BoardPROpen    = "pr-open"     // every Plan step handed back and the Job's PR is open: awaiting your accept
+	BoardComplete  = "complete"    // every Plan step handed back and no PR was recorded: awaiting your accept
 	BoardIdle      = "in-progress" // between steps: waiting for the Archwright's next move
 )
 
 // BoardJob is one Job on the dashboard's board, with the state it is placed by.
 type BoardJob struct {
 	store.Job
-	State        string  `json:"state"`
-	Approval     string  `json:"plan_approval,omitempty"`
-	Jig          string  `json:"jig,omitempty"`
-	Steps        int     `json:"steps"`
-	LiveRuns     int     `json:"live_runs"`
-	OpenAsks     int     `json:"open_asks"`
-	CostUSD      float64 `json:"cost_usd"`
-	InputTokens  int     `json:"input_tokens"`
-	OutputTokens int     `json:"output_tokens"`
+	State         string  `json:"state"`
+	Approval      string  `json:"plan_approval,omitempty"`
+	Jig           string  `json:"jig,omitempty"`
+	Steps         int     `json:"steps"`
+	LiveRuns      int     `json:"live_runs"`
+	OpenAsks      int     `json:"open_asks"`
+	AllHandedBack bool    `json:"-"` // a Plan with steps, every one of them handed back
+	CostUSD       float64 `json:"cost_usd"`
+	InputTokens   int     `json:"input_tokens"`
+	OutputTokens  int     `json:"output_tokens"`
 }
 
 // Board lists every Job across Sites with the state it sits in.
@@ -76,6 +79,20 @@ func Board(st *store.Store) ([]BoardJob, error) {
 				b.LiveRuns++
 			}
 		}
+		if b.Steps > 0 {
+			runs, err := st.StepRuns(j.ID)
+			if err != nil {
+				return nil, err
+			}
+			handed := map[string]bool{}
+			for _, sr := range runs {
+				handed[sr.Step] = sr.Status == store.StepHandedBack
+			}
+			b.AllHandedBack = true
+			for _, s := range full.Plan.Steps {
+				b.AllHandedBack = b.AllHandedBack && handed[s.ID]
+			}
+		}
 		t := spent[j.ID]
 		b.InputTokens, b.OutputTokens, b.CostUSD = t.in, t.out, t.cost
 		b.State = boardState(b, full)
@@ -100,6 +117,10 @@ func boardState(b BoardJob, full JobWithPlan) string {
 		return BoardRunning
 	case full.Plan == nil:
 		return BoardPlanning
+	case b.AllHandedBack && b.PR != "":
+		return BoardPROpen
+	case b.AllHandedBack:
+		return BoardComplete
 	}
 	return BoardIdle
 }
