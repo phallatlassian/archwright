@@ -45,6 +45,11 @@ func (r *Runs) inboxChanged() {
 				defer r.nudges.Done()
 				if err := postNudge(*s); err != nil {
 					log.Printf("nudging the Archwright session: %v", err)
+					// works.log is not always where the developer looks, so the
+					// failure is also an event, which events.log tees.
+					if err := r.st.AppendEvent("", "nudge.failed", map[string]string{"error": err.Error()}); err != nil {
+						log.Printf("recording the failed nudge: %v", err)
+					}
 				}
 			}()
 		}
@@ -99,7 +104,9 @@ func (r *Runs) syncUnread(ru *run) {
 }
 
 // postNudge posts the nudge to the session's socket: the auth line, then one
-// line of plain text.
+// NDJSON user message. The message shape is undocumented (anthropics/claude-code
+// #103048); this one was verified against Claude Code 2.1.285. A bare text line
+// is accepted by the socket but never delivered.
 func postNudge(s session) error {
 	conn, err := net.DialTimeout("unix", s.socket, nudgeTimeout)
 	if err != nil {
@@ -116,6 +123,19 @@ func postNudge(s session) error {
 	if err != nil {
 		return err
 	}
-	_, err = conn.Write([]byte(string(auth) + "\n" + launch.Nudge + "\n"))
+	msg, err := json.Marshal(struct {
+		Type    string `json:"type"`
+		Message struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		} `json:"message"`
+	}{Type: "user", Message: struct {
+		Role    string `json:"role"`
+		Content string `json:"content"`
+	}{"user", launch.Nudge}})
+	if err != nil {
+		return err
+	}
+	_, err = conn.Write([]byte(string(auth) + "\n" + string(msg) + "\n"))
 	return err
 }
