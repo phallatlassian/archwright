@@ -226,7 +226,7 @@ func (r *Runs) priorWork(job store.Job) (string, error) {
 	r.mu.Unlock()
 	if sm != nil && job.Site != "" {
 		if t, err := sm.IntegrationPushTarget(job.ID); err == nil {
-			fmt.Fprintf(&w, "The accepted pieces are merged into the Job's integration branch `%s` on Site %s, based on `%s`. The change under work is `git diff %s...%s`; the Inputs named in this step refer to it.\n\n", t.Branch, job.Site, t.DefaultBranch, t.DefaultBranch, t.Branch)
+			fmt.Fprintf(&w, "The accepted pieces are merged into the Job's integration branch `%s` on Site %s, based on `%s`; the Inputs named in this step refer to that work. Your own checkout is empty, so do not run git against it: read the work through inspect_wright.\n\n", t.Branch, job.Site, t.DefaultBranch)
 		}
 	}
 	w.WriteString("Accepted pieces; inspect_wright takes these names (not step ids or Input labels):\n" + strings.Join(accepted, "\n"))

@@ -29,7 +29,7 @@ func newRig(t *testing.T, script map[string][]WrightResult) *rig {
 	r, st := newRuns(t)
 	runner := NewFakeRunner(script)
 	r.Configure(func(name string) (Guild, error) {
-		if name != "masonry" {
+		if name != "masonry" && name != "hallmark" {
 			return Guild{}, errInvalidInput
 		}
 		return Guild{Name: name, Standards: "Write tests first."}, nil
@@ -420,6 +420,12 @@ func TestWardenIsScopedToItsJobAndGuild(t *testing.T) {
 	ow, _ := g.r.StartFor(RoleWarden, t.TempDir(), RunContext{Job: other.ID, Guild: "masonry"})
 	g.fails(ow, "inspect_wright", `{"piece":"p"}`, spool.CodeNotFound)
 	g.fails(ow, "accept_piece", `{"piece":"p"}`, spool.CodeNotFound)
+	// a Warden of another Guild in the same Job can inspect the piece but not change it
+	hw, _ := g.r.StartFor(RoleWarden, t.TempDir(), RunContext{Job: g.job.ID, Guild: "hallmark"})
+	var insp Inspection
+	g.ok(hw, "inspect_wright", `{"piece":"p"}`, &insp)
+	g.fails(hw, "accept_piece", `{"piece":"p"}`, spool.CodeNotFound)
+	g.fails(hw, "rework_wright", `{"piece":"p","reason":"x"}`, spool.CodeNotFound)
 	// an unknown Guild cannot dispatch
 	bad, _ := g.r.StartFor(RoleWarden, t.TempDir(), RunContext{Job: g.job.ID, Guild: "wizards"})
 	g.fails(bad, "dispatch_wright", `{"piece":"x","brief":`+goodBrief+`}`, spool.CodeInvalidInput)
