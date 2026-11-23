@@ -6,6 +6,8 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -93,8 +95,16 @@ func TestAnInboxInsertPostsOneNudgeWithNoItemContent(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := sess.next(t)
-	if len(got) != 2 || got[0] != `{"type":"auth","token":"sock-token"}` || got[1] != launch.Nudge {
-		t.Fatalf("lines on the socket: %q", got)
+	// The message shape is undocumented (anthropics/claude-code#103048); this
+	// one was verified against Claude Code 2.1.285, where the session shows it
+	// as a message from another Claude session. A bare text line is accepted
+	// by the socket but never delivered.
+	want := []string{
+		`{"type":"auth","token":"sock-token"}`,
+		`{"type":"user","message":{"role":"user","content":` + strconv.Quote(launch.Nudge) + `}}`,
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("lines on the socket: %q, want %q", got, want)
 	}
 	if strings.Contains(strings.Join(got, "\n"), "SECRET") {
 		t.Fatalf("the nudge carried item content: %q", got)
@@ -128,6 +138,32 @@ func TestASocketErrorNeverFailsTheInsert(t *testing.T) {
 	if unread, _ := st.Inbox(true); len(unread) != 1 {
 		t.Fatalf("the item must be filed: %+v", unread)
 	}
+}
+
+func TestAFailedPostIsReportedInEventsLog(t *testing.T) {
+	r, st := newRuns(t)
+	env := startRun(t, r, RoleArchwright)
+	register(t, env, filepath.Join(os.TempDir(), "aw-no-such-socket"))
+	if _, err := st.QueueCommand("instruct", "", "x", nil); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		evs, err := st.EventsAfter(0, "", 100)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range evs {
+			if e.Type == "nudge.failed" {
+				if line := FormatEvent(e); !strings.Contains(line, "aw-no-such-socket") {
+					t.Fatalf("the log line must say why: %q", line)
+				}
+				return
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("a failed post left no nudge.failed event")
 }
 
 func TestNoSessionNoNudgeAndAnEndedRunClearsIt(t *testing.T) {
