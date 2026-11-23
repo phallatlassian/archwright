@@ -616,7 +616,9 @@ func (r *Runs) start(d store.Dispatch) error {
 		if runErr == nil && d.Round > 0 && !isMergeWright(d.Piece) && wt != "" {
 			brief += startingPoint(from)
 		}
-		r.recordBrief(env.Run, brief)
+		if runErr == nil {
+			r.recordBrief(env.Run, brief) // a run that never starts was not given it
+		}
 		var extra map[string]string
 		if runErr == nil {
 			extra, runErr = r.deliverSkillsFor(d, env.Run, wt)
