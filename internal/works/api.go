@@ -247,6 +247,15 @@ func newHandler(st *store.Store, runs *Runs, sm *sites.Manager, token string, pi
 		}
 		reply(w, 200, evs)
 	})
+	// The prompt a run was started with: the exact text, or for an older run the brief its dispatch or step kept.
+	mux.HandleFunc("GET /runs/{id}/brief", func(w http.ResponseWriter, r *http.Request) {
+		b, err := st.RunBrief(r.PathValue("id"))
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		reply(w, 200, b)
+	})
 	mux.HandleFunc("GET /runs/{id}/events/{seq}/raw", func(w http.ResponseWriter, r *http.Request) {
 		seq, err := strconv.Atoi(r.PathValue("seq"))
 		if err != nil {

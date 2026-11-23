@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 
 const code = fs.readFileSync(process.argv[2], 'utf8');
-const m = vm.runInNewContext(code + '\n;({ fmtDur, runRows, runSpan, barLayout, axisTicks, transcriptItems, loadRaws })', {});
+const m = vm.runInNewContext(code + '\n;({ fmtDur, runRows, runSpan, barLayout, axisTicks, transcriptItems, loadRaws, briefView })', {});
 
 // The code under test runs in its own realm, so its arrays are not this realm's: compare them as plain JSON.
 const eq = (actual, want) => assert.deepEqual(JSON.parse(JSON.stringify(actual)), want);
@@ -15,6 +15,20 @@ const at = (min, sec = 0) => new Date(Date.UTC(2026, 0, 1, 0, min, sec)).toISOSt
 const run = (id, o) => ({ run_id: id, job_id: 'j', guild: 'masonry', runner: 'claude', input_tokens: 0, output_tokens: 0, cost_usd: 0, status: 'done', ...o });
 
 const tests = {
+  'the brief view counts lines and says when the prompt is not exact'() {
+    eq(m.briefView({ brief: 'a\nb\nc\n', source: 'recorded' }), { available: true, text: 'a\nb\nc\n', lines: 3, exact: true, note: '' });
+    const old = m.briefView({ brief: 'one', source: 'dispatch' });
+    assert.equal(old.lines, 1);
+    assert.equal(old.exact, false);
+    assert.match(old.note, /not recorded.*its dispatch kept/);
+    assert.match(m.briefView({ brief: 'x', source: 'step' }).note, /its step kept/);
+  },
+
+  'a run with no brief says it is not available'() {
+    const none = 'The brief this agent was started with is not available.';
+    for (const b of [{ brief: '', source: 'none' }, null, undefined, {}]) eq(m.briefView(b), { available: false, text: none });
+  },
+
   'durations read in s, m and h'() {
     eq([0, 45000, 330000, 9900000, 39660000, 3599600].map(m.fmtDur), ['0s', '45s', '5m30s', '2h45m', '11h01m', '1h00m']);
     assert.equal(m.fmtDur(null), '');

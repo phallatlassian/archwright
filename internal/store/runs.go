@@ -36,6 +36,20 @@ type RunEvent struct {
 	At      time.Time `json:"at"`
 }
 
+// Where a run's brief came from.
+const (
+	BriefRecorded     = "recorded" // the exact prompt, saved when the run started
+	BriefFromDispatch = "dispatch" // a run from before: its dispatch's rendered brief
+	BriefFromStep     = "step"     // a run from before: its step's brief
+	BriefNone         = "none"
+)
+
+// RunBrief is the prompt a run was started with.
+type RunBrief struct {
+	Text   string `json:"brief"`
+	Source string `json:"source"`
+}
+
 // UsageRow is usage and cost totalled for one Job, Guild and runner.
 type UsageRow struct {
 	JobID        string  `json:"job_id"`
@@ -65,6 +79,41 @@ func (s *Store) StartRunRecord(runID, jobID, dispatchID, guild, runner, step, pa
 		return err
 	}
 	return tx.Commit()
+}
+
+// SetRunBrief records the exact prompt a run was started with.
+func (s *Store) SetRunBrief(runID, brief string) error {
+	res, err := s.db.Exec("UPDATE run_records SET brief = ? WHERE run_id = ?", brief, runID)
+	return mustChange(res, err, runID)
+}
+
+// RunBrief returns the prompt a run was started with. A run from before it was
+// recorded falls back to its dispatch's rendered brief or its step's brief,
+// which can lack what was added at run start; with neither it is empty.
+func (s *Store) RunBrief(runID string) (RunBrief, error) {
+	var recorded sql.NullString
+	var jobID, dispatchID, step string
+	err := s.db.QueryRow("SELECT brief, job_id, dispatch_id, COALESCE(step,'') FROM run_records WHERE run_id = ?", runID).Scan(&recorded, &jobID, &dispatchID, &step)
+	if errors.Is(err, sql.ErrNoRows) {
+		return RunBrief{}, fmt.Errorf("run %q: %w", runID, ErrNotFound)
+	}
+	if err != nil {
+		return RunBrief{}, err
+	}
+	if recorded.Valid {
+		return RunBrief{Text: recorded.String, Source: BriefRecorded}, nil
+	}
+	if dispatchID != "" {
+		if d, err := s.GetDispatch(dispatchID); err == nil && d.Rendered != "" {
+			return RunBrief{Text: d.Rendered, Source: BriefFromDispatch}, nil
+		}
+	}
+	if step != "" {
+		if sr, err := s.GetStepRun(jobID, step); err == nil && sr.Brief != "" {
+			return RunBrief{Text: sr.Brief, Source: BriefFromStep}, nil
+		}
+	}
+	return RunBrief{Source: BriefNone}, nil
 }
 
 // SetRunUsage records what a run consumed and which runner ran it.

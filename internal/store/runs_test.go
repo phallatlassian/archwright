@@ -130,3 +130,67 @@ func TestADispatchRemembersTheWardenRunThatCreatedItAcrossReworkAndRestart(t *te
 		t.Fatalf("a rework is the reworking Warden's: %+v %v", re, err)
 	}
 }
+
+func TestRunBriefIsTheRecordedPromptWithFallbacks(t *testing.T) {
+	s, _ := open(t)
+	j := jobWithPlan(t, s)
+	if _, err := s.StartStep(j.ID, "a", allowStart("masonry", "step brief")); err != nil {
+		t.Fatal(err)
+	}
+	d, err := s.NewPiece(j.ID, "masonry", "p", "w-1", json.RawMessage(`{}`), "rendered brief")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct{ run, dispatch, step string }{{"w-1", "", "a"}, {"r-1", d.ID, ""}, {"x-1", "", ""}} {
+		if err := s.StartRunRecord(c.run, j.ID, c.dispatch, "masonry", "", c.step, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Before the prompt is recorded: the dispatch's or the step's brief, else nothing.
+	for run, want := range map[string]RunBrief{
+		"w-1": {Text: "step brief", Source: BriefFromStep},
+		"r-1": {Text: "rendered brief", Source: BriefFromDispatch},
+		"x-1": {Source: BriefNone},
+	} {
+		if got, err := s.RunBrief(run); err != nil || got != want {
+			t.Fatalf("%s: %+v %v, want %+v", run, got, err, want)
+		}
+	}
+
+	// Recorded: it wins over the fallbacks, and an empty prompt still counts as recorded.
+	if err := s.SetRunBrief("r-1", "rendered brief\n\nStarting point"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.RunBrief("r-1"); got != (RunBrief{Text: "rendered brief\n\nStarting point", Source: BriefRecorded}) {
+		t.Fatalf("%+v", got)
+	}
+	if err := s.SetRunBrief("nope", "x"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("%v", err)
+	}
+	if _, err := s.RunBrief("nope"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("%v", err)
+	}
+
+	// The brief is a summary: purging raw run content keeps it.
+	for _, run := range []string{"w-1", "r-1", "x-1"} {
+		if err := s.EndRunRecord(run, "done"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.FailStep(j.ID, "a", "x"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RecordResult(d.ID, json.RawMessage(`{"status":"done"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CloseJob(j.ID, "accepted"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PurgeJob(j.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.RunBrief("r-1"); got.Source != BriefRecorded {
+		t.Fatalf("purge dropped the brief: %+v", got)
+	}
+}

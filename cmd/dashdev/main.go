@@ -307,6 +307,9 @@ func (s *server) api() http.Handler {
 		return map[string]any{"reviews": orEmpty(j.Reviews), "next": next}
 	})
 	read("/runs/{id}/events", func(r *http.Request) (any, string) { return orEmpty(wd.Events[r.PathValue("id")]), "" })
+	read("/runs/{id}/brief", func(r *http.Request) (any, string) {
+		return store.RunBrief{Text: "You are a mock agent for run " + r.PathValue("id") + ".\n\nDo the mock work.\n", Source: store.BriefRecorded}, ""
+	})
 	read("/runs/{id}/events/{seq}/raw", func(r *http.Request) (any, string) {
 		if raw, ok := wd.Raw[r.PathValue("id")+"/"+r.PathValue("seq")]; ok {
 			return raw, ""

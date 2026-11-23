@@ -154,6 +154,14 @@ func TestRunDrillDownAndUsageComeFromTheRun(t *testing.T) {
 	if code, _ := d.do("POST", "/runs/"+run.RunID+"/events", "{}", nil); code == 200 {
 		t.Error("the drill-down is read-only")
 	}
+	var rb store.RunBrief
+	code, body = d.do("GET", "/runs/"+run.RunID+"/brief", "", nil)
+	if code != 200 || json.Unmarshal([]byte(body), &rb) != nil || rb.Source != store.BriefRecorded || rb.Text == "" {
+		t.Fatalf("the brief of a run: %d %s", code, body)
+	}
+	if code, _ := d.do("GET", "/runs/nope/brief", "", nil); code != 404 {
+		t.Errorf("a missing run's brief: %d", code)
+	}
 	var use []store.UsageRow
 	_, body = d.do("GET", "/usage", "", nil)
 	json.Unmarshal([]byte(body), &use)

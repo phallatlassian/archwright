@@ -266,6 +266,7 @@ func (r *Runs) startReview(jobID string) (store.Review, error) {
 	if err := r.st.StartRunRecord(env.Run, jobID, "", g.Name, "", "", ""); err != nil {
 		log.Printf("run %s: recording it for the dashboard: %v", env.Run, err)
 	}
+	r.recordBrief(env.Run, brief)
 	go func() {
 		defer r.wg.Done()
 		extra, runErr := r.deliverGuildSkills(g.Name, env.Run, wt.Path, nil)

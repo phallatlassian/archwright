@@ -303,6 +303,16 @@ func TestAWorksRestartMidStepResummonsTheWarden(t *testing.T) {
 			if len(reqs) != 1 || !reqs[0].Resumed || !strings.Contains(reqs[0].Brief, "## Resumed") {
 				t.Fatalf("requests: %+v", reqs)
 			}
+			recs, _ := st2.RunRecords(job.ID)
+			var resumed store.RunBrief
+			for _, rec := range recs {
+				if rec.Step == "a" {
+					resumed, _ = st2.RunBrief(rec.RunID)
+				}
+			}
+			if resumed.Source != store.BriefRecorded || resumed.Text != reqs[0].Brief {
+				t.Fatalf("the Warden's run did not record the brief it restarted with: %+v", resumed)
+			}
 			if items, _ := st2.Inbox(true); len(items) != 1 || items[0].Name != "step_handback" {
 				t.Fatalf("inbox: %+v", items)
 			}
