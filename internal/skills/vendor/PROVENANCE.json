@@ -22,7 +22,7 @@
     {
       "name": "codebase-design",
       "upstream": "upstream/codebase-design",
-      "edited": "for a Wright in the factory (#160): SKILL.md and DESIGN-IT-TWICE.md have the run design the alternatives itself, one after another, and put the comparison in its result, instead of showing a user and spawning parallel sub-agents; DEEPENING.md is unchanged",
+      "edited": "for a Wright in the factory (#160): SKILL.md and DESIGN-IT-TWICE.md have the run design the alternatives itself, one after another, and put the comparison in its result, instead of showing a user and spawning parallel sub-agents; SKILL.md also reads the source issue with read_issue, checks with run_gate, leaves changes in the worktree and asks with ask; DEEPENING.md is unchanged",
       "upstream_files": {
         "codebase-design/agents/openai.yaml": "edebc9e4fcfe102114012575eaa9600b9b5fd08c311664f389c36e7bc717740f",
         "codebase-design/DEEPENING.md": "f3dd099ce99289bd213914d8ee3e2429b78309c3957ca4583f7659551b1d53c1",
@@ -51,7 +51,7 @@
     {
       "name": "pr",
       "upstream": "upstream/pr",
-      "edited": "opens the PR through the Works' Forge tools (read_issue, push_branch, open_pr) instead of gh or git push (ADR 0022); asks with ask when the PR's content is unclear (#160)",
+      "edited": "opens the PR through the Works' Forge tools (read_issue, push_branch, open_pr) instead of gh or git push (ADR 0022); asks with ask when the PR's content is unclear; says it runs no checks and makes no commits (#160)",
       "upstream_files": {
         "pr/agents/openai.yaml": "2295b586624db4ef546f3fd4695492f039d941a46d8a1593a702ce3ca511b8ad",
         "pr/CREDITS.md": "a7a087127665d7298a72280ef6e19c41ad8404523712a788c8dc3ab414bc2497",
@@ -70,7 +70,7 @@
     {
       "name": "tdd",
       "upstream": "upstream/tdd",
-      "edited": "for a Wright in the factory (#160): seams come from the brief instead of being confirmed with the user (ask only if a wrong choice changes what gets built); tests run through run_gate, never go or make; changes stay in the worktree for the Works to commit; drops the reference to the code-review skill, which is not in Masonry's set",
+      "edited": "for a Wright in the factory (#160): seams come from the brief instead of being confirmed with the user (ask only if a wrong choice changes what gets built); tests run through run_gate, never go or make; changes stay in the worktree for the Works to commit; reads the source issue with read_issue and asks with ask; the refactoring bullet no longer sends the agent to the code-review skill, which is not in Masonry's set",
       "upstream_files": {
         "tdd/agents/openai.yaml": "ea6f01cf1b8c06a4b0f5b649d74b1b8ce8685e72af1b38d70d877693e092af0b",
         "tdd/mocking.md": "3ceb807fdf4a47d6a93d4d9a891e5ba6d362a6247bd08adc451feebfc17361ef",

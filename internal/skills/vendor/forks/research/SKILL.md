@@ -1,9 +1,9 @@
 ---
 name: research
-description: Investigate a question against high-trust primary sources and capture the findings as a Markdown file in the repo. Use when a topic needs researching or docs or API facts need gathering.
+description: Investigate a question against high-trust primary sources and report the findings with their sources. Use when a topic needs researching or docs or API facts need gathering.
 ---
 
-Factory fork of upstream `research` (see `PROVENANCE.json`). You are the researcher: the run itself does the research, with no background agent. You are read-only, so you write no file in the repo: your findings go in your result.
+Factory fork of upstream `research` (see `PROVENANCE.json`). You are the researcher: the run itself does the research, with no background agent. You are read-only, so you write no file in the repo and have nothing to check or commit (never run `go` or `make`): your findings go in your result.
 
 Your job:
 

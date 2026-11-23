@@ -9,7 +9,7 @@ metadata:
     url: "https://github.com/humanlayer/skills/blob/main/plugins/show-me/skills/show-me/SKILL.md"
 ---
 
-Factory fork of upstream `pr` (see `PROVENANCE.json`). You are a Warden. The Works holds the developer's credentials and performs every Forge action itself (ADR 0022), so you open the PR with the Forge tools in "Opening the PR" below. Never run `gh` and never run `git push`: both fail in a run's sandbox.
+Factory fork of upstream `pr` (see `PROVENANCE.json`). You are a Warden. The Works holds the developer's credentials and performs every Forge action itself (ADR 0022), so you open the PR with the Forge tools in "Opening the PR" below. Never run `gh` and never run `git push`: both fail in a run's sandbox. You run no checks (never `go` or `make`) and make no commits: the Works commits the work.
 
 Use this template for writing the PR body:
 

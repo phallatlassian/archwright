@@ -163,6 +163,21 @@ func TestImplementForkLacksTheInstructionsAWrightCannotFollow(t *testing.T) {
 	}
 }
 
+// Every fork a Wright or Warden of Masonry, Survey or Hallmark follows reads
+// the Job's issue with read_issue and asks with archwright tool ask (#160).
+func TestForksOfTheSkillUsingGuildsUseTheWorksTools(t *testing.T) {
+	for _, guild := range skillUsingGuilds {
+		for _, s := range shippedGuildSkills(t, guild) {
+			b, _ := readFile(s, "SKILL.md")
+			for _, want := range []string{"read_issue", "archwright tool ask"} {
+				if !strings.Contains(string(b), want) {
+					t.Errorf("%s (%s) does not mention %s", s.Name, guild, want)
+				}
+			}
+		}
+	}
+}
+
 func TestResearchForkDoesTheResearchItself(t *testing.T) {
 	fork, err := Vendored().Skill("research")
 	if err != nil {
