@@ -371,3 +371,21 @@ func TestStepBriefNamesPriorWork(t *testing.T) {
 		t.Fatalf("empty prior work rendered:\n%s", none)
 	}
 }
+
+func TestPriorWorkNamesAcceptedPiecesAndIntegrationBranch(t *testing.T) {
+	g := newGateRig(t, store.Gates{})
+	if got, err := g.r.priorWork(g.job); err != nil || got != "" {
+		t.Fatalf("nothing accepted yet: %q, %v", got, err)
+	}
+	g.dispatch("fix-pagination")
+	g.ok(g.warden, "accept_piece", `{"piece":"fix-pagination"}`, nil)
+	got, err := g.r.priorWork(g.job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"fix-pagination", g.worktree.Branch, "git diff main..." + g.worktree.Branch} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("prior work lacks %q:\n%s", want, got)
+		}
+	}
+}

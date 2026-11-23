@@ -112,7 +112,10 @@ func (r *Runs) startStep(jobID, stepID string) (store.StepRun, error) {
 	case src == nil:
 		return store.StepRun{}, fmt.Errorf("%w: no guilds are configured", errInvalidInput)
 	}
-	prior := r.priorWork(job)
+	prior, err := r.priorWork(job)
+	if err != nil {
+		return store.StepRun{}, err
+	}
 	sr, err := r.st.StartStep(jobID, stepID, func(plan store.Plan, runs []store.StepRun) (string, string, error) {
 		if !plan.Cleared() {
 			return "", "", fmt.Errorf("the Plan of job %q is %s: the developer must approve an ad hoc Plan before a step starts: %w", jobID, plan.Approval, store.ErrConflict)
@@ -203,10 +206,10 @@ func renderStepBrief(job store.Job, step store.Step, g Guild, charter, prior str
 // by name. A step's Inputs, such as "fix.diff", are only labels; without this
 // a reviewing Warden has nothing to inspect (a Warden's own checkout is empty
 // by design). Empty when nothing was accepted yet.
-func (r *Runs) priorWork(job store.Job) string {
+func (r *Runs) priorWork(job store.Job) (string, error) {
 	pieces, err := r.st.Pieces(job.ID)
 	if err != nil {
-		return ""
+		return "", err
 	}
 	var accepted []string
 	for _, p := range pieces {
@@ -215,7 +218,7 @@ func (r *Runs) priorWork(job store.Job) string {
 		}
 	}
 	if len(accepted) == 0 {
-		return ""
+		return "", nil
 	}
 	var w strings.Builder
 	r.mu.Lock()
@@ -227,7 +230,7 @@ func (r *Runs) priorWork(job store.Job) string {
 		}
 	}
 	w.WriteString("Accepted pieces; inspect_wright takes these names (not step ids or Input labels):\n" + strings.Join(accepted, "\n"))
-	return w.String()
+	return w.String(), nil
 }
 
 // resumeNote tells a re-summoned Warden what the Wrights recorded so far.
