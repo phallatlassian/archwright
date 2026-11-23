@@ -172,7 +172,11 @@ func (s *Store) HandBackStep(jobID, stepID string, handbackID int64, handbackSta
 	if err := addInbox(tx, at, InboxReport, "step_handback", jobID, summary, map[string]any{"step": stepID, "handback_id": handbackID, "status": handbackStatus, "body": body}, 0); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	s.notifyInbox()
+	return nil
 }
 
 // FailStep ends a running step whose Warden could not finish, and tells the
@@ -197,5 +201,9 @@ func (s *Store) FailStep(jobID, stepID, reason string) error {
 	if err := addInbox(tx, at, InboxReport, "step_failed", jobID, fmt.Sprintf("Step %s failed: %s", stepID, reason), map[string]any{"step": stepID, "reason": reason}, 0); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	s.notifyInbox()
+	return nil
 }

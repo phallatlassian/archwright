@@ -3,6 +3,7 @@ package store
 import (
 	"encoding/json"
 	"errors"
+	"slices"
 	"testing"
 )
 
@@ -101,5 +102,41 @@ func TestPauseAndResumeAreRefusedOutOfState(t *testing.T) {
 	}
 	if ids, _ := s.PausedJobs(); len(ids) != 0 {
 		t.Fatalf("%v", ids)
+	}
+}
+
+func TestEveryInboxInsertNotifiesOnceAfterItCommits(t *testing.T) {
+	s, _ := open(t)
+	j := jobWithPlan(t, s)
+	var seen []int
+	s.SetInboxNotifier(func() {
+		unread, _ := s.Inbox(true) // the item is already committed when the notifier runs
+		seen = append(seen, len(unread))
+	})
+	id, err := s.QueueCommand("cancel_job", j.ID, "cancel", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReportCommand(id, "pause_job", j.ID, j.ID, "paused", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.StartStep(j.ID, "a", allowStart("masonry", "b")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.HandBackStep(j.ID, "a", 1, "done", "ok", nil); err != nil {
+		t.Fatal(err)
+	}
+	j2 := jobWithPlan(t, s)
+	if _, err := s.StartStep(j2.ID, "a", allowStart("masonry", "b")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.FailStep(j2.ID, "a", "boom"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.FailStep(j2.ID, "a", "again"); err != nil { // a no-op files nothing, so nudges nothing
+		t.Fatal(err)
+	}
+	if want := []int{1, 2, 3, 4}; !slices.Equal(seen, want) {
+		t.Fatalf("unread counts at each notification: %v, want %v", seen, want)
 	}
 }

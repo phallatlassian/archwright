@@ -12,13 +12,36 @@ import (
 // Call makes one tool call to the Works over the run's spool.
 type Call func(tool string, input json.RawMessage) (json.RawMessage, error)
 
-// Hook runs one of the Archwright's hooks and writes what the runner expects
-// on stdout. A hook never fails the session: when the Works does not answer
-// it says so in context and the Archwright falls back to polling.
-func Hook(event string, call Call, out io.Writer) error {
+// Environment variables a Claude Code session exports, before any hook runs,
+// when it has an inbox socket (v2.1.224+ on macOS and Linux): a message posted
+// there starts a turn in an idle session and reaches a running one between
+// tool calls.
+const (
+	EnvMessagingSocket = "CLAUDE_CODE_MESSAGING_SOCKET"
+	EnvMessagingToken  = "CLAUDE_CODE_MESSAGING_TOKEN"
+)
+
+// PostToolCap bounds the inbox text a PostToolUse hook adds to the context;
+// what does not fit stays unread for the next hook or turn.
+const PostToolCap = 10000
+
+// Hook is HookEnv in an environment with no inbox socket.
+func Hook(event string, call Call, out io.Writer) error { return HookEnv(event, call, nil, out) }
+
+// HookEnv runs one of the Archwright's hooks and writes what the runner
+// expects on stdout; getenv is the hook's environment, which says where the
+// session's inbox socket is. A hook never fails the session: when the Works
+// does not answer it says so in context and the Archwright falls back to polling.
+func HookEnv(event string, call Call, getenv func(string) string, out io.Writer) error {
 	switch event {
 	case "session-start":
-		return sessionStart(call, out)
+		return sessionStart(call, getenv, out)
+	case "post-tool":
+		text, err := inboxCapped(call, PostToolCap)
+		if err != nil || text == "" {
+			return nil
+		}
+		return emitContext(out, "PostToolUse", text)
 	case "prompt":
 		text, err := inbox(call)
 		if err != nil || text == "" {
@@ -40,9 +63,12 @@ func emitContext(out io.Writer, event, text string) error {
 }
 
 // sessionStart rehydrates the session from the store: the Jobs and the unread inbox.
-func sessionStart(call Call, out io.Writer) error {
+func sessionStart(call Call, getenv func(string) string, out io.Writer) error {
 	var b strings.Builder
 	b.WriteString(HooksMarker + "\n")
+	if registerSession(call, getenv) {
+		b.WriteString(NudgeMarker + " A short message to read your inbox wakes you when an item arrives, even between turns.\n")
+	}
 	jobs, err := call("list_jobs", nil)
 	if err != nil {
 		fmt.Fprintf(&b, "The Works did not answer (%v): poll with `archwright tool list_jobs` and `archwright tool read_inbox`.", err)
@@ -54,6 +80,22 @@ func sessionStart(call Call, out io.Writer) error {
 		b.WriteString(text)
 	}
 	return emitContext(out, "SessionStart", b.String())
+}
+
+// registerSession tells the Works where this session's inbox socket is, so it
+// can nudge the session when an item arrives. It reports whether the Works
+// took it; a session without a socket, or a Works that refuses, falls back to
+// the hooks and to waiting in read_inbox.
+func registerSession(call Call, getenv func(string) string) bool {
+	if getenv == nil || getenv(EnvMessagingSocket) == "" {
+		return false
+	}
+	in, err := json.Marshal(map[string]string{"socket": getenv(EnvMessagingSocket), "token": getenv(EnvMessagingToken)})
+	if err != nil {
+		return false
+	}
+	_, err = call("register_session", in)
+	return err == nil
 }
 
 // catalogueContext is the trimmed roster: each Guild's name, intake, handback
@@ -110,9 +152,29 @@ func catalogueContext(call Call) string {
 	return b.String()
 }
 
+// inboxHeader opens every inbox delivery.
+const inboxHeader = InboxMarker + " Items from the developer's dashboard:\n"
+
+// InboxLine renders one inbox item for the Archwright.
+func InboxLine(it store.InboxItem) string {
+	job := ""
+	if it.JobID != "" {
+		job = " (Job " + it.JobID + ")"
+	}
+	return fmt.Sprintf("- %s: %s%s\n", it.Name, it.Summary, job)
+}
+
 // inbox reads the unread items, each delivered once, and renders them; "" if none.
-func inbox(call Call) (string, error) {
-	raw, err := call("read_inbox", nil)
+func inbox(call Call) (string, error) { return inboxCapped(call, 0) }
+
+// inboxCapped is inbox limited to about limit characters of text (0 for no
+// limit); the Works leaves the items that do not fit unread.
+func inboxCapped(call Call, limit int) (string, error) {
+	var in json.RawMessage
+	if limit > 0 {
+		in, _ = json.Marshal(map[string]int{"max_chars": limit - len(inboxHeader)})
+	}
+	raw, err := call("read_inbox", in)
 	if err != nil {
 		return "", err
 	}
@@ -124,13 +186,9 @@ func inbox(call Call) (string, error) {
 		return "", nil
 	}
 	var b strings.Builder
-	b.WriteString(InboxMarker + " Items from the developer's dashboard:\n")
+	b.WriteString(inboxHeader)
 	for _, it := range got.Items {
-		job := ""
-		if it.JobID != "" {
-			job = " (Job " + it.JobID + ")"
-		}
-		fmt.Fprintf(&b, "- %s: %s%s\n", it.Name, it.Summary, job)
+		b.WriteString(InboxLine(it))
 	}
 	return b.String(), nil
 }

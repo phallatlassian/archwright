@@ -67,6 +67,9 @@ type Store struct {
 	closeOnce sync.Once
 	closeErr  error
 
+	notifyMu sync.Mutex
+	onInbox  func()
+
 	approvalMu          sync.Mutex
 	approvalFailures    int
 	approvalLockedUntil time.Time

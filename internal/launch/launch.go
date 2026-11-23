@@ -9,6 +9,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"text/template"
@@ -18,6 +19,17 @@ import (
 	"github.com/phallatlassian/archwright/internal/runner"
 	"github.com/phallatlassian/archwright/internal/spool"
 )
+
+// UnreadMarker is the file the Works keeps in the Archwright's spool while its
+// inbox holds unread items, so the PostToolUse hook, which runs after every
+// tool call, calls the Works only when there is something to read.
+const UnreadMarker = "inbox.unread"
+
+// HasUnread reports whether the Works marked the spool's inbox as holding unread items.
+func HasUnread(spoolDir string) bool {
+	_, err := os.Stat(filepath.Join(spoolDir, UnreadMarker))
+	return err == nil
+}
 
 // Runner names the per-install choice.
 const (
@@ -115,6 +127,7 @@ func Settings(exe string) (string, error) {
 	b, err := json.Marshal(map[string]any{"hooks": map[string]any{
 		"SessionStart":     hook("session-start"),
 		"UserPromptSubmit": hook("prompt"),
+		"PostToolUse":      hook("post-tool"),
 		"Stop":             hook("stop"),
 	}})
 	return string(b), err
@@ -125,6 +138,16 @@ func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''
 // HooksMarker opens the session-start hook's context; a Claude session that
 // does not see it knows its hooks are blocked and polls instead.
 const HooksMarker = "[archwright hooks active]"
+
+// NudgeMarker opens the line of the session-start context that says the Works
+// can wake this session; a Claude session that does not see it has no inbox
+// socket and waits in read_inbox after start_step instead of ending its turn.
+const NudgeMarker = "[archwright nudges active]"
+
+// Nudge is the whole of what the Works posts to the session's inbox socket. It
+// carries no inbox content: the inbox stays the source of truth, so pushed text
+// can never carry the developer's authority or instructions.
+const Nudge = "Archwright inbox has unread items: run `archwright tool read_inbox` and act on what it returns."
 
 // InboxMarker opens every inbox delivery.
 const InboxMarker = "[archwright inbox]"
@@ -141,7 +164,7 @@ var instructionsTmpl = template.Must(template.New("archwright.md").Parse(instruc
 func Instructions(site string, hooks bool) string {
 	var b strings.Builder
 	err := instructionsTmpl.Execute(&b, map[string]any{
-		"Site": site, "Hooks": hooks, "HooksMarker": HooksMarker, "InboxMarker": InboxMarker,
+		"Site": site, "Hooks": hooks, "HooksMarker": HooksMarker, "InboxMarker": InboxMarker, "NudgeMarker": NudgeMarker,
 	})
 	if err != nil {
 		panic(err) // the template is embedded and covered by tests

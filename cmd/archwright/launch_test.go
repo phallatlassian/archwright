@@ -2,12 +2,16 @@ package main
 
 import (
 	"encoding/json"
+	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/phallatlassian/archwright/internal/launch"
 	"github.com/phallatlassian/archwright/internal/paths"
 	"github.com/phallatlassian/archwright/internal/works"
 )
@@ -20,6 +24,16 @@ out="$FAKE_OUT"
 pwd -P > "$out/cwd"
 printf '%s\n' "$@" > "$out/args"
 env | grep '^ARCHWRIGHT_' | sort > "$out/env"
+if [ -n "$FAKE_PUSH" ]; then
+  # An idle session: register at start, wait to be nudged, then run a tool call's PostToolUse hook.
+  "$FAKE_ARCHWRIGHT" hook session-start > "$out/session-start"
+  "$FAKE_ARCHWRIGHT" hook post-tool > "$out/post-tool-quiet"
+  : > "$out/ready"
+  i=0; while [ ! -e "$out/go" ] && [ $i -lt 300 ]; do sleep 0.1; i=$((i+1)); done
+  "$FAKE_ARCHWRIGHT" hook post-tool > "$out/post-tool"
+  "$FAKE_ARCHWRIGHT" hook post-tool > "$out/post-tool-again"
+  exit 0
+fi
 if [ -z "$FAKE_NOHOOKS" ]; then
   "$FAKE_ARCHWRIGHT" hook session-start > "$out/session-start"
   "$FAKE_ARCHWRIGHT" hook prompt > "$out/prompt1"
@@ -144,6 +158,85 @@ func TestLaunchStartsRunnerInNeutralHomeWithSiteHintRehydrationAndInbox(t *testi
 	// The run ends with the session: its spool is gone.
 	if _, err := os.Stat(strings.TrimSpace(le.read("spool"))); !os.IsNotExist(err) {
 		t.Fatalf("spool outlived the session: %v", err)
+	}
+}
+
+func TestAnIdleSessionIsNudgedWhenTheInboxGetsAnItemAndThePostToolHookDeliversIt(t *testing.T) {
+	le, checkout := newLaunchEnv(t)
+	le.run("job", "list") // Works up
+	c, _ := works.Running(paths.Dirs{Config: le.cfg, State: le.st})
+
+	sockDir, err := os.MkdirTemp("", "aw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(sockDir)
+	sock := filepath.Join(sockDir, "s.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	nudged := make(chan string, 4)
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			b, _ := io.ReadAll(conn)
+			conn.Close()
+			nudged <- string(b)
+		}
+	}()
+
+	cmd := exec.Command(binary)
+	cmd.Dir = checkout
+	cmd.Env = append(le.env, "FAKE_PUSH=1", "CLAUDE_CODE_MESSAGING_SOCKET="+sock, "CLAUDE_CODE_MESSAGING_TOKEN=sock-token")
+	var out strings.Builder
+	cmd.Stdout, cmd.Stderr = &out, &out
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	exited := make(chan error, 1)
+	go func() { exited <- cmd.Wait() }()
+	waitFor := func(name string) {
+		t.Helper()
+		for i := 0; i < 300; i++ {
+			if _, err := os.Stat(filepath.Join(le.out, name)); err == nil {
+				return
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		t.Fatalf("no %s from the session:\n%s", name, out.String())
+	}
+	waitFor("ready")
+	if !strings.Contains(le.read("session-start"), launch.NudgeMarker) || le.read("post-tool-quiet") != "" {
+		t.Fatalf("start context: %s; quiet post-tool: %q", le.read("session-start"), le.read("post-tool-quiet"))
+	}
+
+	if err := c.Do("POST", "/instruct", map[string]string{"text": "hurry up"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case got := <-nudged:
+		if !strings.Contains(got, launch.Nudge) || !strings.Contains(got, `"token":"sock-token"`) || strings.Contains(got, "hurry up") {
+			t.Fatalf("nudge: %q", got)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the idle session was not nudged")
+	}
+	if err := os.WriteFile(filepath.Join(le.out, "go"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-exited; err != nil {
+		t.Fatalf("%v\n%s", err, out.String())
+	}
+	if got := le.read("post-tool"); !strings.Contains(got, `"PostToolUse"`) || !strings.Contains(got, "hurry up") {
+		t.Fatalf("post-tool context: %q", got)
+	}
+	if got := le.read("post-tool-again"); got != "" {
+		t.Fatalf("an item is delivered once: %q", got)
 	}
 }
 
