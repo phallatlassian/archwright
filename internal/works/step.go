@@ -292,7 +292,7 @@ func (r *Runs) summon(sr store.StepRun, resumed bool) error {
 		r.End(env.Run)
 		return fail(fmt.Errorf("%w: the Works is shutting down", errInvalidInput))
 	}
-	if err := r.st.StartRunRecord(env.Run, sr.JobID, "", sr.Guild, ""); err != nil {
+	if err := r.st.StartRunRecord(env.Run, sr.JobID, "", sr.Guild, "", sr.Step, ""); err != nil {
 		log.Printf("run %s: recording it for the dashboard: %v", env.Run, err)
 	}
 	go func() {

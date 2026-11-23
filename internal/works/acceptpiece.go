@@ -117,7 +117,7 @@ func (c *callCtx) conflictingPiece(g Guild, p store.Piece, d store.Dispatch, pm 
 	b := pieceMergeBrief(p.Piece, d.Branch, pm)
 	raw, _ := json.Marshal(b)
 	piece := fmt.Sprintf("%s-%d", mergePiecePiece, n)
-	md, err := c.st.NewPiece(p.JobID, g.Name, piece, raw, b.Render(g.Name, g.Standards, 0, ""))
+	md, err := c.st.NewPiece(p.JobID, g.Name, piece, c.run.id, raw, b.Render(g.Name, g.Standards, 0, ""))
 	if err != nil {
 		return nil, err
 	}

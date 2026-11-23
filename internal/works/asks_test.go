@@ -209,7 +209,7 @@ func TestCancelDiscardsTheJobAndEndsEveryOpenAsk(t *testing.T) {
 
 func TestNonBlockingAskDoesNotParkTheRun(t *testing.T) {
 	g := newRig(t, nil)
-	d, err := g.st.NewPiece(g.job.ID, "masonry", "p", json.RawMessage(goodBrief), "rendered")
+	d, err := g.st.NewPiece(g.job.ID, "masonry", "p", "", json.RawMessage(goodBrief), "rendered")
 	if err != nil {
 		t.Fatal(err)
 	}

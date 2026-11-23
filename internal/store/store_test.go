@@ -310,9 +310,9 @@ func TestInterruptDispatchesRequeuesRunningFromStoredBrief(t *testing.T) {
 	st, _ := open(t)
 	job, _ := st.CreateJob("J", "")
 	brief := json.RawMessage(`{"goal":"g"}`)
-	run, _ := st.NewPiece(job.ID, "masonry", "a", brief, "rendered a")
-	queued, _ := st.NewPiece(job.ID, "masonry", "b", brief, "rendered b")
-	reported, _ := st.NewPiece(job.ID, "masonry", "c", brief, "rendered c")
+	run, _ := st.NewPiece(job.ID, "masonry", "a", "", brief, "rendered a")
+	queued, _ := st.NewPiece(job.ID, "masonry", "b", "", brief, "rendered b")
+	reported, _ := st.NewPiece(job.ID, "masonry", "c", "", brief, "rendered c")
 	for _, id := range []string{run.ID, reported.ID} {
 		if err := st.StartDispatch(id); err != nil {
 			t.Fatal(err)

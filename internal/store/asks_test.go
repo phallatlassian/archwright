@@ -75,7 +75,7 @@ func TestAskLifecycleInTheStore(t *testing.T) {
 func TestInterruptDispatchesLeavesBlockedDispatchAndPendingAsk(t *testing.T) {
 	st, _ := open(t)
 	job, _ := st.CreateJob("J", "")
-	d, _ := st.NewPiece(job.ID, "masonry", "a", []byte(`{}`), "r")
+	d, _ := st.NewPiece(job.ID, "masonry", "a", "", []byte(`{}`), "r")
 	if err := st.StartDispatch(d.ID); err != nil {
 		t.Fatal(err)
 	}

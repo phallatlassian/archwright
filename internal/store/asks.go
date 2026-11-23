@@ -443,7 +443,7 @@ func (s *Store) AnswerAsk(id, level, by string, answers []Answer, render RenderR
 		if err != nil {
 			return AnswerResult{}, err
 		}
-		next, err := s.insertDispatch(tx, prev.JobID, prev.Guild, prev.Piece, round, prev.Brief, render(prev, qa))
+		next, err := s.insertDispatch(tx, prev.JobID, prev.Guild, prev.Piece, prev.WardenRun, round, prev.Brief, render(prev, qa))
 		if err != nil {
 			return AnswerResult{}, err
 		}
