@@ -194,6 +194,22 @@ func TestRunThatEndsWithoutReportingFailsTheDispatchVisibly(t *testing.T) {
 	}
 }
 
+// A Wright that writes its findings as its last message and never calls
+// report_result must not lose them: the failure carries that message, so the
+// Warden can read the review it would otherwise have to redo.
+func TestRunThatEndsWithoutReportingKeepsItsFinalMessage(t *testing.T) {
+	g := newAgentRig(t, "success.jsonl")
+	g.send(g.warden, "p")
+	d := g.wait("p")
+	var res WrightResult
+	if err := json.Unmarshal(d.Result, &res); err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != ResultFailed || !strings.Contains(res.Uncertainty, "ended without reporting") || !strings.Contains(res.Uncertainty, "last message") || !strings.Contains(res.Uncertainty, "Two files.") {
+		t.Fatalf("result = %s", d.Result)
+	}
+}
+
 func TestFailedAgentRunFailsTheDispatchWithTheVendorReason(t *testing.T) {
 	g := newAgentRig(t, "failed.jsonl")
 	g.send(g.warden, "p")
