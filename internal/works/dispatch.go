@@ -171,12 +171,19 @@ func (c *callCtx) jobRunnable() error {
 	return nil
 }
 
-// pieceOf loads a piece the calling Warden may touch: its own Job and Guild.
-func (c *callCtx) pieceOf(name string) (store.Piece, error) {
+// pieceInJob loads a piece of the calling Warden's Job, whatever its Guild.
+// Only reads use it: a step's brief names earlier steps' pieces, which a
+// Warden of another Guild must be able to inspect.
+func (c *callCtx) pieceInJob(name string) (store.Piece, error) {
 	if err := requireField("piece", name); err != nil {
 		return store.Piece{}, err
 	}
-	p, err := c.st.GetPiece(c.run.ctx.Job, name)
+	return c.st.GetPiece(c.run.ctx.Job, name)
+}
+
+// pieceOf loads a piece the calling Warden may change: its own Job and Guild.
+func (c *callCtx) pieceOf(name string) (store.Piece, error) {
+	p, err := c.pieceInJob(name)
 	if err != nil {
 		return p, err
 	}
@@ -317,7 +324,7 @@ func inspectWright(c *callCtx, in json.RawMessage) (any, error) {
 	if _, err := c.warden(); err != nil {
 		return nil, err
 	}
-	p, err := c.pieceOf(a.Piece)
+	p, err := c.pieceInJob(a.Piece)
 	if err != nil {
 		return nil, err
 	}
@@ -340,7 +347,7 @@ func inspectWright(c *callCtx, in json.RawMessage) (any, error) {
 			return out, nil
 		case <-tick.C:
 		}
-		if p, err = c.pieceOf(a.Piece); err != nil {
+		if p, err = c.pieceInJob(a.Piece); err != nil {
 			return nil, err
 		}
 	}

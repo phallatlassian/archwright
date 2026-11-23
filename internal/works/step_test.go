@@ -383,7 +383,10 @@ func TestPriorWorkNamesAcceptedPiecesAndIntegrationBranch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"fix-pagination", g.worktree.Branch, "git diff main..." + g.worktree.Branch} {
+	if strings.Contains(got, "git diff") {
+		t.Fatalf("brief tells a Warden to run git diff:\n%s", got)
+	}
+	for _, want := range []string{"fix-pagination", "inspect_wright", g.worktree.Branch} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("prior work lacks %q:\n%s", want, got)
 		}
