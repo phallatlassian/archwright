@@ -1,5 +1,5 @@
 name: build
-description: "Build a feature from a spec or ticket that is specific enough to implement, then review it."
+description: "Build a feature from a spec or ticket that is specific enough to implement, then review it and open the pull request."
 parameters:
   - name: ticket
     description: The ticket or spec to build, with its constraints
@@ -14,3 +14,8 @@ steps:
     task: "Review the implementation of: {{ticket}}"
     inputs: [build.diff]
     blocked_by: [build]
+  - id: open-pr
+    guild: masonry
+    task: "Open the pull request for this implementation: {{ticket}}"
+    inputs: [review.verdict]
+    blocked_by: [review]

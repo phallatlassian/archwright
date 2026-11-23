@@ -373,6 +373,17 @@ func wrightWorking(in Inspection) bool {
 	return st == store.DispatchQueued || st == store.DispatchRunning
 }
 
+// handbackSummary is the line the Archwright's inbox shows for a step's
+// handback. The open-pr step's carries the Job's pull request, so the
+// Archwright can give the developer the link without another call.
+func handbackSummary(job store.Job, step, status, guild string) string {
+	s := fmt.Sprintf("Step %s handed back %s by the %s Warden", step, status, guild)
+	if step == OpenPRStep && job.PR != "" {
+		s += ". Pull request: " + job.PR
+	}
+	return s
+}
+
 func handback(c *callCtx, in json.RawMessage) (any, error) {
 	var a HandbackInput
 	if err := decode(in, &a); err != nil {
@@ -424,7 +435,11 @@ func handback(c *callCtx, in json.RawMessage) (any, error) {
 	}
 	c.runs.startGates(c.run.ctx.Job, h.ID)
 	if step := c.run.ctx.Task; step != "" {
-		summary := fmt.Sprintf("Step %s handed back %s by the %s Warden", step, h.Status, c.run.ctx.Guild)
+		job, err := c.st.GetJob(c.run.ctx.Job)
+		if err != nil {
+			return nil, err
+		}
+		summary := handbackSummary(job, step, h.Status, c.run.ctx.Guild)
 		if err := c.st.HandBackStep(c.run.ctx.Job, step, h.ID, h.Status, summary, json.RawMessage(body)); err != nil {
 			return nil, err
 		}

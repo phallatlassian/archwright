@@ -46,7 +46,7 @@ func TestJigPlanDispatchesWithoutApproval(t *testing.T) {
 	g.r.UseDefinitions(reg)
 	var plan store.Plan
 	g.ok(g.arch, "start_jig", `{"job":"`+g.job.ID+`","jig":"fix","params":{"problem":"login breaks"}}`, &plan)
-	if plan.Jig != "fix" || plan.Approval != store.ApprovalNotRequired || len(plan.Steps) != 2 {
+	if plan.Jig != "fix" || plan.Approval != store.ApprovalNotRequired || len(plan.Steps) != 3 {
 		t.Fatalf("%+v", plan)
 	}
 	g.ok(g.warden, "dispatch_wright", `{"piece":"p","brief":`+goodBrief+`}`, nil)

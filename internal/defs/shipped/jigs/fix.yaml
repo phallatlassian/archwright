@@ -1,5 +1,5 @@
 name: fix
-description: "Fix a defect in a Site: reproduce, correct and verify it, then review the fix. Use for a bug report or failing behaviour."
+description: "Fix a defect in a Site: reproduce, correct and verify it, then review the fix and open the pull request. Use for a bug report or failing behaviour."
 parameters:
   - name: problem
     description: The defect, with how to reproduce it
@@ -14,3 +14,8 @@ steps:
     task: "Review the fix for this defect: {{problem}}"
     inputs: [fix.diff]
     blocked_by: [fix]
+  - id: open-pr
+    guild: masonry
+    task: "Open the pull request for this fix: {{problem}}"
+    inputs: [review.verdict]
+    blocked_by: [review]
