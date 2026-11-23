@@ -68,6 +68,25 @@ func errFor(r *Registry, kind, name string) *LoadError {
 	return nil
 }
 
+// The fix and build Jigs end with the open-pr step, blocked by review (ADR 0021):
+// open_pr and push_branch work only for the Warden of a running open-pr step.
+func TestShippedJigsEndWithOpenPR(t *testing.T) {
+	r := New(Shipped(), "")
+	if errs := r.Reload(); len(errs) != 0 {
+		t.Fatalf("shipped definitions invalid: %v", errs)
+	}
+	for _, name := range []string{"fix", "build"} {
+		j, ok := r.Jig(name)
+		if !ok {
+			t.Fatalf("jig %q not shipped", name)
+		}
+		last := j.Steps[len(j.Steps)-1]
+		if last.ID != "open-pr" || last.Guild != "masonry" || len(last.BlockedBy) != 1 || last.BlockedBy[0] != "review" {
+			t.Errorf("jig %q last step = %+v, want open-pr (masonry) blocked by review", name, last)
+		}
+	}
+}
+
 func TestShippedDefinitionsLoad(t *testing.T) {
 	r := New(Shipped(), "")
 	if errs := r.Reload(); len(errs) != 0 {
