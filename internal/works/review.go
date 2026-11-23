@@ -263,7 +263,7 @@ func (r *Runs) startReview(jobID string) (store.Review, error) {
 		r.errorReview(rev.ID, "the Works is shutting down")
 		return store.Review{}, fmt.Errorf("%w: the Works is shutting down", errInvalidInput)
 	}
-	if err := r.st.StartRunRecord(env.Run, jobID, "", g.Name, ""); err != nil {
+	if err := r.st.StartRunRecord(env.Run, jobID, "", g.Name, "", "", ""); err != nil {
 		log.Printf("run %s: recording it for the dashboard: %v", env.Run, err)
 	}
 	go func() {

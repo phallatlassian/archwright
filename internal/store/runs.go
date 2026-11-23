@@ -22,6 +22,8 @@ type RunRecord struct {
 	Status       string     `json:"status"` // running until it ends, then done, failed or cancelled
 	StartedAt    time.Time  `json:"started_at"`
 	EndedAt      *time.Time `json:"ended_at,omitempty"`
+	Step         string     `json:"step,omitempty"`       // the Plan step a Warden's run carries out
+	ParentRun    string     `json:"parent_run,omitempty"` // the Warden run that dispatched a Wright's run
 }
 
 // RunEvent is one entry of a run's timeline. Raw is served apart, on demand.
@@ -45,16 +47,18 @@ type UsageRow struct {
 	CostUSD      float64 `json:"cost_usd"`
 }
 
-// StartRunRecord notes that a run began.
-func (s *Store) StartRunRecord(runID, jobID, dispatchID, guild, runner string) error {
+// StartRunRecord notes that a run began. A Warden's run names the Plan step it
+// carries out and a Wright's the Warden run that dispatched it; the others
+// pass neither.
+func (s *Store) StartRunRecord(runID, jobID, dispatchID, guild, runner, step, parentRun string) error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 	at := s.stamp()
-	if _, err := tx.Exec("INSERT INTO run_records (run_id, job_id, dispatch_id, guild, runner, started_at) VALUES (?,?,?,?,?,?)",
-		runID, jobID, dispatchID, guild, runner, at); err != nil {
+	if _, err := tx.Exec("INSERT INTO run_records (run_id, job_id, dispatch_id, guild, runner, step, parent_run, started_at) VALUES (?,?,?,?,?,NULLIF(?,''),NULLIF(?,''),?)",
+		runID, jobID, dispatchID, guild, runner, step, parentRun, at); err != nil {
 		return err
 	}
 	if err := appendEvent(tx, at, jobID, "run.started", map[string]string{"run": runID, "guild": guild, "runner": runner}); err != nil {
@@ -122,12 +126,12 @@ func (s *Store) AddRunEvent(runID, kind, summary string, raw json.RawMessage) (i
 	return seq, err
 }
 
-const runCols = "run_id, job_id, dispatch_id, guild, runner, input_tokens, output_tokens, cost_usd, status, started_at, COALESCE(ended_at,'')"
+const runCols = "run_id, job_id, dispatch_id, guild, runner, input_tokens, output_tokens, cost_usd, status, started_at, COALESCE(ended_at,''), COALESCE(step,''), COALESCE(parent_run,'')"
 
 func scanRun(r scanner) (RunRecord, error) {
 	var rec RunRecord
 	var start, end string
-	if err := r.Scan(&rec.RunID, &rec.JobID, &rec.DispatchID, &rec.Guild, &rec.Runner, &rec.InputTokens, &rec.OutputTokens, &rec.CostUSD, &rec.Status, &start, &end); err != nil {
+	if err := r.Scan(&rec.RunID, &rec.JobID, &rec.DispatchID, &rec.Guild, &rec.Runner, &rec.InputTokens, &rec.OutputTokens, &rec.CostUSD, &rec.Status, &start, &end, &rec.Step, &rec.ParentRun); err != nil {
 		return RunRecord{}, err
 	}
 	rec.StartedAt, _ = time.Parse(time.RFC3339Nano, start)

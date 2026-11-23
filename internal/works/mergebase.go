@@ -108,7 +108,7 @@ func mergeBase(c *callCtx, in json.RawMessage) (any, error) {
 	b := baseMergeBrief(bm)
 	raw, _ := json.Marshal(b)
 	piece := fmt.Sprintf("%s-%d", mergeBasePiece, n)
-	d, err := c.st.NewPiece(job.ID, g.Name, piece, raw, b.Render(g.Name, g.Standards, 0, ""))
+	d, err := c.st.NewPiece(job.ID, g.Name, piece, c.run.id, raw, b.Render(g.Name, g.Standards, 0, ""))
 	if err != nil {
 		return nil, err
 	}

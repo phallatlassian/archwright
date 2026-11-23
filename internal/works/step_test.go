@@ -392,3 +392,30 @@ func TestPriorWorkNamesAcceptedPiecesAndIntegrationBranch(t *testing.T) {
 		}
 	}
 }
+
+func TestAStepsWardenRunRecordsItsStepAndItsWrightsRunsPointAtIt(t *testing.T) {
+	g := newStepRig(t, true)
+	if resp := g.start("a"); !resp.OK {
+		t.Fatalf("start_step: %+v", resp.Error)
+	}
+	g.waitStatus("a", store.StepHandedBack)
+	var warden, wright store.RunRecord
+	eventually(t, "the Warden's and the Wright's runs to be recorded", func() bool {
+		recs, _ := g.st.RunRecords(g.job.ID)
+		warden, wright = store.RunRecord{}, store.RunRecord{}
+		for _, r := range recs {
+			if r.DispatchID == "" {
+				warden = r
+			} else {
+				wright = r
+			}
+		}
+		return warden.RunID != "" && wright.RunID != ""
+	})
+	if warden.Step != "a" || warden.ParentRun != "" {
+		t.Errorf("the Warden's run: %+v", warden)
+	}
+	if wright.ParentRun != warden.RunID || wright.Step != "" {
+		t.Errorf("the Wright's run: %+v, want parent %s", wright, warden.RunID)
+	}
+}

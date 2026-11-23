@@ -505,3 +505,19 @@ func TestInspectWrightWaitBlocksUntilTheWrightReports(t *testing.T) {
 	g.fails(g.warden, "inspect_wright", `{"piece":"slow","wait_seconds":600}`, spool.CodeInvalidInput)
 	g.fails(g.warden, "inspect_wright", `{"piece":"slow","wait_seconds":-1}`, spool.CodeInvalidInput)
 }
+
+func TestWrightRunsRecordTheWardenRunThatDispatchedThem(t *testing.T) {
+	g := newRig(t, map[string][]WrightResult{"a": {failedResult, doneResult}})
+	g.dispatch("a")
+	g.rework("a")
+	var recs []store.RunRecord
+	eventually(t, "both Wright runs to be recorded", func() bool {
+		recs, _ = g.st.RunRecords(g.job.ID)
+		return len(recs) == 2
+	})
+	for _, rec := range recs {
+		if rec.DispatchID == "" || rec.ParentRun != g.warden.Run || rec.Step != "" {
+			t.Errorf("a Wright's run names the Warden run that dispatched it, and has no step: %+v (Warden run %s)", rec, g.warden.Run)
+		}
+	}
+}

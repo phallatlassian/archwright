@@ -308,6 +308,9 @@ func (s *server) api() http.Handler {
 	})
 	read("/runs/{id}/events", func(r *http.Request) (any, string) { return orEmpty(wd.Events[r.PathValue("id")]), "" })
 	read("/runs/{id}/events/{seq}/raw", func(r *http.Request) (any, string) {
+		if raw, ok := wd.Raw[r.PathValue("id")+"/"+r.PathValue("seq")]; ok {
+			return raw, ""
+		}
 		return map[string]any{"type": "assistant", "run": r.PathValue("id"), "seq": r.PathValue("seq"),
 			"note": "mock vendor event", "message": map[string]any{"role": "assistant", "content": []map[string]string{{"type": "text", "text": "…"}}}}, ""
 	})

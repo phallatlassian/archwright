@@ -90,15 +90,18 @@ function showTip(el, content) {
   tipEl.style.left = left + 'px';
   tipEl.style.top = top + 'px';
 }
-// withTip makes el show build() on hover and focus.
-function withTip(el, build) {
-  el.setAttribute('tabindex', '0');
+// withTip makes el show build() on hover and, when focusable, on focus. An element inside another control
+// is not focusable itself; the control shows its card with showTip.
+function withTip(el, build, focusable = true) {
   el.dataset.tip = '1';
   el._tip = build;
   el.addEventListener('mouseenter', () => showTip(el, build()));
-  el.addEventListener('focus', () => showTip(el, build()));
   el.addEventListener('mouseleave', hideTip);
-  el.addEventListener('blur', hideTip);
+  if (focusable) {
+    el.setAttribute('tabindex', '0');
+    el.addEventListener('focus', () => showTip(el, build()));
+    el.addEventListener('blur', hideTip);
+  }
   return el;
 }
 window.addEventListener('scroll', hideTip, true);
@@ -240,8 +243,9 @@ const views = {
   },
 
   async job(id) {
-    const [full, ds, reviews, runs, wts] = await Promise.all([
+    const [full, ds, reviews, runs, wts, catalogue] = await Promise.all([
       get('/jobs/' + id), get(`/jobs/${id}/dispatches`), get(`/jobs/${id}/reviews`), get(`/jobs/${id}/runs`), get(`/jobs/${id}/worktrees`).catch(() => []),
+      get('/catalogue').catch(() => ({ guilds: [] })), // the Guilds' details are a nicety: the run list still draws without them
     ]);
     const board = (await get('/board')).find((j) => j.id === id);
     const state = board ? board.state : '';
@@ -287,16 +291,7 @@ const views = {
       return [g, [...new Set(mine.map((d) => d.piece))].length, mine.filter((d) => live.includes(d)).length, money(rs.reduce((a, r) => a + r.cost_usd, 0))];
     })) : h('p', { class: 'muted' }, 'No Warden has dispatched work.'));
 
-    parts.push(h('h2', {}, 'Pieces and Wright runs'));
-    parts.push(ds.length ? table(['Piece', 'Guild', 'Round', 'Status', 'Run', 'Runner', 'Tokens in/out', 'Cost'], ds.map((d) => {
-      const r = runs.find((x) => x.dispatch_id === d.id);
-      return [d.piece, d.guild, d.round, tag(d.status),
-        r ? r.status : (d.run_id ? 'run' : ''),
-        r ? r.runner : '', r ? tokens(r.input_tokens) + ' / ' + tokens(r.output_tokens) : '', r ? money(r.cost_usd) : ''];
-    }), ds.map((d) => { // a row opens its run's timeline
-      const run = (runs.find((x) => x.dispatch_id === d.id) || {}).run_id || d.run_id;
-      return run ? '#/run/' + run + '/' + id : '';
-    })) : h('p', { class: 'muted' }, 'No Wrights dispatched.'));
+    parts.push(...runList({ runs, dispatches: ds, guilds: Object.fromEntries(catalogue.guilds.map((g) => [g.name, g])), now: Date.now() }));
 
     if (reviews.reviews && reviews.reviews.length) {
       parts.push(h('h2', {}, 'Reviews'));
@@ -864,7 +859,12 @@ async function refresh() {
     const editing = el && ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName) && $('main').contains(el) && el.type !== 'button';
     if (!editing) {
       const node = await views[name](arg);
-      if (node.innerHTML !== $('main').firstElementChild?.innerHTML || $('main').childElementCount !== 1) { $('main').replaceChildren(node); retip(); };
+      if (node.innerHTML !== $('main').firstElementChild?.innerHTML || $('main').childElementCount !== 1) {
+        const kept = el && el.dataset && el.dataset.fk; // a focused control that names itself keeps focus across the redraw
+        $('main').replaceChildren(node);
+        if (kept) { const again = $('main').querySelector(`[data-fk="${CSS.escape(kept)}"]`); if (again) again.focus({ preventScroll: true }); }
+        retip();
+      }
     }
   } catch (e) {
     $('main').replaceChildren(h('p', { class: 'bad' }, e.message));
@@ -918,6 +918,11 @@ async function connect() {
     await new Promise((r) => setTimeout(r, 2000));
   }
 }
+
+// The header is sticky; what sticks below it (the run list's axis) needs to know how tall it is.
+const fitNav = () => document.documentElement.style.setProperty('--nav-h', document.querySelector('header').offsetHeight + 'px');
+window.addEventListener('resize', fitNav);
+fitNav();
 
 window.addEventListener('hashchange', refresh);
 connect();

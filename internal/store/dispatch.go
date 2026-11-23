@@ -52,7 +52,8 @@ type Dispatch struct {
 	Rendered  string          `json:"rendered"` // the brief as the Wright saw it, Guild standards included
 	Status    string          `json:"status"`
 	Result    json.RawMessage `json:"result,omitempty"`
-	Branch    string          `json:"branch,omitempty"` // the branch the Wright's work is committed to
+	Branch    string          `json:"branch,omitempty"`     // the branch the Wright's work is committed to
+	WardenRun string          `json:"warden_run,omitempty"` // the Warden run that dispatched it
 	CreatedAt time.Time       `json:"created_at"`
 }
 
@@ -77,12 +78,12 @@ type Handback struct {
 	CreatedAt time.Time       `json:"created_at"`
 }
 
-const dispatchCols = "id, job_id, piece, guild, round, run_id, brief, rendered, status, COALESCE(result,''), branch, created_at"
+const dispatchCols = "id, job_id, piece, guild, round, run_id, brief, rendered, status, COALESCE(result,''), branch, COALESCE(warden_run,''), created_at"
 
 func scanDispatch(r scanner) (Dispatch, error) {
 	var d Dispatch
 	var brief, result, at string
-	if err := r.Scan(&d.ID, &d.JobID, &d.Piece, &d.Guild, &d.Round, &d.RunID, &brief, &d.Rendered, &d.Status, &result, &d.Branch, &at); err != nil {
+	if err := r.Scan(&d.ID, &d.JobID, &d.Piece, &d.Guild, &d.Round, &d.RunID, &brief, &d.Rendered, &d.Status, &result, &d.Branch, &d.WardenRun, &at); err != nil {
 		return Dispatch{}, err
 	}
 	d.Brief = json.RawMessage(brief)
@@ -93,8 +94,9 @@ func scanDispatch(r scanner) (Dispatch, error) {
 	return d, nil
 }
 
-// NewPiece opens a piece for a Job and records its first dispatch.
-func (s *Store) NewPiece(jobID, guild, piece string, brief json.RawMessage, rendered string) (Dispatch, error) {
+// NewPiece opens a piece for a Job and records its first dispatch, made in the
+// run of the Warden named by wardenRun.
+func (s *Store) NewPiece(jobID, guild, piece, wardenRun string, brief json.RawMessage, rendered string) (Dispatch, error) {
 	if _, err := s.GetJob(jobID); err != nil {
 		return Dispatch{}, err
 	}
@@ -110,18 +112,18 @@ func (s *Store) NewPiece(jobID, guild, piece string, brief json.RawMessage, rend
 		}
 		return Dispatch{}, err
 	}
-	d, err := s.insertDispatch(tx, jobID, guild, piece, 0, brief, rendered)
+	d, err := s.insertDispatch(tx, jobID, guild, piece, wardenRun, 0, brief, rendered)
 	if err != nil {
 		return Dispatch{}, err
 	}
 	return d, tx.Commit()
 }
 
-func (s *Store) insertDispatch(tx *sql.Tx, jobID, guild, piece string, round int, brief json.RawMessage, rendered string) (Dispatch, error) {
+func (s *Store) insertDispatch(tx *sql.Tx, jobID, guild, piece, wardenRun string, round int, brief json.RawMessage, rendered string) (Dispatch, error) {
 	at := s.stamp()
-	d := Dispatch{ID: newID("dsp-"), JobID: jobID, Piece: piece, Guild: guild, Round: round, Brief: brief, Rendered: rendered, Status: DispatchQueued}
-	if _, err := tx.Exec("INSERT INTO dispatches (id, job_id, piece, guild, round, brief, rendered, status, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
-		d.ID, jobID, piece, guild, round, string(brief), rendered, d.Status, at); err != nil {
+	d := Dispatch{ID: newID("dsp-"), JobID: jobID, Piece: piece, Guild: guild, Round: round, Brief: brief, Rendered: rendered, Status: DispatchQueued, WardenRun: wardenRun}
+	if _, err := tx.Exec("INSERT INTO dispatches (id, job_id, piece, guild, warden_run, round, brief, rendered, status, created_at) VALUES (?,?,?,?,NULLIF(?,''),?,?,?,?,?)",
+		d.ID, jobID, piece, guild, wardenRun, round, string(brief), rendered, d.Status, at); err != nil {
 		return Dispatch{}, err
 	}
 	d.CreatedAt, _ = time.Parse(time.RFC3339Nano, at)
@@ -310,7 +312,7 @@ func (s *Store) InterruptDispatches() ([]Dispatch, error) {
 		if err != nil {
 			return nil, err
 		}
-		n, err := s.insertDispatch(tx, d.JobID, d.Guild, d.Piece, round, d.Brief, d.Rendered)
+		n, err := s.insertDispatch(tx, d.JobID, d.Guild, d.Piece, d.WardenRun, round, d.Brief, d.Rendered)
 		if err != nil {
 			return nil, err
 		}
@@ -357,8 +359,9 @@ func (s *Store) RecordResult(dispatchID string, result json.RawMessage) error {
 // Rework rejects a piece's last result. While the piece has rounds left it
 // starts a fresh dispatch with the amended brief and returns it; once the
 // limit is spent the piece fails with its reason and diagnosis, and no
-// dispatch is returned.
-func (s *Store) Rework(jobID, piece string, limit int, reason, diagnosis string, brief json.RawMessage, rendered string) (Piece, *Dispatch, error) {
+// dispatch is returned. The fresh dispatch is made in the run of the Warden
+// named by wardenRun.
+func (s *Store) Rework(jobID, piece string, limit int, reason, diagnosis, wardenRun string, brief json.RawMessage, rendered string) (Piece, *Dispatch, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return Piece{}, nil, err
@@ -400,7 +403,7 @@ func (s *Store) Rework(jobID, piece string, limit int, reason, diagnosis string,
 	if err != nil {
 		return Piece{}, nil, err
 	}
-	d, err := s.insertDispatch(tx, jobID, p.Guild, piece, round, brief, rendered)
+	d, err := s.insertDispatch(tx, jobID, p.Guild, piece, wardenRun, round, brief, rendered)
 	if err != nil {
 		return Piece{}, nil, err
 	}

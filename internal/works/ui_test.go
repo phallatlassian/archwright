@@ -3,6 +3,7 @@ package works
 import (
 	"encoding/json"
 	"net/http"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -180,5 +181,50 @@ func TestDashboardReadsStepStatusFromTheAPIsStepStates(t *testing.T) {
 		if !strings.Contains(css, want) {
 			t.Errorf("style.css has no %s", want)
 		}
+	}
+}
+
+func TestJobDetailListsEveryRunAndServesItsScriptBeforeTheApp(t *testing.T) {
+	d := newDash(t, Limits{})
+	noAuth := map[string]string{"Authorization": ""}
+	_, page := d.do("GET", "/", "", noAuth)
+	if i, j := strings.Index(page, "/ui/runs.js"), strings.Index(page, "/ui/app.js"); i < 0 || j < 0 || i > j {
+		t.Errorf("runs.js must load before app.js, which starts drawing at once:\n%s", page)
+	}
+	if !strings.Contains(page, "/ui/runs.css") || strings.Contains(page, "style=") {
+		t.Errorf("the page carries inline style or lacks the run list's stylesheet:\n%s", page)
+	}
+	for _, f := range []string{"/ui/runs.js", "/ui/runs.css"} {
+		if code, _ := d.do("GET", f, "", noAuth); code != 200 {
+			t.Errorf("%s: %d", f, code)
+		}
+	}
+	_, js := d.do("GET", "/ui/app.js", "", noAuth)
+	if strings.Contains(js, "Pieces and Wright runs") || !strings.Contains(js, "runList(") {
+		t.Error("the Job detail still has the old Wright-only table")
+	}
+}
+
+func TestDashboardScriptsMakeNoInlineStyleAttributes(t *testing.T) {
+	d := newDash(t, Limits{})
+	for _, f := range []string{"/ui/app.js", "/ui/runs.js"} {
+		_, js := d.do("GET", f, "", map[string]string{"Authorization": ""})
+		for _, banned := range []string{"setAttribute('style'", `setAttribute("style"`, "style=", "innerHTML ="} {
+			if strings.Contains(js, banned) {
+				t.Errorf("%s uses %s, which the page's CSP or its no-HTML-from-the-API rule forbids", f, banned)
+			}
+		}
+	}
+}
+
+// The run list and transcript model is plain JavaScript; its tests run under node, which CI has.
+func TestRunListAndTranscriptModel(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is not installed")
+	}
+	out, err := exec.Command(node, "testdata/runs_model.test.js", "ui/runs.js").CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
 	}
 }

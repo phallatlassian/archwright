@@ -247,7 +247,7 @@ func dispatchWright(c *callCtx, in json.RawMessage) (any, error) {
 		return nil, err
 	}
 	raw, _ := json.Marshal(b)
-	d, err := c.st.NewPiece(c.run.ctx.Job, g.Name, a.Piece, raw, b.Render(g.Name, g.Standards, 0, ""))
+	d, err := c.st.NewPiece(c.run.ctx.Job, g.Name, a.Piece, c.run.id, raw, b.Render(g.Name, g.Standards, 0, ""))
 	if err != nil {
 		return nil, err
 	}
@@ -290,7 +290,7 @@ func reworkWright(c *callCtx, in json.RawMessage) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	p, d, err := c.st.Rework(c.run.ctx.Job, a.Piece, g.reworkLimit(), a.Reason, a.Diagnosis, raw, b.Render(g.Name, g.Standards, piece.Reworks+1, a.Reason)+qaSection(asks))
+	p, d, err := c.st.Rework(c.run.ctx.Job, a.Piece, g.reworkLimit(), a.Reason, a.Diagnosis, c.run.id, raw, b.Render(g.Name, g.Standards, piece.Reworks+1, a.Reason)+qaSection(asks))
 	if err != nil {
 		return nil, err
 	}
@@ -593,7 +593,7 @@ func (r *Runs) start(d store.Dispatch) error {
 		r.wg.Done()
 		return err
 	}
-	if err := r.st.StartRunRecord(env.Run, d.JobID, d.ID, d.Guild, ""); err != nil {
+	if err := r.st.StartRunRecord(env.Run, d.JobID, d.ID, d.Guild, "", "", d.WardenRun); err != nil {
 		log.Printf("run %s: recording it for the dashboard: %v", env.Run, err)
 	}
 	trace := r.traceFor(env.Run)

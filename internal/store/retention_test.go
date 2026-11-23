@@ -16,7 +16,7 @@ func endedJob(t *testing.T, s *Store, title string, ended time.Time) Job {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.NewPiece(j.ID, "masonry", "p1", []byte(`{"goal":"g"}`), "RAW BRIEF with secrets"); err != nil {
+	if _, err := s.NewPiece(j.ID, "masonry", "p1", "", []byte(`{"goal":"g"}`), "RAW BRIEF with secrets"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.db.Exec("UPDATE dispatches SET status = ? WHERE job_id = ?", DispatchReported, j.ID); err != nil {
@@ -97,7 +97,7 @@ func TestPruneRawDryRunChangesNothing(t *testing.T) {
 func TestPruneRawNeverTouchesActiveJobs(t *testing.T) {
 	s, _ := open(t)
 	open1, _ := s.CreateJob("still open", "")
-	s.NewPiece(open1.ID, "masonry", "p1", []byte(`{}`), "RAW")
+	s.NewPiece(open1.ID, "masonry", "p1", "", []byte(`{}`), "RAW")
 	s.db.Exec("UPDATE jobs SET created_at = ? WHERE id = ?", time.Now().Add(-90*24*time.Hour).Format(time.RFC3339Nano), open1.ID)
 
 	// Ended long ago, but a run is still active.
