@@ -298,6 +298,25 @@ func (s *server) api() http.Handler {
 	})
 	withJob("/jobs/{id}/dispatches", func(j *mockJob) any { return orEmpty(j.Dispatches) })
 	withJob("/jobs/{id}/runs", func(j *mockJob) any { return orEmpty(j.Runs) })
+	// PROTOTYPE: the real Works does not serve a Job's step runs yet; the run modal reads a Warden's brief from here.
+	withJob("/jobs/{id}/step-runs", func(j *mockJob) any {
+		var out []store.StepRun
+		for _, r := range j.Runs {
+			if r.DispatchID != "" || r.Step == "" || j.Plan == nil {
+				continue
+			}
+			for _, st := range j.Plan.Steps {
+				if st.ID == r.Step {
+					status := store.StepHandedBack
+					if r.Status == "running" {
+						status = store.StepRunning
+					}
+					out = append(out, store.StepRun{JobID: j.Job.ID, Step: st.ID, Guild: st.Guild, Status: status, Brief: mockWardenBrief(st.Guild, st.ID, st.Title), StartedAt: r.StartedAt})
+				}
+			}
+		}
+		return orEmpty(out)
+	})
 	withJob("/jobs/{id}/worktrees", func(j *mockJob) any { return orEmpty(j.Worktrees) })
 	withJob("/jobs/{id}/reviews", func(j *mockJob) any {
 		next := ""

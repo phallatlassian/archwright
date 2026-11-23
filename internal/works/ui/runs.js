@@ -25,7 +25,7 @@ function runRows(runs, dispatches, now) {
     const start = Date.parse(run.started_at);
     const end = run.ended_at ? Date.parse(run.ended_at) : run.status === 'running' ? Math.max(now, start) : start;
     const d = wright ? byDispatch.get(run.dispatch_id) : null;
-    return { run, kind: wright ? 'wright' : 'warden', name: wright ? (d ? d.piece : '') : run.step || '', status: run.status, start, end, ms: end - start, i };
+    return { run, kind: wright ? 'wright' : 'warden', name: wright ? (d ? d.piece : '') : run.step || '', status: run.status, start, end, ms: end - start, i, dispatch: d };
   }).sort((a, b) => a.start - b.start || a.i - b.i);
   const ids = new Set(rows.map((r) => r.run.run_id));
   rows.forEach((r, n) => { r.n = n + 1; r.indent = r.kind === 'wright' && !!r.run.parent_run && ids.has(r.run.parent_run); });
@@ -244,20 +244,44 @@ function openTranscript(row, guilds) {
   document.body.append(dlg);
   dlg.showModal();
 
+  const briefPromise = runBrief(row); // PROTOTYPE: the brief the agent was started with
   get(`/runs/${run.run_id}/events`).then(async (evs) => {
     const { raws, failed } = await loadRaws(run.run_id, evs);
+    const brief = await briefPromise;
     const { items, fromSummary } = transcriptItems(evs, raws);
     const notes = [];
     if (evs.some((e) => !e.has_raw && TEXT_KINDS.includes(e.kind))) notes.push('The raw content of this run was pruned: showing the summaries that were kept.');
     if (failed) notes.push(`${failed} full message${failed === 1 ? '' : 's'} could not be loaded: showing summaries for them.`);
     const cards = [];
-    body.replaceChildren(...notes.map((n) => h('p', { class: 'tx-pruned muted' }, n)), h('div', { class: 'tx-chat' }, items.length ? items.map((it) => transcriptItem(it, run, cards)) : h('p', { class: 'muted' }, 'This run recorded nothing.')));
+    body.replaceChildren(...notes.map((n) => h('p', { class: 'tx-pruned muted' }, n)), h('div', { class: 'tx-chat' }, briefSection(brief), items.length ? items.map((it) => transcriptItem(it, run, cards)) : h('p', { class: 'muted' }, 'This run recorded nothing.')));
     if (cards.length) {
       let open = false;
       toggle.hidden = false;
       toggle.onclick = () => { open = !open; cards.forEach((c) => { c.open = open; }); toggle.textContent = open ? 'Collapse tool calls' : 'Expand tool calls'; };
     }
   }).catch((e) => body.replaceChildren(h('p', { class: 'bad', role: 'alert' }, e.message)));
+}
+
+// runBrief is the brief the run was started with, as text, or null when it is not available. A Wright's is the
+// rendered brief on its dispatch; a Warden's is the task brief stored with its step (PROTOTYPE: read from
+// /jobs/{id}/step-runs, which only the dev server serves).
+async function runBrief(row) {
+  if (row.dispatch) return row.dispatch.rendered || null;
+  if (!row.run.step) return null;
+  try {
+    const srs = await get(`/jobs/${row.run.job_id}/step-runs`);
+    const sr = srs.find((x) => x.step === row.run.step);
+    return sr ? sr.brief : null;
+  } catch { return null; }
+}
+
+// briefSection is the collapsed "Brief sent to the agent" block at the top of a transcript.
+function briefSection(brief) {
+  if (brief == null) return h('div', { class: 'tx-note muted' }, 'The brief this agent was started with is not available.');
+  const lines = brief.split('\n').length;
+  return h('details', { class: 'tx-brief' },
+    h('summary', {}, h('span', { class: 'tx-brief-name' }, 'Brief'), h('span', { class: 'muted' }, `sent to the agent \u00b7 ${lines} lines`)),
+    h('pre', {}, brief));
 }
 
 function transcriptItem(it, run, cards) {

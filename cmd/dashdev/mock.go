@@ -187,10 +187,28 @@ func investigatePlan(jobID string, at time.Time) *store.Plan {
 	return &store.Plan{JobID: jobID, Steps: s, Jig: "investigate-and-fix", Approval: store.ApprovalNotRequired, UpdatedAt: at}
 }
 
+// mockWrightBrief is the brief a Wright was started with, in the shape the Works renders it.
+func mockWrightBrief(piece, guild string) string {
+	return "# Task: " + piece + "\n\n## Objective\n\nDo the " + piece + " piece for this Job and report what you did.\n\n" +
+		"## Scope\n\n- in: internal/\n- out: vendor/, docs/\n\n## Constraints\n\n- keep changes small\n- do not change public interfaces\n\n" +
+		"## Inputs\n\n- the step brief\n- the Job's request\n\n## Definition of done\n\n- the piece is done\n- the gates pass\n\n" +
+		"## Return shape\n\nA pointer to the result.\n\n## Limits\n\n- timeout: 30 minutes\n- max turns: 50\n\n" +
+		"## " + guild + " Guild standards\n\n- keep changes small\n- write the failing test first\n\n" +
+		"## Returning your result\n\nWhen finished, call `archwright tool report_result` with JSON on stdin:\n" +
+		"`{\"status\":\"done|blocked|failed\",\"result\":\"<pointer to the result>\",\"evidence\":[...],\"observations\":[...],\"uncertainty\":\"...\"}`.\n"
+}
+
+// mockWardenBrief is the task brief a Warden was summoned with for a Plan step.
+func mockWardenBrief(guild, step, title string) string {
+	return "# Task: " + title + "\n\nYou are the " + guild + " Warden for step \"" + step + "\". Work only through the Archwright tools: dispatch_wright, inspect_wright, rework_wright, accept_piece and finally handback.\n\n" +
+		"## Calling the tools\n\nCall each one from the Bash tool as `archwright tool NAME` with JSON on stdin and JSON on stdout.\n\n" +
+		"## The Job's request\n\nFix the reported defect and open a pull request.\n\n## This step\n\n" + title + "\n\n## " + guild + " Guild charter\n\nWork one piece at a time and check each Wright's result before accepting it.\n"
+}
+
 func dispatch(id, jobID, piece, guild string, round int, status, runID string, at time.Time) store.Dispatch {
 	brief, _ := json.Marshal(map[string]string{"piece": piece, "goal": "Mock brief for " + piece})
 	return store.Dispatch{ID: id, JobID: jobID, Piece: piece, Guild: guild, Round: round, RunID: runID,
-		Brief: brief, Rendered: "# Brief\nMock brief for " + piece + "\n\n## Guild standards\n- keep changes small\n",
+		Brief: brief, Rendered: mockWrightBrief(piece, guild),
 		Status: status, CreatedAt: at}
 }
 
