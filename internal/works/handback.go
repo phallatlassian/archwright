@@ -118,7 +118,7 @@ func (h HandbackInput) Validate(pieces []store.Piece) error {
 		}
 	}
 	switch {
-	case len(pieces) == 0:
+	case len(pieces) == 0 && h.Status != HandbackFailed: // a Warden that dispatched nothing can still say it could not proceed
 		return fmt.Errorf("%w: nothing was dispatched for this Job", errInvalidInput)
 	case h.Status == HandbackDone && accepted != len(pieces):
 		return fmt.Errorf("%w: status done, but %d of %d pieces are not accepted", errInvalidInput, len(pieces)-accepted, len(pieces))

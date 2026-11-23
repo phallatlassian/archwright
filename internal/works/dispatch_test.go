@@ -296,6 +296,26 @@ func TestHandbackShapeIsEnforced(t *testing.T) {
 	// a handback before anything is dispatched has nothing to hand back
 	empty := newRig(t, nil)
 	empty.fails(empty.warden, "handback", handbackJSON("done", `"x"`, ""), spool.CodeInvalidInput)
+	empty.fails(empty.warden, "handback", handbackJSON("partial", `"x"`, ""), spool.CodeInvalidInput)
+}
+
+func TestWardenThatDispatchedNothingCanHandBackFailed(t *testing.T) {
+	g := newRig(t, nil)
+	flags := `,"flags":[{"kind":"decision-needed","description":"could not find the fix","evidence":"no piece in this Guild"}]`
+	in := `{"status":"failed","results":[],"checked":["looked for the fix"],"rejected":[],"uncertainty":"could not find the fix"` + flags + `}`
+	var out map[string]any
+	g.ok(g.warden, "handback", in, &out)
+	if out["flags_recorded"] != float64(1) {
+		t.Fatalf("%v", out)
+	}
+	var shown struct{ Status string }
+	g.ok(g.arch, "show_handback", `{"job_id":"`+g.job.ID+`"}`, &shown)
+	if shown.Status != HandbackFailed {
+		t.Fatalf("%+v", shown)
+	}
+	// a failed handback still has to say why
+	g2 := newRig(t, nil)
+	g2.fails(g2.warden, "handback", `{"status":"failed","checked":["x"]}`, spool.CodeInvalidInput)
 }
 
 func TestPartialHandbackKeepsAcceptedPiecesAndParksTheJob(t *testing.T) {
