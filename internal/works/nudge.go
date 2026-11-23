@@ -1,0 +1,110 @@
+package works
+
+import (
+	"encoding/json"
+	"log"
+	"net"
+	"os"
+	"path/filepath"
+	"time"
+
+	"github.com/phallatlassian/archwright/internal/launch"
+)
+
+// Waking an idle Archwright (ADR 0001, 0020): every commit that files an item
+// in the inbox posts a fixed nudge to the session's inbox socket, which starts
+// a turn in an idle Claude Code session and reaches a running one between tool
+// calls. The nudge never carries item content; the inbox stays the source of
+// truth. It also keeps the unread marker the PostToolUse hook checks.
+
+// nudgeTimeout bounds one post to a session's socket.
+const nudgeTimeout = 5 * time.Second
+
+// session is where an Archwright run's interactive session listens.
+type session struct{ socket, token string }
+
+func (ru *run) setSession(socket, token string) {
+	ru.sessMu.Lock()
+	ru.sess = &session{socket, token}
+	ru.sessMu.Unlock()
+}
+
+func (ru *run) session() *session {
+	ru.sessMu.Lock()
+	defer ru.sessMu.Unlock()
+	return ru.sess
+}
+
+// inboxChanged is the store's notifier: an item was filed. It refreshes the
+// unread marker, then nudges every Archwright session, without waiting for it.
+func (r *Runs) inboxChanged() {
+	for _, ru := range r.archwrightRuns() {
+		r.syncUnread(ru)
+		if s := ru.session(); s != nil {
+			r.nudges.Add(1)
+			go func() {
+				defer r.nudges.Done()
+				if err := postNudge(*s); err != nil {
+					log.Printf("nudging the Archwright session: %v", err)
+				}
+			}()
+		}
+	}
+}
+
+func (r *Runs) archwrightRuns() []*run {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []*run
+	for _, ru := range r.runs {
+		if ru.role == RoleArchwright {
+			out = append(out, ru)
+		}
+	}
+	return out
+}
+
+// syncUnread makes the run's unread marker match the inbox: present while an
+// item is unread. A failure leaves the hooks and the nudge to deliver.
+func (r *Runs) syncUnread(ru *run) {
+	if ru == nil || ru.role != RoleArchwright {
+		return
+	}
+	ru.markMu.Lock()
+	defer ru.markMu.Unlock()
+	unread, err := r.st.Inbox(true)
+	if err != nil {
+		log.Printf("the inbox's unread marker: %v", err)
+		return
+	}
+	path := filepath.Join(ru.dir, launch.UnreadMarker)
+	if len(unread) == 0 {
+		os.Remove(path)
+		return
+	}
+	if err := os.WriteFile(path, nil, 0o600); err != nil && !os.IsNotExist(err) {
+		log.Printf("the inbox's unread marker: %v", err)
+	}
+}
+
+// postNudge posts the nudge to the session's socket: the auth line, then one
+// line of plain text.
+func postNudge(s session) error {
+	conn, err := net.DialTimeout("unix", s.socket, nudgeTimeout)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	if err := conn.SetDeadline(time.Now().Add(nudgeTimeout)); err != nil {
+		return err
+	}
+	auth, err := json.Marshal(struct {
+		Type  string `json:"type"`
+		Token string `json:"token"`
+	}{"auth", s.token})
+	if err != nil {
+		return err
+	}
+	_, err = conn.Write([]byte(string(auth) + "\n" + launch.Nudge + "\n"))
+	return err
+}

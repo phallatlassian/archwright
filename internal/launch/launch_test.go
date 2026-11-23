@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -35,7 +36,7 @@ func TestBuildClaudeSuppliesOnlyHooksInSettings(t *testing.T) {
 	if err := json.Unmarshal([]byte(raw), &settings); err != nil {
 		t.Fatal(err)
 	}
-	for _, ev := range []string{"SessionStart", "UserPromptSubmit", "Stop"} {
+	for _, ev := range []string{"SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"} {
 		if got := settings["hooks"][ev][0].Hooks[0].Command; !strings.Contains(got, `'/opt/it'\''s/archwright' hook `) {
 			t.Fatalf("%s command %q", ev, got)
 		}
@@ -215,6 +216,102 @@ func TestHooksNeverFailTheSessionWhenWorksIsDown(t *testing.T) {
 	}
 }
 
+func TestPostToolHookInjectsUnreadItemsAsContextAndIsSilentWithNone(t *testing.T) {
+	var out bytes.Buffer
+	if err := Hook("post-tool", fakeCall(`{"items":[]}`, nil), &out); err != nil || out.Len() != 0 {
+		t.Fatalf("empty inbox: %q %v", out.String(), err)
+	}
+	items := `{"items":[{"name":"step_handback","summary":"fix handed back","job_id":"j1"}]}`
+	if err := Hook("post-tool", fakeCall(items, nil), &out); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"hookEventName":"PostToolUse"`, `"additionalContext"`, InboxMarker, "fix handed back", "(Job j1)"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("missing %q in %s", want, out.String())
+		}
+	}
+	out.Reset()
+	if err := Hook("post-tool", fakeCall("", errors.New("works_unreachable")), &out); err != nil || out.Len() != 0 {
+		t.Fatalf("a Works that does not answer must not fail the session: %q %v", out.String(), err)
+	}
+}
+
+func TestPostToolHookAsksForAtMostTheCapAndTheStopHookForEverything(t *testing.T) {
+	var asked []json.RawMessage
+	call := func(tool string, in json.RawMessage) (json.RawMessage, error) {
+		asked = append(asked, in)
+		return json.RawMessage(`{"items":[]}`), nil
+	}
+	Hook("post-tool", call, &bytes.Buffer{})
+	Hook("stop", call, &bytes.Buffer{})
+	var got struct {
+		MaxChars int `json:"max_chars"`
+	}
+	if err := json.Unmarshal(asked[0], &got); err != nil || got.MaxChars <= 0 || got.MaxChars+len(inboxHeader) != PostToolCap {
+		t.Fatalf("post-tool read_inbox input %s: %+v %v", asked[0], got, err)
+	}
+	if len(asked[1]) != 0 {
+		t.Fatalf("the stop hook reads everything, got %s", asked[1])
+	}
+}
+
+func TestSessionStartRegistersTheInboxSocketAndSaysSo(t *testing.T) {
+	env := func(k string) string {
+		return map[string]string{EnvMessagingSocket: "/tmp/cc/1.sock", EnvMessagingToken: "tok"}[k]
+	}
+	var registered json.RawMessage
+	call := func(tool string, in json.RawMessage) (json.RawMessage, error) {
+		if tool == "register_session" {
+			registered = in
+			return json.RawMessage(`{}`), nil
+		}
+		return fakeCall(`{"items":[]}`, nil)(tool, in)
+	}
+	var out bytes.Buffer
+	if err := HookEnv("session-start", call, env, &out); err != nil {
+		t.Fatal(err)
+	}
+	if string(registered) != `{"socket":"/tmp/cc/1.sock","token":"tok"}` || !strings.Contains(out.String(), NudgeMarker) {
+		t.Fatalf("registered %s; start context %s", registered, out.String())
+	}
+}
+
+func TestSessionStartWithoutASocketOrAnAcceptingWorksClaimsNoNudge(t *testing.T) {
+	withSocket := func(k string) string { return map[string]string{EnvMessagingSocket: "/tmp/cc/1.sock"}[k] }
+	refuse := func(tool string, in json.RawMessage) (json.RawMessage, error) {
+		if tool == "register_session" {
+			return nil, errors.New("forbidden")
+		}
+		return fakeCall(`{"items":[]}`, nil)(tool, in)
+	}
+	for name, c := range map[string]struct {
+		call Call
+		env  func(string) string
+	}{
+		"no socket":     {fakeCall(`{"items":[]}`, nil), func(string) string { return "" }},
+		"no environ":    {fakeCall(`{"items":[]}`, nil), nil},
+		"works refuses": {refuse, withSocket},
+	} {
+		var out bytes.Buffer
+		if err := HookEnv("session-start", c.call, c.env, &out); err != nil || strings.Contains(out.String(), NudgeMarker) || !strings.Contains(out.String(), HooksMarker) {
+			t.Fatalf("%s: %q %v", name, out.String(), err)
+		}
+	}
+}
+
+func TestHasUnreadFollowsTheMarkerFile(t *testing.T) {
+	dir := t.TempDir()
+	if HasUnread(dir) {
+		t.Fatal("no marker, nothing unread")
+	}
+	if err := os.WriteFile(filepath.Join(dir, UnreadMarker), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !HasUnread(dir) {
+		t.Fatal("marker present")
+	}
+}
+
 func TestHomeIsUnderState(t *testing.T) {
 	if got := Home(paths.Dirs{State: "/s"}); got != filepath.Join("/s", "home") {
 		t.Fatal(got)
@@ -238,9 +335,9 @@ func TestInstructionsRenderEachSiteAndHooksCombination(t *testing.T) {
 		hooks        bool
 		want, reject []string
 	}{
-		{"shop", true, []string{`registered Site "shop"`, `create_job {"site": "shop"}`, "Hooks deliver it", HooksMarker, InboxMarker}, []string{"not a registered Site", "Nothing delivers it"}},
+		{"shop", true, []string{`registered Site "shop"`, `create_job {"site": "shop"}`, "Hooks deliver it", HooksMarker, InboxMarker, NudgeMarker, "wait_seconds"}, []string{"not a registered Site", "Nothing delivers it"}},
 		{"", true, []string{"not a registered Site", "Hooks deliver it", HooksMarker}, []string{"registered Site \"", "Nothing delivers it"}},
-		{"shop", false, []string{`registered Site "shop"`, "Nothing delivers it", "read_inbox"}, []string{"Hooks deliver it", HooksMarker, "not a registered Site"}},
+		{"shop", false, []string{`registered Site "shop"`, "Nothing delivers it", "read_inbox", "wait_seconds"}, []string{"Hooks deliver it", HooksMarker, NudgeMarker, "not a registered Site"}},
 		{"", false, []string{"not a registered Site", "Nothing delivers it"}, []string{"Hooks deliver it", HooksMarker, "registered Site \""}},
 	}
 	for _, c := range cases {

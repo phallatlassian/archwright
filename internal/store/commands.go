@@ -56,7 +56,11 @@ func (s *Store) QueueCommand(name, jobID, summary string, args json.RawMessage) 
 	if err := addInbox(tx, at, InboxCommand, name, jobID, summary, commandPayload(args), id); err != nil {
 		return 0, err
 	}
-	return id, tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	s.notifyInbox()
+	return id, nil
 }
 
 // ReportCommand records that the Works executed a mechanical command and tells
@@ -76,13 +80,36 @@ func (s *Store) ReportCommand(eventID int64, name, eventJob, jobID, summary stri
 	if err := addInbox(tx, at, InboxReport, name, jobID, summary, map[string]any{"result": result}, eventID); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	s.notifyInbox()
+	return nil
 }
 
 // FailCommand records that a mechanical command was refused or failed.
 func (s *Store) FailCommand(eventID int64, name, jobID string, cause error) error {
 	_, err := appendEventID(s.db, s.stamp(), jobID, "command.failed", map[string]any{"command": eventID, "name": name, "error": cause.Error()})
 	return err
+}
+
+// SetInboxNotifier registers fn to run after every commit that files an item
+// in the Archwright's inbox, so the Works can tell an idle session to read it.
+// fn runs on the committing goroutine: it must return at once and never fail
+// the insert.
+func (s *Store) SetInboxNotifier(fn func()) {
+	s.notifyMu.Lock()
+	s.onInbox = fn
+	s.notifyMu.Unlock()
+}
+
+func (s *Store) notifyInbox() {
+	s.notifyMu.Lock()
+	fn := s.onInbox
+	s.notifyMu.Unlock()
+	if fn != nil {
+		fn()
+	}
 }
 
 func addInbox(tx execer, at, kind, name, jobID, summary string, payload any, eventID int64) error {
@@ -133,6 +160,14 @@ func (s *Store) Inbox(unreadOnly bool) ([]InboxItem, error) {
 // ReadInbox returns the unread items, oldest first, and marks them read in
 // the same transaction: each item is delivered to the Archwright once.
 func (s *Store) ReadInbox() ([]InboxItem, error) {
+	return s.ReadInboxUpTo(0, nil)
+}
+
+// ReadInboxUpTo is ReadInbox for as many of the oldest unread items as fit in
+// max, each counting size(item); the rest stay unread. The first item is
+// always delivered, so one that is larger than max cannot block the inbox.
+// A max of 0 delivers everything.
+func (s *Store) ReadInboxUpTo(max int, size func(InboxItem) int) ([]InboxItem, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return nil, err
@@ -145,6 +180,14 @@ func (s *Store) ReadInbox() ([]InboxItem, error) {
 	items, err := scanInbox(rows)
 	if err != nil {
 		return nil, err
+	}
+	if max > 0 && size != nil {
+		used, n := 0, 0
+		for n < len(items) && (n == 0 || used+size(items[n]) <= max) {
+			used += size(items[n])
+			n++
+		}
+		items = items[:n]
 	}
 	if len(items) > 0 {
 		if _, err := tx.Exec("UPDATE inbox SET read_at = ? WHERE read_at IS NULL AND id <= ?", s.stamp(), items[len(items)-1].ID); err != nil {

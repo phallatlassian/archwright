@@ -105,11 +105,16 @@ func launchArchwright(dirs paths.Dirs, connect func() (*works.Client, error)) er
 // hook answers one of the Archwright's runner hooks over the run's spool.
 func hook(args []string, stdout io.Writer) error {
 	if len(args) != 1 {
-		return errors.New("usage: archwright hook session-start|prompt|stop")
+		return errors.New("usage: archwright hook session-start|prompt|post-tool|stop")
 	}
 	env, err := spool.EnvFrom(os.Getenv)
 	if err != nil {
 		return err
+	}
+	// PostToolUse runs after every tool call: it asks the Works only when the
+	// Works marked the inbox as holding unread items.
+	if args[0] == "post-tool" && !launch.HasUnread(env.Dir) {
+		return nil
 	}
 	call := func(tool string, input json.RawMessage) (json.RawMessage, error) {
 		resp, err := spool.Call(context.Background(), env, spool.NewID(), tool, input, hookWait)
@@ -121,5 +126,5 @@ func hook(args []string, stdout io.Writer) error {
 		}
 		return resp.Output, nil
 	}
-	return launch.Hook(args[0], call, stdout)
+	return launch.HookEnv(args[0], call, os.Getenv, stdout)
 }

@@ -52,6 +52,7 @@ type Runs struct {
 	bg        context.Context
 	cancelBg  context.CancelFunc
 	wg        sync.WaitGroup
+	nudges    sync.WaitGroup // posts of the inbox nudge still in flight
 
 	// Gates (ADR 0010): where a handback branch is checked out, and each command's limit.
 	sites       *sites.Manager
@@ -83,6 +84,12 @@ type run struct {
 	endingOnce           sync.Once
 	done                 chan struct{}
 
+	// sess is where the session of an Archwright run listens (nudge.go);
+	// markMu serialises the unread marker in the run's spool.
+	sessMu sync.Mutex
+	sess   *session
+	markMu sync.Mutex
+
 	mu    sync.Mutex
 	ended bool
 	// answered remembers each handled request id's response, so a replayed
@@ -95,6 +102,7 @@ func NewRuns(st *store.Store) *Runs {
 	bg, cancel := context.WithCancel(context.Background())
 	r := &Runs{st: st, poll: 25 * time.Millisecond, runs: map[string]*run{}, cancels: map[string]context.CancelFunc{}, cancelled: map[string]bool{}, wrightWts: map[string]string{}, bg: bg, cancelBg: cancel}
 	r.sched = newScheduler(r)
+	st.SetInboxNotifier(r.inboxChanged)
 	return r
 }
 
@@ -212,6 +220,7 @@ func (r *Runs) StartFor(role, root string, rc RunContext) (RunEnv, error) {
 	r.runs[id] = ru
 	r.mu.Unlock()
 	go r.watch(ru)
+	r.syncUnread(ru) // items filed before the run started are unread
 	return RunEnv{Run: id, Role: role, Spool: dir, Token: token}, nil
 }
 
@@ -235,6 +244,7 @@ func (r *Runs) Close() {
 	r.mu.Unlock()
 	r.sched.stop()
 	r.wg.Wait() // dispatched Wrights end their own runs
+	r.nudges.Wait()
 	r.mu.Lock()
 	all := r.runs
 	r.runs = map[string]*run{}
