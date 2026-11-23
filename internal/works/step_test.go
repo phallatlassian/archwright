@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/phallatlassian/archwright/internal/skills"
 	"github.com/phallatlassian/archwright/internal/spool"
 	"github.com/phallatlassian/archwright/internal/store"
 )
@@ -427,5 +428,29 @@ func TestAStepsWardenRunRecordsItsStepAndItsWrightsRunsPointAtIt(t *testing.T) {
 	}
 	if wright.ParentRun != warden.RunID || wright.Step != "" {
 		t.Errorf("the Wright's run: %+v, want parent %s", wright, warden.RunID)
+	}
+}
+
+// A Warden is given its Guild's skills but nothing told it so (#160): its
+// brief lists the invocable ones, and says to name those it used in `checked`.
+func TestStepBriefListsTheSkillsTheWardenCanInvoke(t *testing.T) {
+	g := Guild{Name: "masonry", Skills: []skills.Info{
+		{Name: "implement-spec", Description: "Implement a spec and its tickets."},
+		{Name: "tdd", Description: "Test-driven development."},
+	}}
+	brief := renderStepBrief(store.Job{ID: "j1", Title: "Add login"}, store.Step{ID: "a", Title: "Build"}, g, "", "")
+	for _, want := range []string{
+		"## Skills\n",
+		"- `implement-spec`: Implement a spec and its tickets.\n",
+		"- `tdd`: Test-driven development.\n",
+		"before you start, if one of these fits what you are about to do, invoke it with the Skill tool and follow it",
+		"name the skills you used in your handback, under `checked`",
+	} {
+		if !strings.Contains(strings.ToLower(brief), strings.ToLower(want)) {
+			t.Errorf("step brief lacks %q:\n%s", want, brief)
+		}
+	}
+	if none := renderStepBrief(store.Job{ID: "j1", Title: "Add login"}, store.Step{ID: "a", Title: "Build"}, Guild{Name: "masonry"}, "", ""); strings.Contains(none, "## Skills") {
+		t.Errorf("a Guild with no skills got a Skills section:\n%s", none)
 	}
 }

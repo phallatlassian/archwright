@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/phallatlassian/archwright/internal/defs"
+	"github.com/phallatlassian/archwright/internal/skills"
 	"github.com/phallatlassian/archwright/internal/store"
 )
 
@@ -21,9 +22,10 @@ const DefaultReworkRounds = 2
 // Guild is what the Works needs of a Guild definition to dispatch for it.
 type Guild struct {
 	Name         string
-	Standards    string       // injected into every brief
-	ReworkRounds int          // zero means DefaultReworkRounds
-	Binding      defs.Binding // the permissions its runs get; never wider than the developer's runner configuration
+	Standards    string        // injected into every brief
+	ReworkRounds int           // zero means DefaultReworkRounds
+	Binding      defs.Binding  // the permissions its runs get; never wider than the developer's runner configuration
+	Skills       []skills.Info // the Guild's skills its runner's agent can invoke, listed in the briefs of its runs
 }
 
 func (g Guild) reworkLimit() int {
@@ -38,8 +40,9 @@ type GuildSource func(name string) (Guild, error)
 
 // GuildsFromRegistry serves the loaded Guild definitions. Each lookup binds
 // the Guild to its default runner, so a requirement the runner cannot enforce
-// fails the lookup (ADR 0009).
-func GuildsFromRegistry(reg *defs.Registry, profiles map[string]defs.Profile) GuildSource {
+// fails the lookup (ADR 0009). The catalogue is where the Guild's skills are
+// read from to list them in its briefs; with none, no skill is listed.
+func GuildsFromRegistry(reg *defs.Registry, profiles map[string]defs.Profile, cat *skills.Catalogue) GuildSource {
 	return func(name string) (Guild, error) {
 		g, ok := reg.Guild(name)
 		if !ok {
@@ -49,7 +52,17 @@ func GuildsFromRegistry(reg *defs.Registry, profiles map[string]defs.Profile) Gu
 		if err != nil {
 			return Guild{}, fmt.Errorf("%w: %v", errInvalidInput, err)
 		}
-		return Guild{Name: g.Name, Standards: g.Charter, ReworkRounds: g.ReworkRounds, Binding: b}, nil
+		var listed []skills.Info
+		if cat != nil {
+			set, err := cat.Select(g.Skills)
+			if err == nil {
+				listed, err = skills.Describe(set, b.Runner)
+			}
+			if err != nil {
+				return Guild{}, fmt.Errorf("%w: guild %q: %v", errInvalidInput, g.Name, err)
+			}
+		}
+		return Guild{Name: g.Name, Standards: g.Charter, ReworkRounds: g.ReworkRounds, Binding: b, Skills: listed}, nil
 	}
 }
 
@@ -249,7 +262,7 @@ func dispatchWright(c *callCtx, in json.RawMessage) (any, error) {
 		return nil, err
 	}
 	raw, _ := json.Marshal(b)
-	d, err := c.st.NewPiece(c.run.ctx.Job, g.Name, a.Piece, c.run.id, raw, b.Render(g.Name, g.Standards, 0, ""))
+	d, err := c.st.NewPiece(c.run.ctx.Job, g.Name, a.Piece, c.run.id, raw, b.Render(g.Name, g.Standards, g.Skills, 0, ""))
 	if err != nil {
 		return nil, err
 	}
@@ -292,7 +305,7 @@ func reworkWright(c *callCtx, in json.RawMessage) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	p, d, err := c.st.Rework(c.run.ctx.Job, a.Piece, g.reworkLimit(), a.Reason, a.Diagnosis, c.run.id, raw, b.Render(g.Name, g.Standards, piece.Reworks+1, a.Reason)+qaSection(asks))
+	p, d, err := c.st.Rework(c.run.ctx.Job, a.Piece, g.reworkLimit(), a.Reason, a.Diagnosis, c.run.id, raw, b.Render(g.Name, g.Standards, g.Skills, piece.Reworks+1, a.Reason)+qaSection(asks))
 	if err != nil {
 		return nil, err
 	}

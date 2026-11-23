@@ -22,8 +22,8 @@ folders are out of scope and deliberately not mapped here.
 | `implement` | Warden intake | Build the work described by a spec or set of tickets. |
 | `implement-spec` | **Warden** | Works tickets as a task graph, running implementer subagents across the ready frontier, closing with `code-review`. This is a Warden already written down — read it before designing ours. |
 | `tdd` | Wright | Red-green-refactor on one vertical slice. The natural default brief for a change Wright. |
-| `diagnosing-bugs` | Wright | For the "something is broken" intake: red feedback loop, minimise, hypothesise, instrument, fix, regression-test. |
-| `prototype` | Wright | Throwaway, answers a design question. Output is a finding, not a diff. |
+| `diagnosing-bugs` | Wright | For the "something is broken" intake: red feedback loop, minimise, hypothesise, instrument, fix, regression-test. **Not in Masonry's `skills:` yet**: it needs a Wright to run code, which the factory does not support (#164). |
+| `prototype` | Wright | Throwaway, answers a design question. Output is a finding, not a diff. **Not in Masonry's `skills:` yet**: it needs a Wright to run code or be seen by a human (#165). |
 | `codebase-design` | Guild standard | Vocabulary for deep modules. Not a task — something the Guild holds and every Wright brief inherits. |
 
 ### Survey Guild — establishes what is true

@@ -181,4 +181,4 @@ Open the PR only during the `open-pr` step. Every call is `archwright tool NAME`
 4. Call `open_pr` with `{"title":"<one line, at most 256 bytes>","body":"<the PR body>"}`. It answers `opened` or `exists` with the PR `url`; a Job has one PR, so a repeat call returns the existing one.
 5. Finish with `handback`, naming the PR `url` in `results`.
 
-A failed Forge call prints an error: fix the input and call again once. If the Forge is unsupported, or the same call fails twice, do not work around it with `gh` or `git push`; the Works raises a Needs-you entry for the developer. Report the failure in `handback` with status `failed`.
+If what the PR should say is unclear, ask with `archwright tool ask`. A failed Forge call prints an error: fix the input and call again once. If the Forge is unsupported, or the same call fails twice, do not work around it with `gh` or `git push`; the Works raises a Needs-you entry for the developer. Report the failure in `handback` with status `failed`.

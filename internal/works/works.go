@@ -120,7 +120,7 @@ func ServeWith(ctx context.Context, d paths.Dirs, ready chan<- struct{}, opts Op
 	reg := defs.New(defs.Shipped(), d.Config)
 	ReloadDefinitions(reg)
 	runs.UseDefinitions(reg)
-	guilds := GuildsFromRegistry(reg, DefaultProfiles())
+	guilds := GuildsFromRegistry(reg, DefaultProfiles(), skills.Vendored())
 	runs.Configure(guilds, WrightRunnerFrom(os.Getenv, guilds, st))
 	warden, reviewer := WardenRunnersFrom(os.Getenv, guilds, st)
 	runs.ConfigureWarden(warden)

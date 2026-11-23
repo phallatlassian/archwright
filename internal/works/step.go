@@ -197,6 +197,9 @@ func renderStepBrief(job store.Job, step store.Step, g Guild, charter, prior str
 	if s := strings.TrimSpace(g.Standards); s != "" {
 		fmt.Fprintf(&w, "\n\n## %s Guild standards\n\n%s", g.Name, s)
 	}
+	if s := skillsSection(g.Skills, "`checked`"); s != "" {
+		w.WriteString("\n\n" + strings.TrimSuffix(s, "\n"))
+	}
 	w.WriteString("\n")
 	return w.String()
 }
