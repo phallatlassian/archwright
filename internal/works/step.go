@@ -112,6 +112,10 @@ func (r *Runs) startStep(jobID, stepID string) (store.StepRun, error) {
 	case src == nil:
 		return store.StepRun{}, fmt.Errorf("%w: no guilds are configured", errInvalidInput)
 	}
+	prior, err := r.priorWork(job)
+	if err != nil {
+		return store.StepRun{}, err
+	}
 	sr, err := r.st.StartStep(jobID, stepID, func(plan store.Plan, runs []store.StepRun) (string, string, error) {
 		if !plan.Cleared() {
 			return "", "", fmt.Errorf("the Plan of job %q is %s: the developer must approve an ad hoc Plan before a step starts: %w", jobID, plan.Approval, store.ErrConflict)
@@ -148,7 +152,7 @@ func (r *Runs) startStep(jobID, stepID string) (store.StepRun, error) {
 				charter = dg.Charter
 			}
 		}
-		return g.Name, renderStepBrief(job, *step, g, charter), nil
+		return g.Name, renderStepBrief(job, *step, g, charter, prior), nil
 	})
 	if err != nil {
 		return store.StepRun{}, err
@@ -169,7 +173,10 @@ var wardenMD string
 
 // renderStepBrief is the task brief a step's Warden starts from: the step, the
 // Job's request and the Guild's charter and standards.
-func renderStepBrief(job store.Job, step store.Step, g Guild, charter string) string {
+//
+// prior is the work earlier steps left (see priorWork); a step's Inputs line
+// names artifacts such as "fix.diff", which only resolve through it.
+func renderStepBrief(job store.Job, step store.Step, g Guild, charter, prior string) string {
 	var w strings.Builder
 	fmt.Fprintf(&w, "# Task: %s\n\nYou are the %s Warden for step %q of job %s. Work only through the Archwright tools: dispatch_wright, inspect_wright, rework_wright, accept_piece and finally handback, plus the Forge tools listed below.\n", step.Title, g.Name, step.ID, job.ID)
 	w.WriteString("\n" + strings.TrimSpace(wardenMD) + "\n")
@@ -181,6 +188,9 @@ func renderStepBrief(job store.Job, step store.Step, g Guild, charter string) st
 	if b := strings.TrimSpace(step.Brief); b != "" {
 		w.WriteString("\n\n" + b)
 	}
+	if p := strings.TrimSpace(prior); p != "" {
+		w.WriteString("\n\n## Work so far\n\n" + p)
+	}
 	if c := strings.TrimSpace(charter); c != "" {
 		fmt.Fprintf(&w, "\n\n## %s Guild charter\n\n%s", g.Name, c)
 	}
@@ -189,6 +199,38 @@ func renderStepBrief(job store.Job, step store.Step, g Guild, charter string) st
 	}
 	w.WriteString("\n")
 	return w.String()
+}
+
+// priorWork tells a step's Warden where the Job's earlier work is: the
+// integration branch every accepted piece was merged into, and those pieces
+// by name. A step's Inputs, such as "fix.diff", are only labels; without this
+// a reviewing Warden has nothing to inspect (a Warden's own checkout is empty
+// by design). Empty when nothing was accepted yet.
+func (r *Runs) priorWork(job store.Job) (string, error) {
+	pieces, err := r.st.Pieces(job.ID)
+	if err != nil {
+		return "", err
+	}
+	var accepted []string
+	for _, p := range pieces {
+		if p.Status == store.PieceAccepted && !isMergeWright(p.Piece) {
+			accepted = append(accepted, fmt.Sprintf("- %s (%s Guild)", p.Piece, p.Guild))
+		}
+	}
+	if len(accepted) == 0 {
+		return "", nil
+	}
+	var w strings.Builder
+	r.mu.Lock()
+	sm := r.sites
+	r.mu.Unlock()
+	if sm != nil && job.Site != "" {
+		if t, err := sm.IntegrationPushTarget(job.ID); err == nil {
+			fmt.Fprintf(&w, "The accepted pieces are merged into the Job's integration branch `%s` on Site %s, based on `%s`. The change under work is `git diff %s...%s`; the Inputs named in this step refer to it.\n\n", t.Branch, job.Site, t.DefaultBranch, t.DefaultBranch, t.Branch)
+		}
+	}
+	w.WriteString("Accepted pieces; inspect_wright takes these names (not step ids or Input labels):\n" + strings.Join(accepted, "\n"))
+	return w.String(), nil
 }
 
 // resumeNote tells a re-summoned Warden what the Wrights recorded so far.
