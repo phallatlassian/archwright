@@ -40,8 +40,7 @@ func (ru *run) session() *session {
 func (r *Runs) inboxChanged() {
 	for _, ru := range r.archwrightRuns() {
 		r.syncUnread(ru)
-		if s := ru.session(); s != nil {
-			r.nudges.Add(1)
+		if s := ru.session(); s != nil && r.startNudge() {
 			go func() {
 				defer r.nudges.Done()
 				if err := postNudge(*s); err != nil {
@@ -50,6 +49,18 @@ func (r *Runs) inboxChanged() {
 			}()
 		}
 	}
+}
+
+// startNudge counts a post in flight, unless the Works is closing: Close waits
+// for the posts, so none may start after it begins.
+func (r *Runs) startNudge() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.bg.Err() != nil {
+		return false
+	}
+	r.nudges.Add(1)
+	return true
 }
 
 func (r *Runs) archwrightRuns() []*run {

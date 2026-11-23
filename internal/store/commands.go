@@ -164,10 +164,10 @@ func (s *Store) ReadInbox() ([]InboxItem, error) {
 }
 
 // ReadInboxUpTo is ReadInbox for as many of the oldest unread items as fit in
-// max, each counting size(item); the rest stay unread. The first item is
-// always delivered, so one that is larger than max cannot block the inbox.
-// A max of 0 delivers everything.
-func (s *Store) ReadInboxUpTo(max int, size func(InboxItem) int) ([]InboxItem, error) {
+// limit, each counting size(item); the rest stay unread. The first item is
+// always delivered, so one that is larger than limit cannot block the inbox.
+// A limit of 0 delivers everything.
+func (s *Store) ReadInboxUpTo(limit int, size func(InboxItem) int) ([]InboxItem, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return nil, err
@@ -181,9 +181,9 @@ func (s *Store) ReadInboxUpTo(max int, size func(InboxItem) int) ([]InboxItem, e
 	if err != nil {
 		return nil, err
 	}
-	if max > 0 && size != nil {
+	if limit > 0 && size != nil {
 		used, n := 0, 0
-		for n < len(items) && (n == 0 || used+size(items[n]) <= max) {
+		for n < len(items) && (n == 0 || used+size(items[n]) <= limit) {
 			used += size(items[n])
 			n++
 		}

@@ -76,16 +76,16 @@ func readInbox(c *callCtx, in json.RawMessage) (any, error) {
 	}
 }
 
-func takeInbox(st *store.Store, peek bool, max int) ([]store.InboxItem, error) {
+func takeInbox(st *store.Store, peek bool, limit int) ([]store.InboxItem, error) {
 	if peek {
 		return st.Inbox(true)
 	}
 	size := func(it store.InboxItem) int { return len(launch.InboxLine(it)) }
-	items, err := st.ReadInboxUpTo(max, size)
-	if err != nil || max <= 0 || len(items) == 0 {
+	items, err := st.ReadInboxUpTo(limit, size)
+	if err != nil || limit <= 0 || len(items) == 0 {
 		return items, err
 	}
-	if over := size(items[0]) - max; over > 0 { // one item alone is larger than the cap
+	if over := size(items[0]) - limit; over > 0 { // one item alone is larger than the cap
 		items[0].Summary = truncate(items[0].Summary, len(items[0].Summary)-over-len("…"))
 	}
 	return items, nil

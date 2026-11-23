@@ -167,12 +167,12 @@ func InboxLine(it store.InboxItem) string {
 // inbox reads the unread items, each delivered once, and renders them; "" if none.
 func inbox(call Call) (string, error) { return inboxCapped(call, 0) }
 
-// inboxCapped is inbox limited to about max characters of text (0 for no
+// inboxCapped is inbox limited to about limit characters of text (0 for no
 // limit); the Works leaves the items that do not fit unread.
-func inboxCapped(call Call, max int) (string, error) {
+func inboxCapped(call Call, limit int) (string, error) {
 	var in json.RawMessage
-	if max > 0 {
-		in, _ = json.Marshal(map[string]int{"max_chars": max - len(inboxHeader)})
+	if limit > 0 {
+		in, _ = json.Marshal(map[string]int{"max_chars": limit - len(inboxHeader)})
 	}
 	raw, err := call("read_inbox", in)
 	if err != nil {
