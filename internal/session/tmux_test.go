@@ -50,6 +50,7 @@ func newTmuxRig(t *testing.T, vendor string) *tmuxRig {
 		Tmux: bin, Socket: sock, HookCommand: []string{os.Args[0]},
 		Dir: filepath.Join(dir, "state"), SocketDir: filepath.Join(dir, "h"), UserConf: "-",
 		StartTimeout: 3 * time.Second, CancelGrace: time.Second, Poll: 30 * time.Millisecond,
+		NudgeTimeout: time.Second, NudgePasteDelay: 20 * time.Millisecond,
 		UserCodexHome: filepath.Join(dir, "dev-codex"),
 	}
 	if vendor == "codex" {
@@ -75,6 +76,9 @@ var standinScripts = map[scenario]string{
 	scenNoStart:     "hold",
 	scenDuplicates:  "hook SessionStart;again;hook UserPromptSubmit;again;hook Stop;hold",
 	scenQueue:       "hook SessionStart;hook UserPromptSubmit;waitqueue;hook Stop;hook UserPromptSubmit;hook Stop;hold",
+	scenNudge:       "hook SessionStart;hook UserPromptSubmit;hook Stop;readprompt;hook UserPromptSubmit;hook Stop;hold",
+	scenDeaf:        "hook SessionStart;hook UserPromptSubmit;hook Stop;readprompt;hold",
+	scenBusy:        "hook SessionStart;hook UserPromptSubmit;hold",
 }
 
 // runner is the Runner under test: the Tmux adapter for Claude, its Codex view for Codex.
@@ -95,6 +99,12 @@ func (r *tmuxRig) request(t *testing.T, s scenario) LaunchRequest {
 
 func (r *tmuxRig) harness() harness {
 	h := harness{name: "tmux " + r.vendor, vendor: r.vendor, modes: vendorModes[r.vendor], queue: r.vendor == "codex", runner: r.runner(), request: r.request, pane: &paneInspector{tmux: r.tm.tmux, outDir: r.out}}
+	h.nudged = func(t *testing.T, _ Session, want string) {
+		t.Helper()
+		if got := h.pane.typed(); got != want {
+			t.Fatalf("the agent read %q, want %q", got, want)
+		}
+	}
 	if h.queue {
 		h.queued = func(t *testing.T, s Session, text string) {
 			t.Helper()

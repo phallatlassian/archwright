@@ -27,6 +27,9 @@ const (
 	scenNoStart     scenario = "no-start"     // never sends a SessionStart
 	scenDuplicates  scenario = "duplicates"   // every SessionStart and UserPromptSubmit is delivered twice, as Codex does
 	scenQueue       scenario = "queue"        // busy until a message is queued, then Stops and takes it as a new turn
+	scenNudge       scenario = "nudge"        // finishes its turn, then takes what is typed at it as a new turn
+	scenDeaf        scenario = "deaf"         // finishes its turn, then reads what is typed at it without ever reporting a prompt
+	scenBusy        scenario = "busy"         // takes the brief and works on it for good
 )
 
 // harness runs the contract against one Runner.
@@ -42,6 +45,9 @@ type harness struct {
 	pane *paneInspector
 	// queued checks what the vendor CLI was asked to deliver; nil when it cannot be.
 	queued func(t *testing.T, s Session, text string)
+	// nudged checks what reached the agent as input after its first turn: the
+	// text, or for a long one a pointer to the file holding it.
+	nudged func(t *testing.T, s Session, want string)
 }
 
 var runSeq atomic.Int32
@@ -50,35 +56,49 @@ func runID() string { return fmt.Sprintf("run-%d", runSeq.Add(1)) }
 
 func fakeHarness(vendor string) harness {
 	f := NewFakeFor(vendor, Script{})
-	return harness{name: "fake " + vendor, vendor: vendor, modes: vendorModes[vendor], queue: vendor == "codex", runner: f, request: func(t *testing.T, s scenario) LaunchRequest {
-		start := Step{Hook: &Hook{Event: HookSessionStart, SessionID: "fake-session", TranscriptPath: "/fake/transcript.jsonl"}}
-		prompt := Step{Hook: &Hook{Event: HookUserPromptSubmit, TurnID: "turn-1"}}
-		stop := Step{Hook: &Hook{Event: HookStop, TurnID: "turn-1"}}
-		bash := func(ev, cmd string) Step {
-			return Step{Hook: &Hook{Event: ev, TurnID: "turn-1", ToolName: "Bash", ToolInput: []byte(`{"command":"` + cmd + `"}`), ToolUseID: "tu-Bash"}}
-		}
-		switch s {
-		case scenTurn:
-			f.SetScript(Script{Steps: []Step{start, prompt, bash(HookPreToolUse, "go test"), bash(HookPostToolUse, "go test"), stop}})
-		case scenPermResolve:
-			f.SetScript(Script{Steps: []Step{start, prompt, bash(HookPreToolUse, "rm -rf build"), bash(HookPermissionReq, "rm -rf build"), stop, bash(HookPostToolUse, "rm -rf build"), stop}})
-		case scenPermHold:
-			f.SetScript(Script{Steps: []Step{start, prompt, bash(HookPreToolUse, "rm -rf build"), bash(HookPermissionReq, "rm -rf build")}})
-		case scenEnds:
-			f.SetScript(Script{Steps: []Step{start, prompt, stop}, End: true})
-		case scenCrash:
-			f.SetScript(Script{Steps: []Step{start, {Act: func(context.Context, LaunchRequest) error { return errors.New("exited with status 3") }}}})
-		case scenNoStart:
-			f.SetScript(Script{NoStart: true, Steps: []Step{start}})
-		case scenDuplicates:
-			f.SetScript(Script{Steps: []Step{start, start, prompt, prompt, stop}})
-		case scenQueue:
-			second := Step{Hook: &Hook{Event: HookUserPromptSubmit, TurnID: "turn-2"}}
-			stop2 := Step{Hook: &Hook{Event: HookStop, TurnID: "turn-2"}}
-			f.SetScript(Script{Steps: []Step{start, prompt, {AwaitQueue: true}, stop, second, stop2}})
-		}
-		return LaunchRequest{Run: runID(), Job: "job-1", Role: "wright", Brief: "do it", Dir: t.TempDir()}
-	}}
+	f.NudgeTimeout = 500 * time.Millisecond
+	return harness{name: "fake " + vendor, vendor: vendor, modes: vendorModes[vendor], queue: vendor == "codex", runner: f,
+		nudged: func(t *testing.T, _ Session, want string) {
+			t.Helper()
+			if got := f.Nudges(); len(got) == 0 || got[len(got)-1] != want {
+				t.Fatalf("the Session was nudged with %q, want %q", got, want)
+			}
+		},
+		request: func(t *testing.T, s scenario) LaunchRequest {
+			start := Step{Hook: &Hook{Event: HookSessionStart, SessionID: "fake-session", TranscriptPath: "/fake/transcript.jsonl"}}
+			prompt := Step{Hook: &Hook{Event: HookUserPromptSubmit, TurnID: "turn-1"}}
+			stop := Step{Hook: &Hook{Event: HookStop, TurnID: "turn-1"}}
+			bash := func(ev, cmd string) Step {
+				return Step{Hook: &Hook{Event: ev, TurnID: "turn-1", ToolName: "Bash", ToolInput: []byte(`{"command":"` + cmd + `"}`), ToolUseID: "tu-Bash"}}
+			}
+			switch s {
+			case scenTurn:
+				f.SetScript(Script{Steps: []Step{start, prompt, bash(HookPreToolUse, "go test"), bash(HookPostToolUse, "go test"), stop}})
+			case scenPermResolve:
+				f.SetScript(Script{Steps: []Step{start, prompt, bash(HookPreToolUse, "rm -rf build"), bash(HookPermissionReq, "rm -rf build"), stop, bash(HookPostToolUse, "rm -rf build"), stop}})
+			case scenPermHold:
+				f.SetScript(Script{Steps: []Step{start, prompt, bash(HookPreToolUse, "rm -rf build"), bash(HookPermissionReq, "rm -rf build")}})
+			case scenEnds:
+				f.SetScript(Script{Steps: []Step{start, prompt, stop}, End: true})
+			case scenCrash:
+				f.SetScript(Script{Steps: []Step{start, {Act: func(context.Context, LaunchRequest) error { return errors.New("exited with status 3") }}}})
+			case scenNoStart:
+				f.SetScript(Script{NoStart: true, Steps: []Step{start}})
+			case scenDuplicates:
+				f.SetScript(Script{Steps: []Step{start, start, prompt, prompt, stop}})
+			case scenNudge:
+				f.SetScript(Script{Steps: []Step{start, prompt, stop}, Nudged: []Step{{Hook: &Hook{Event: HookUserPromptSubmit, TurnID: "turn-2"}}, {Hook: &Hook{Event: HookStop, TurnID: "turn-2"}}}})
+			case scenDeaf:
+				f.SetScript(Script{Steps: []Step{start, prompt, stop}})
+			case scenBusy:
+				f.SetScript(Script{Steps: []Step{start, prompt}})
+			case scenQueue:
+				second := Step{Hook: &Hook{Event: HookUserPromptSubmit, TurnID: "turn-2"}}
+				stop2 := Step{Hook: &Hook{Event: HookStop, TurnID: "turn-2"}}
+				f.SetScript(Script{Steps: []Step{start, prompt, {AwaitQueue: true}, stop, second, stop2}})
+			}
+			return LaunchRequest{Run: runID(), Job: "job-1", Role: "wright", Brief: "do it", Dir: t.TempDir()}
+		}}
 }
 
 // TestContract runs the one contract suite against every Runner: the fake,
@@ -161,6 +181,17 @@ func runContract(t *testing.T, h harness) {
 			t.Fatalf("launch: %v", err)
 		}
 		t.Cleanup(sess.Cancel)
+		return sess
+	}
+	// launchNudged is launch for a test that checks what reached the pane: it
+	// starts from no input, and its Session is gone, pane and all, when it ends.
+	launchNudged := func(t *testing.T, s scenario) Session {
+		t.Helper()
+		if h.pane != nil {
+			h.pane.reset()
+		}
+		sess := launch(t, s)
+		t.Cleanup(func() { sess.Cancel(); sess.Result() })
 		return sess
 	}
 
@@ -315,6 +346,82 @@ func runContract(t *testing.T, h harness) {
 		})
 	}
 
+	t.Run("an idle Session is Nudged, and the prompt hook confirms the delivery", func(t *testing.T) {
+		sess := launchNudged(t, scenNudge)
+		waitFor(t, "the turn to finish", func() bool { return sess.Info().Turns == 1 })
+		if err := sess.Nudge("now run the linter"); err != nil {
+			t.Fatalf("nudge: %v", err)
+		}
+		if n := sess.Info().Prompts; n != 2 {
+			t.Fatalf("prompts = %d: the Nudge returned before the agent took it", n)
+		}
+		waitFor(t, "the nudged turn to finish", func() bool { return sess.Info().Turns == 2 })
+		sess.Cancel()
+		if got := states(collect(t, sess)); !sameStates(got, StateIdle, StateWorking, StateIdle, StateWorking, StateIdle, StateEnded) {
+			t.Fatalf("states = %v", got)
+		}
+		if h.nudged != nil {
+			h.nudged(t, sess, "now run the linter")
+		}
+	})
+
+	t.Run("a long or multi-line Nudge is delivered as a pointer to a file holding it", func(t *testing.T) {
+		if h.pane == nil {
+			t.Skip("only the tmux adapter pastes")
+		}
+		sess := launchNudged(t, scenNudge)
+		waitFor(t, "the turn to finish", func() bool { return sess.Info().Turns == 1 })
+		text := "line one\nline two\n" + strings.Repeat("x", 3000)
+		if err := sess.Nudge(text); err != nil {
+			t.Fatalf("nudge: %v", err)
+		}
+		in := h.pane.typed()
+		path := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(in, "Read the file "), " in full and carry out what it says."))
+		got, err := os.ReadFile(path)
+		if err != nil || string(got) != text || strings.Contains(in, "line two") {
+			t.Fatalf("typed %q; the file holds %q (%v)", in, got, err)
+		}
+	})
+
+	t.Run("a Nudge is refused at a prompt, and nothing is typed at it", func(t *testing.T) {
+		sess := launchNudged(t, scenPermHold)
+		waitState(t, sess, StateWaitingOnPermission)
+		if err := sess.Nudge("carry on"); !errors.Is(err, ErrNotIdle) {
+			t.Fatalf("nudge at a prompt = %v", err)
+		}
+		time.Sleep(300 * time.Millisecond) // a paste or an Enter would have reached the prompt by now
+		if sess.State() != StateWaitingOnPermission {
+			t.Fatalf("state = %s", sess.State())
+		}
+		if h.pane != nil && (h.pane.answered() || h.pane.typed() != "") {
+			t.Fatalf("the prompt received input %q: Enter at it approves it", h.pane.typed())
+		}
+	})
+
+	t.Run("a Nudge is refused while the Session works, before it starts, and once it ended", func(t *testing.T) {
+		busy := launchNudged(t, scenBusy)
+		waitState(t, busy, StateWorking)
+		if err := busy.Nudge("hurry up"); !errors.Is(err, ErrNotIdle) {
+			t.Fatalf("nudge to a working Session = %v", err)
+		}
+		busy.Cancel()
+		collect(t, busy)
+		if err := busy.Nudge("too late"); !errors.Is(err, ErrNotIdle) {
+			t.Fatalf("nudge to an ended Session = %v", err)
+		}
+		if h.pane != nil && h.pane.typed() != "" {
+			t.Fatalf("text reached a Session that was not idle: %q", h.pane.typed())
+		}
+	})
+
+	t.Run("a Nudge the prompt hook never confirms is reported, not retried", func(t *testing.T) {
+		sess := launchNudged(t, scenDeaf)
+		waitFor(t, "the turn to finish", func() bool { return sess.Info().Turns == 1 })
+		if err := sess.Nudge("anyone there?"); !errors.Is(err, ErrNudgeUnconfirmed) {
+			t.Fatalf("nudge = %v", err)
+		}
+	})
+
 	t.Run("forbidden spawn requests are refused before anything runs", func(t *testing.T) {
 		before := 0
 		if h.pane != nil {
@@ -410,6 +517,19 @@ func (p *paneInspector) exists(pane string) bool {
 		}
 	}
 	return false
+}
+
+// reset forgets the input and answers earlier Sessions left.
+func (p *paneInspector) reset() {
+	os.Remove(filepath.Join(p.outDir, "prompt.in"))
+	os.Remove(filepath.Join(p.outDir, "answered"))
+}
+
+// typed is what the stand-in read as input after its first turn, one line per
+// Nudge; "" when nothing reached it.
+func (p *paneInspector) typed() string {
+	b, _ := os.ReadFile(filepath.Join(p.outDir, "prompt.in"))
+	return strings.TrimSpace(string(b))
 }
 
 func (p *paneInspector) answered() bool {

@@ -2,6 +2,7 @@ package session
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 )
 
@@ -196,4 +197,49 @@ func TestAStopForATurnWhosePromptWasNotSeenStillCounts(t *testing.T) {
 	s := hook(HookStop)
 	s.TurnID = "turn-9"
 	wantStates(t, feed(m, hook(HookSessionStart), hook(HookUserPromptSubmit), s), StateIdle, StateWorking, StateIdle)
+}
+
+func TestNudgeableOnlyWhenIdleWithNothingOutstanding(t *testing.T) {
+	m := NewMachine()
+	if err := m.Nudgeable(); !errors.Is(err, ErrNotIdle) {
+		t.Fatalf("a starting Session is nudgeable: %v", err)
+	}
+	m.Apply(hook(HookSessionStart))
+	if err := m.Nudgeable(); err != nil {
+		t.Fatalf("an idle Session is not nudgeable: %v", err)
+	}
+	m.Apply(hook(HookUserPromptSubmit))
+	if err := m.Nudgeable(); !errors.Is(err, ErrNotIdle) {
+		t.Fatalf("a working Session is nudgeable: %v", err)
+	}
+	m.Apply(tool(HookPermissionReq, "Bash", "rm -rf build", "tu-1"))
+	m.Apply(hook(HookStop)) // Codex's Stop while the approval is open
+	if err := m.Nudgeable(); !errors.Is(err, ErrNotIdle) {
+		t.Fatalf("a Session at a prompt is nudgeable: %v", err)
+	}
+	m.Apply(tool(HookPostToolUse, "Bash", "rm -rf build", "tu-1"))
+	m.Apply(hook(HookStop))
+	if err := m.Nudgeable(); err != nil {
+		t.Fatalf("an idle Session after its prompt is not nudgeable: %v", err)
+	}
+	m.End("")
+	if err := m.Nudgeable(); !errors.Is(err, ErrNotIdle) {
+		t.Fatalf("an ended Session is nudgeable: %v", err)
+	}
+}
+
+func TestPromptsCountEachPromptTheAgentTookOnceEvenWhenDeliveredTwice(t *testing.T) {
+	m := NewMachine()
+	m.Apply(hook(HookSessionStart))
+	first := hook(HookUserPromptSubmit)
+	first.TurnID = "t1"
+	m.Apply(first)
+	m.Apply(first) // Codex delivers it twice
+	m.Apply(hook(HookStop))
+	second := hook(HookUserPromptSubmit)
+	second.TurnID = "t2"
+	m.Apply(second)
+	if n := m.Info().Prompts; n != 2 {
+		t.Fatalf("prompts = %d, want 2", n)
+	}
 }

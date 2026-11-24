@@ -2,8 +2,11 @@ package session
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -19,6 +22,9 @@ type Fake struct {
 	script   Script
 	launches []LaunchRequest
 	sessions []Session
+	nudges   []string
+	// NudgeTimeout is how long a Nudge waits for the agent to report a prompt; default 5 s.
+	NudgeTimeout time.Duration
 }
 
 // Script is what a Fake Session plays after launch.
@@ -30,6 +36,12 @@ type Script struct {
 	End bool
 	// NoStart never plays SessionStart, as a Session stuck at a trust dialog.
 	NoStart bool
+	// Nudged is what the agent does each time it takes a Nudge: normally a
+	// UserPromptSubmit, its work and a Stop. A Session with none takes the text
+	// and never reports a prompt, as one that ignores it. An Act sees the
+	// launch request with the ARCHWRIGHT_* variables the Nudge's text sets in
+	// place of the ones the Session started with.
+	Nudged []Step
 }
 
 // Step is one thing a scripted Session does: deliver a hook, act as the
@@ -82,6 +94,19 @@ func (f *Fake) Sessions() []Session {
 	return append([]Session(nil), f.sessions...)
 }
 
+// Nudges returns the text of every Nudge delivered so far, across Sessions.
+func (f *Fake) Nudges() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.nudges...)
+}
+
+func (f *Fake) nudged(text string) {
+	f.mu.Lock()
+	f.nudges = append(f.nudges, text)
+	f.mu.Unlock()
+}
+
 // Name implements Runner.
 func (f *Fake) Name() string { return f.vendor }
 
@@ -101,7 +126,11 @@ func (f *Fake) Launch(ctx context.Context, req LaunchRequest) (Session, error) {
 	n := len(f.launches)
 	f.mu.Unlock()
 	acts, cancel := context.WithCancel(context.Background()) // the Session outlives the launch call
-	s := &fakeSession{core: newCore(""), cancelAct: cancel, cancelCh: make(chan struct{}), queueCh: make(chan string, 8)}
+	timeout := f.NudgeTimeout
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	s := &fakeSession{core: newCore(""), cancelAct: cancel, cancelCh: make(chan struct{}), queueCh: make(chan string, 8), nudgeCh: make(chan string, 1), nudgeTimeout: timeout, onNudge: f.nudged}
 	s.core.setPane("%fake"+strconv.Itoa(n), "@fake")
 	s.core.add(Event{Kind: KindPosture, Posture: &runner.Posture{
 		Runner: f.vendor, Version: "fake", Mode: req.Spawn.EffectiveMode(), Sandbox: runner.SandboxInherited,
@@ -123,6 +152,10 @@ type fakeSession struct {
 	cancelCh  chan struct{}
 	once      sync.Once
 	queueCh   chan string
+
+	nudgeCh      chan string
+	nudgeTimeout time.Duration
+	onNudge      func(text string)
 }
 
 // queueingSession is a fakeSession of a vendor that has a queue.
@@ -142,6 +175,25 @@ func (s queueingSession) Queue(text string) error {
 	}
 }
 
+// Nudge implements Session: an idle Session takes the text and plays its
+// script's Nudged steps; any other refuses it.
+func (s *fakeSession) Nudge(text string) error {
+	if strings.TrimSpace(text) == "" {
+		return errors.New("nothing to nudge")
+	}
+	if err := s.nudgeable(); err != nil {
+		return err
+	}
+	before := s.prompts()
+	select {
+	case s.nudgeCh <- text:
+	default:
+		return fmt.Errorf("%w: a Nudge is already being taken", ErrNotIdle)
+	}
+	s.onNudge(text)
+	return s.awaitPrompt(before, s.nudgeTimeout)
+}
+
 // Cancel implements Session.
 func (s *fakeSession) Cancel() {
 	s.once.Do(func() {
@@ -155,13 +207,53 @@ func (s *fakeSession) play(ctx context.Context, req LaunchRequest, sc Script) {
 		s.finish(Result{Status: runner.StatusFailed, ExitStatus: -1, Error: "failed to start: no SessionStart hook"})
 		return
 	}
-	for _, st := range sc.Steps {
+	if !s.playSteps(ctx, req, sc.Steps) {
+		return
+	}
+	if sc.End {
+		s.feed(Hook{Event: HookSessionEnd})
+		s.finish(Result{Status: runner.StatusDone, ExitStatus: 0})
+		return
+	}
+	for {
+		select {
+		case text := <-s.nudgeCh:
+			if !s.playSteps(ctx, nudgedRequest(req, text), sc.Nudged) {
+				return
+			}
+		case <-s.cancelCh:
+			s.finish(Result{Status: runner.StatusCancelled, ExitStatus: -1})
+			return
+		}
+	}
+}
+
+// nudgeEnvLine is a line of a Nudge's text that sets a variable of the run.
+var nudgeEnvLine = regexp.MustCompile(`(?m)^(?:export )?(ARCHWRIGHT_[A-Z_]+)=(\S+)$`)
+
+// nudgedRequest is req with the run variables a Nudge's text sets.
+func nudgedRequest(req LaunchRequest, text string) LaunchRequest {
+	env := map[string]string{}
+	for k, v := range req.Env {
+		env[k] = v
+	}
+	for _, m := range nudgeEnvLine.FindAllStringSubmatch(text, -1) {
+		env[m[1]] = m[2]
+	}
+	req.Env = env
+	return req
+}
+
+// playSteps plays steps in order. It reports false once the Session has been
+// finished, by a cancel or a failed act.
+func (s *fakeSession) playSteps(ctx context.Context, req LaunchRequest, steps []Step) bool {
+	for _, st := range steps {
 		if st.Pause > 0 {
 			select {
 			case <-time.After(st.Pause):
 			case <-s.cancelCh:
 				s.finish(Result{Status: runner.StatusCancelled, ExitStatus: -1})
-				return
+				return false
 			}
 		}
 		if st.AwaitQueue {
@@ -169,7 +261,7 @@ func (s *fakeSession) play(ctx context.Context, req LaunchRequest, sc Script) {
 			case <-s.queueCh:
 			case <-s.cancelCh:
 				s.finish(Result{Status: runner.StatusCancelled, ExitStatus: -1})
-				return
+				return false
 			}
 		}
 		if st.Hook != nil {
@@ -178,21 +270,15 @@ func (s *fakeSession) play(ctx context.Context, req LaunchRequest, sc Script) {
 		if st.Act != nil {
 			if err := st.Act(ctx, req); err != nil && ctx.Err() == nil {
 				s.finish(Result{Status: runner.StatusFailed, ExitStatus: 1, Error: err.Error()})
-				return
+				return false
 			}
 		}
 		select {
 		case <-s.cancelCh:
 			s.finish(Result{Status: runner.StatusCancelled, ExitStatus: -1})
-			return
+			return false
 		default:
 		}
 	}
-	if sc.End {
-		s.feed(Hook{Event: HookSessionEnd})
-		s.finish(Result{Status: runner.StatusDone, ExitStatus: 0})
-		return
-	}
-	<-s.cancelCh
-	s.finish(Result{Status: runner.StatusCancelled, ExitStatus: -1})
+	return true
 }

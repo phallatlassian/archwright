@@ -33,6 +33,14 @@ const (
 	// tmux carries a command to its server in one 16 KB message, so a longer
 	// brief is written to a file and the prompt points at it.
 	maxInlineBrief = 6000
+	// DefaultNudgeTimeout is how long a Nudge waits for the UserPromptSubmit hook that confirms it.
+	DefaultNudgeTimeout = 15 * time.Second
+	// DefaultNudgePasteDelay separates the paste from the Enter: sent together,
+	// Codex can leave the text in its composer (docs/spec/tmux-runtime.md).
+	DefaultNudgePasteDelay = 200 * time.Millisecond
+	// maxNudgeInline is the longest single-line Nudge pasted as it is; a longer
+	// one, or one over several lines, is written to a file and a pointer pasted.
+	maxNudgeInline = 1000
 	// endedGrace is how long a Session whose SessionEnd hook has fired gets to
 	// exit before its result is taken from what is known.
 	endedGrace = 2 * time.Second
@@ -81,6 +89,10 @@ type Tmux struct {
 	StartTimeout time.Duration
 	CancelGrace  time.Duration
 	Poll         time.Duration
+	// NudgeTimeout bounds the wait for the hook that confirms a Nudge, and
+	// NudgePasteDelay is the pause between the paste and the Enter.
+	NudgeTimeout    time.Duration
+	NudgePasteDelay time.Duration
 
 	mu       sync.Mutex // serialises server and window creation
 	recv     *Receiver
@@ -131,10 +143,16 @@ func (t *Tmux) socketArgs() []string {
 }
 
 // tmux runs one tmux command against the Works' server and returns its output.
-func (t *Tmux) tmux(args ...string) (string, error) {
+func (t *Tmux) tmux(args ...string) (string, error) { return t.tmuxIn("", args...) }
+
+// tmuxIn is tmux with stdin as the command's standard input.
+func (t *Tmux) tmuxIn(stdin string, args ...string) (string, error) {
 	cmd := exec.Command(t.or(t.Tmux, "tmux"), append(t.socketArgs(), args...)...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if stdin != "" {
+		cmd.Stdin = strings.NewReader(stdin)
+	}
 	if err := cmd.Run(); err != nil {
 		return "", fmt.Errorf("tmux %s: %w: %s", args[0], err, strings.TrimSpace(stderr.String()))
 	}
@@ -200,7 +218,7 @@ func (t *Tmux) launch(ctx context.Context, req LaunchRequest, v vendor) (Session
 	if err != nil {
 		return nil, err
 	}
-	s := &tmuxSession{t: t, v: v, core: newCore(token), pane: pane, hookFile: hookFile, cancelCh: make(chan struct{}), started: time.Now()}
+	s := &tmuxSession{t: t, v: v, core: newCore(token), pane: pane, runDir: runDir, hookFile: hookFile, cancelCh: make(chan struct{}), started: time.Now()}
 	s.core.setPane(pane, window)
 	s.core.add(Event{Kind: KindPosture, Posture: &runner.Posture{
 		Runner: v.name, Version: t.cliVersion(plan.bin), Mode: req.Spawn.EffectiveMode(), Sandbox: runner.SandboxInherited,
@@ -405,8 +423,12 @@ type tmuxSession struct {
 	v        vendor
 	core     *core
 	pane     string
+	runDir   string
 	hookFile string
 	started  time.Time
+
+	nudgeMu sync.Mutex // one Nudge at a time: two pastes must not interleave
+	nudges  int        // Nudges that wrote a file, for its name
 
 	cancelCh   chan struct{}
 	cancelOnce sync.Once
@@ -419,6 +441,61 @@ func (s *tmuxSession) Info() Info           { return s.core.Info() }
 func (s *tmuxSession) State() State         { return s.core.State() }
 func (s *tmuxSession) Events() <-chan Event { return s.core.Events() }
 func (s *tmuxSession) Result() Result       { return s.core.Result() }
+
+// Nudge implements Session. The text is loaded into a tmux buffer and pasted,
+// and after a short pause Enter is sent; the UserPromptSubmit hook confirms
+// the agent took it (docs/spec/tmux-runtime.md). Nothing is sent unless the
+// Session is idle with no PermissionRequest outstanding, and that is checked
+// again between the paste and the Enter: Enter at a prompt approves it.
+func (s *tmuxSession) Nudge(text string) error {
+	if strings.TrimSpace(text) == "" {
+		return errors.New("nothing to nudge")
+	}
+	s.nudgeMu.Lock()
+	defer s.nudgeMu.Unlock()
+	if err := s.core.nudgeable(); err != nil {
+		return err
+	}
+	prompt, err := s.nudgePrompt(text)
+	if err != nil {
+		return err
+	}
+	before := s.core.prompts()
+	buf := "aw-nudge-" + strings.TrimPrefix(s.pane, "%")
+	if _, err := s.t.tmuxIn(prompt, "load-buffer", "-b", buf, "-"); err != nil {
+		return err
+	}
+	// -p: bracketed paste where the CLI asked for it, so a line break in the text is not an Enter; -d drops the buffer.
+	if _, err := s.t.tmux("paste-buffer", "-d", "-p", "-b", buf, "-t", s.pane); err != nil {
+		_, _ = s.t.tmux("delete-buffer", "-b", buf)
+		return err
+	}
+	time.Sleep(s.t.dur(s.t.NudgePasteDelay, DefaultNudgePasteDelay))
+	if err := s.core.nudgeable(); err != nil {
+		// Not ErrNotIdle: the text is in the composer now, so trying again would paste it twice.
+		return fmt.Errorf("%w: the Session stopped being idle after the paste (%v); Enter was not sent", ErrNudgeUnconfirmed, err)
+	}
+	if _, err := s.t.tmux("send-keys", "-t", s.pane, "Enter"); err != nil {
+		return err
+	}
+	return s.core.awaitPrompt(before, s.t.dur(s.t.NudgeTimeout, DefaultNudgeTimeout))
+}
+
+// nudgePrompt is what is pasted for a Nudge: the text itself when it is one
+// short line a CLI will not read as a command, otherwise a pointer to a file
+// holding it, so the exact text stays in the Works' record (ADR 0029).
+func (s *tmuxSession) nudgePrompt(text string) (string, error) {
+	text = strings.TrimSpace(text)
+	if !strings.Contains(text, "\n") && len(text) <= maxNudgeInline && !strings.ContainsAny(text[:1], "/!#@&") {
+		return text, nil
+	}
+	s.nudges++
+	path := filepath.Join(s.runDir, fmt.Sprintf("nudge-%d.md", s.nudges))
+	if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
+		return "", err
+	}
+	return "Read the file " + path + " in full and carry out what it says.", nil
+}
 
 // Cancel implements Session.
 func (s *tmuxSession) Cancel() { s.cancelOnce.Do(func() { close(s.cancelCh) }) }

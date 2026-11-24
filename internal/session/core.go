@@ -2,7 +2,9 @@ package session
 
 import (
 	"encoding/json"
+	"fmt"
 	"sync"
+	"time"
 )
 
 // core is what every Session shares: the state machine fed by hooks, the
@@ -60,6 +62,42 @@ func (c *core) Result() Result {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.result
+}
+
+// nudgeable says whether the Session may be Nudged now; see Session.Nudge.
+func (c *core) nudgeable() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.m.Nudgeable()
+}
+
+// prompts is how many prompts the agent has taken so far.
+func (c *core) prompts() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.m.Info().Prompts
+}
+
+// awaitPrompt waits for the agent to take a prompt beyond the before-th: the
+// UserPromptSubmit hook that confirms a Nudge. A Session that ends first, or
+// stays silent past timeout, did not confirm it.
+func (c *core) awaitPrompt(before int, timeout time.Duration) error {
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		if c.prompts() > before {
+			return nil
+		}
+		select {
+		case <-c.done:
+			return fmt.Errorf("%w: the Session ended first", ErrNudgeUnconfirmed)
+		case <-deadline.C:
+			return fmt.Errorf("%w: none within %s", ErrNudgeUnconfirmed, timeout)
+		case <-tick.C:
+		}
+	}
 }
 
 func (c *core) add(e Event) { c.log.add(e) }

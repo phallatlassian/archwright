@@ -7,6 +7,8 @@
 #   again                          deliver the last hook's payload a second time (a duplicate delivery)
 #   tool <name> <json>             call a Works tool: `$ARCHWRIGHT_BIN tool <name>` with the JSON (no spaces) on stdin
 #   prompt                         print a permission prompt and read one line
+#   readprompt                     read one line typed at the composer (a Nudge: pasted text, then Enter) into $out/prompt.in
+#   readnudge                      readprompt for a Nudge that points at a file: take the `export` lines of that file into the environment, as an agent told to would
 #   waitqueue                      stay busy until a message has been queued for this session
 #   sleep <seconds>
 #   hold                           stay open until killed
@@ -38,6 +40,16 @@ run_steps() {
       prompt)
         echo "Do you want to proceed? 1. Yes 2. No"
         if read -r _; then [ -z "$out" ] || echo approved >"$out/answered"; fi ;;
+      readprompt)
+        if read -r line; then [ -z "$out" ] || printf '%s\n' "$line" >>"$out/prompt.in"; fi ;;
+      readnudge)
+        if read -r line; then
+          [ -z "$out" ] || printf '%s\n' "$line" >>"$out/prompt.in"
+          nudgefile=${line#Read the file }
+          nudgefile=${nudgefile% in full and carry out what it says.}
+          # shellcheck disable=SC2046
+          eval "$(grep '^export ' "$nudgefile")"
+        fi ;;
       waitqueue) while [ ! -s "$queuefile" ]; do sleep 0.05; done ;;
       sleep) sleep "$2" ;;
       hold) while :; do sleep 1; done ;;

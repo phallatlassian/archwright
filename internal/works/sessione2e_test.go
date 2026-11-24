@@ -27,7 +27,14 @@ func TestCodexWrightRunsAsASessionInARealTmuxPaneAndReportsThroughTheSpool(t *te
 	runSessionE2E(t, "codex")
 }
 
-func runSessionE2E(t *testing.T, vendor string) {
+// e2eRig is the Works dispatching Wrights onto the real tmux adapter, with the
+// scripted stand-in for the vendor's CLI.
+type e2eRig struct {
+	*gateRig
+	tmux, sock, short string
+}
+
+func newSessionE2E(t *testing.T, vendor, standinScript string) *e2eRig {
 	tmuxBin, err := exec.LookPath("tmux")
 	if err != nil {
 		t.Skip("tmux is not installed: Wrights were NOT run in a real pane")
@@ -51,10 +58,9 @@ func runSessionE2E(t *testing.T, vendor string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	report := `{"status":"done","result":"branch-x","evidence":["go-test"]}`
 	// The tmux server inherits this environment, as the real one inherits the developer's.
 	t.Setenv("ARCHWRIGHT_BIN", bin)
-	t.Setenv("ARCHWRIGHT_STANDIN", "hook SessionStart;hook UserPromptSubmit;tool report_result "+report+";hook Stop;hold")
+	t.Setenv("ARCHWRIGHT_STANDIN", standinScript)
 	t.Setenv("ARCHWRIGHT_STANDIN_OUT", filepath.Join(short, "out"))
 
 	tm := &hosted.Tmux{
@@ -86,6 +92,13 @@ func runSessionE2E(t *testing.T, vendor string) {
 			g.st.SetRunSession(run, info.Pane, info.SessionID, info.TranscriptPath, string(state))
 		},
 	})
+	return &e2eRig{gateRig: g, tmux: tmuxBin, sock: sock, short: short}
+}
+
+func runSessionE2E(t *testing.T, vendor string) {
+	report := `{"status":"done","result":"branch-x","evidence":["go-test"]}`
+	e := newSessionE2E(t, vendor, "hook SessionStart;hook UserPromptSubmit;tool report_result "+report+";hook Stop;hold")
+	g, tmuxBin, sock, short := e.gateRig, e.tmux, e.sock, e.short
 	warden := g.warden
 	if vendor == "codex" {
 		w, err := g.r.StartFor(RoleWarden, t.TempDir(), RunContext{Job: g.job.ID, Guild: "carvers"}) // codex-bound
@@ -130,5 +143,53 @@ func runSessionE2E(t *testing.T, vendor string) {
 	}
 	if strings.Join(states, ",") != "idle,working,idle" {
 		t.Errorf("states on the timeline = %v", states)
+	}
+}
+
+// A rework Nudges the Wright's real Session: the Works pastes a pointer to the
+// amended brief into the pane and presses Enter once the Session is idle, the
+// scripted agent takes it as a new turn, and its second report arrives through
+// the new run, whose variables the Nudge named.
+func TestReworkNudgesTheSameWrightSessionInARealTmuxPane(t *testing.T) {
+	first := `{"status":"done","result":"first","evidence":["go-test"]}`
+	second := `{"status":"done","result":"second","evidence":["go-test"]}`
+	e := newSessionE2E(t, "claude", "hook SessionStart;hook UserPromptSubmit;tool report_result "+first+";hook Stop;readnudge;hook UserPromptSubmit;tool report_result "+second+";hook Stop;hold")
+	g := e.gateRig
+	g.ok(g.warden, "dispatch_wright", `{"piece":"p","brief":`+goodBrief+`}`, nil)
+	d0 := g.waitReported("p")
+	var rec store.RunRecord
+	eventually(t, "the Session to be recorded idle", func() bool {
+		rec, _ = g.st.GetRunRecord(d0.RunID)
+		return rec.SessionState == "idle"
+	})
+
+	g.rework("p")
+	d1 := g.waitReported("p")
+	if d1.Round != 1 || d1.Status != store.DispatchReported || !strings.Contains(string(d1.Result), "second") {
+		out, _ := os.ReadFile(filepath.Join(e.short, "out", "tool.out"))
+		t.Fatalf("rework dispatch = round %d %s %s (report_result said %q)", d1.Round, d1.Status, d1.Result, out)
+	}
+	// What was typed in the pane is a pointer to the file holding the amended brief and the new run's variables.
+	typed, err := os.ReadFile(filepath.Join(e.short, "out", "prompt.in"))
+	if err != nil || !strings.HasPrefix(string(typed), "Read the file ") {
+		t.Fatalf("the pane was typed %q (%v)", typed, err)
+	}
+	path := strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(string(typed)), "Read the file "), " in full and carry out what it says.")
+	body, err := os.ReadFile(path)
+	if err != nil || !strings.Contains(string(body), "Rework round 1") || !strings.Contains(string(body), "export ARCHWRIGHT_RUN="+d1.RunID) {
+		t.Fatalf("the Nudge file %s = %q (%v)", path, body, err)
+	}
+	// One pane served both rounds, and its record follows the new run.
+	var rec1 store.RunRecord
+	eventually(t, "the rework run to be recorded with the Session's pane", func() bool {
+		rec1, _ = g.st.GetRunRecord(d1.RunID)
+		return rec1.PaneID != "" && rec1.SessionState == "idle"
+	})
+	if rec1.PaneID != rec.PaneID || d1.Branch != d0.Branch {
+		t.Errorf("panes %q then %q, branches %q then %q", rec.PaneID, rec1.PaneID, d0.Branch, d1.Branch)
+	}
+	panes, _ := exec.Command(e.tmux, "-S", e.sock, "list-panes", "-a", "-F", "#{pane_id}").Output()
+	if n := len(strings.Fields(string(panes))); n != 2 { // the factory's own window and the Wright's
+		t.Errorf("%d panes: %q", n, panes)
 	}
 }

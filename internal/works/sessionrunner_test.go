@@ -4,12 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/phallatlassian/archwright/internal/defs"
 	"github.com/phallatlassian/archwright/internal/runner"
 	hosted "github.com/phallatlassian/archwright/internal/session"
+	"github.com/phallatlassian/archwright/internal/skills"
 	"github.com/phallatlassian/archwright/internal/spool"
 	"github.com/phallatlassian/archwright/internal/store"
 )
@@ -328,4 +333,177 @@ func TestTmuxWrightRunnerIsOptInAndNeverFallsBackSilently(t *testing.T) {
 	if _, ok := WrightRunnerFrom(func(string) string { return "" }, guilds, nil).(*AgentRunner); !ok {
 		t.Fatal("the default is no longer the headless runner")
 	}
+}
+
+// reworkScript is a Wright Session that reports "first", and takes a Nudge as a
+// new turn that reports "second" through the run the Nudge names.
+func reworkScript() hosted.Script {
+	s := hosted.Turn(callsTool("report_result", `{"status":"done","result":"first","evidence":["go test"]}`))
+	s.Nudged = []hosted.Step{
+		{Hook: &hosted.Hook{Event: hosted.HookUserPromptSubmit}},
+		{Act: callsTool("report_result", `{"status":"done","result":"second","evidence":["go test"]}`)},
+		{Hook: &hosted.Hook{Event: hosted.HookStop}},
+	}
+	return s
+}
+
+func TestReworkNudgesTheSameWrightSessionWithTheAmendedBrief(t *testing.T) {
+	g := newSessionRig(t, reworkScript())
+	g.send("p")
+	first := g.waitReported("p")
+	if !strings.Contains(string(first.Result), "first") {
+		t.Fatalf("first result = %s", first.Result)
+	}
+	sess := g.fake.Sessions()[0]
+	waitSessionIdle(t, sess)
+
+	g.rework("p")
+	second := g.waitReported("p")
+	if second.Round != 1 || second.Status != store.DispatchReported || !strings.Contains(string(second.Result), "second") {
+		t.Fatalf("rework dispatch = round %d %s %s", second.Round, second.Status, second.Result)
+	}
+
+	// The same Session took it: one launch, one Nudge, no second pane.
+	if n := len(g.fake.Launches()); n != 1 {
+		t.Fatalf("%d Sessions launched for a rework, want the same one", n)
+	}
+	nudges := g.fake.Nudges()
+	if len(nudges) != 1 {
+		t.Fatalf("%d Nudges, want 1", len(nudges))
+	}
+	// The Nudge carries the amended brief the Works recorded for the run, and the run the Session now reports through.
+	if !strings.Contains(nudges[0], "Rework round 1") || !strings.Contains(nudges[0], "missed tests") || !strings.Contains(nudges[0], "Add login") {
+		t.Errorf("the Nudge lacks the amended brief:\n%s", nudges[0])
+	}
+	for _, line := range []string{"ARCHWRIGHT_RUN=" + second.RunID, "ARCHWRIGHT_RUN_TOKEN="} {
+		if !strings.Contains(nudges[0], line) {
+			t.Errorf("the Nudge does not say %q:\n%s", line, nudges[0])
+		}
+	}
+	if second.RunID == first.RunID {
+		t.Errorf("the rework reused run %s", first.RunID)
+	}
+	// It works where it worked: the same worktree, on the same branch.
+	if second.Branch == "" || second.Branch != first.Branch {
+		t.Errorf("branches %q then %q", first.Branch, second.Branch)
+	}
+	if !strings.Contains(nudges[0], "same worktree") && !strings.Contains(nudges[0], first.Branch) {
+		t.Errorf("the Nudge does not say where the work is:\n%s", nudges[0])
+	}
+	// The rework run's timeline and record follow the Nudged turn; the first run's stay as they were.
+	rec := g.ended(second.RunID)
+	kinds, summaries := g.timeline(second.RunID)
+	var states []string
+	for i, k := range kinds {
+		if k == "session" {
+			states = append(states, summaries[i])
+		}
+	}
+	if !slices.Equal(states, []string{"working", "idle"}) || rec.Status != "done" {
+		t.Errorf("rework run: status %s, timeline %v %v", rec.Status, kinds, summaries)
+	}
+	eventually(t, "the rework run to be recorded with the Session's pane, idle", func() bool {
+		rec, _ = g.st.GetRunRecord(second.RunID)
+		old, _ := g.st.GetRunRecord(first.RunID)
+		return rec.SessionState == "idle" && rec.PaneID != "" && rec.PaneID == old.PaneID
+	})
+	if sess.State() != hosted.StateIdle {
+		t.Errorf("the Session is %s after the rework", sess.State())
+	}
+}
+
+func TestReworkRunsAFreshSessionWithTheAmendedBriefWhenTheSessionIsGone(t *testing.T) {
+	g := newSessionRig(t, reworkScript())
+	g.send("p")
+	g.waitReported("p")
+	old := g.fake.Sessions()[0]
+	waitSessionIdle(t, old)
+	old.Cancel() // the pane is gone: killed, or the Works restarted
+	old.Result()
+	g.fake.SetScript(hosted.Turn(callsTool("report_result", `{"status":"done","result":"fresh","evidence":["go test"]}`)))
+
+	g.rework("p")
+	d := g.waitReported("p")
+	if d.Round != 1 || !strings.Contains(string(d.Result), "fresh") {
+		t.Fatalf("rework dispatch = round %d %s", d.Round, d.Result)
+	}
+	launches := g.fake.Launches()
+	if len(launches) != 2 || len(g.fake.Nudges()) != 0 {
+		t.Fatalf("%d launches and %d Nudges, want a fresh Session and no Nudge", len(launches), len(g.fake.Nudges()))
+	}
+	if b := launches[1].Brief; !strings.Contains(b, "Rework round 1") || !strings.Contains(b, "missed tests") || !strings.Contains(b, "Add login") {
+		t.Errorf("the fresh Session was not given the amended brief:\n%s", b)
+	}
+	if launches[1].Env[spool.EnvRun] != d.RunID {
+		t.Errorf("the fresh Session reports through %q, not its run %s", launches[1].Env[spool.EnvRun], d.RunID)
+	}
+}
+
+func TestReworkFallbackSessionGetsTheGuildSkills(t *testing.T) {
+	g := newSessionRig(t, reworkScript())
+	root := t.TempDir()
+	reg := defs.New(defs.Shipped(), "")
+	reg.Reload()
+	g.r.UseDefinitions(reg)
+	g.r.UseSkills(SkillsDelivery{
+		Catalogue: skills.Vendored(),
+		Runner:    "claude",
+		RunDir:    func(id string) string { return filepath.Join(root, "runs", id) },
+	})
+	g.send("p")
+	g.waitReported("p")
+	old := g.fake.Sessions()[0]
+	waitSessionIdle(t, old)
+	old.Cancel()
+	old.Result()
+	g.fake.SetScript(hosted.Turn(callsTool("report_result", `{"status":"done","result":"fresh","evidence":["go test"]}`)))
+
+	g.rework("p")
+	g.waitReported("p")
+	launches := g.fake.Launches()
+	if len(launches) != 2 {
+		t.Fatalf("%d launches, want a fresh Session", len(launches))
+	}
+	if launches[1].Env["GIT_CONFIG_GLOBAL"] == "" {
+		t.Error("the fresh Session was not given the run's git configuration for the Guild's skills")
+	}
+	if _, err := os.Stat(filepath.Join(launches[1].Dir, ".claude/skills/tdd/SKILL.md")); err != nil {
+		t.Errorf("the fresh Session's worktree has no skills: %v", err)
+	}
+}
+
+func TestReworkNeverNudgesASessionThatIsNotIdle(t *testing.T) {
+	s := hosted.Turn(callsTool("report_result", `{"status":"done","result":"first","evidence":["go test"]}`))
+	// After reporting, a human types in the pane and the agent asks for a permission.
+	s.Steps = append(s.Steps,
+		hosted.Step{Hook: &hosted.Hook{Event: hosted.HookUserPromptSubmit}},
+		hosted.Step{Hook: &hosted.Hook{Event: hosted.HookPermissionReq, ToolName: "Bash", ToolInput: json.RawMessage(`{"command":"rm -rf build"}`)}},
+	)
+	g := newSessionRig(t, s)
+	g.r.runner.(*SessionRunner).NudgeWait = 300 * time.Millisecond
+	g.send("p")
+	g.waitReported("p")
+	sess := g.fake.Sessions()[0]
+	eventually(t, "the Session to wait on a permission", func() bool { return sess.State() == hosted.StateWaitingOnPermission })
+
+	g.rework("p")
+	d := g.waitReported("p")
+	if !strings.Contains(string(d.Result), "not idle") || !strings.Contains(string(d.Result), "waiting-on-permission") {
+		t.Fatalf("result = %s", d.Result)
+	}
+	// Nothing was typed at the prompt, and no second Session was started beside the live one.
+	if n := len(g.fake.Nudges()); n != 0 {
+		t.Fatalf("%d Nudges reached a Session at a prompt", n)
+	}
+	if n := len(g.fake.Launches()); n != 1 {
+		t.Fatalf("%d Sessions launched", n)
+	}
+	if sess.State() != hosted.StateWaitingOnPermission {
+		t.Errorf("the Session is %s: it was disturbed", sess.State())
+	}
+}
+
+func waitSessionIdle(t *testing.T, s hosted.Session) {
+	t.Helper()
+	eventually(t, "the Session to be idle", func() bool { return s.State() == hosted.StateIdle && s.Info().Turns > 0 })
 }

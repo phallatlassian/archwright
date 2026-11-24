@@ -95,6 +95,9 @@ type Info struct {
 	// Turns is how many times the agent finished a turn (a Stop hook with no
 	// permission outstanding): the first one means the brief has been worked on.
 	Turns int `json:"turns"`
+	// Prompts is how many prompts the agent has taken (UserPromptSubmit hooks,
+	// a duplicate delivery counted once): a Nudge is confirmed by it growing.
+	Prompts int `json:"prompts"`
 }
 
 // Status is how a Session ended.
@@ -121,12 +124,28 @@ type Session interface {
 	// Events replays every event from the first, then follows the Session, and
 	// is closed once it has ended. It may be called more than once.
 	Events() <-chan Event
+	// Nudge delivers text to the Session as a new prompt, and returns once the
+	// agent's UserPromptSubmit hook confirms it took it. It is permitted only
+	// when the Session is idle with no PermissionRequest outstanding: in any
+	// other state it types nothing and returns an error wrapping ErrNotIdle,
+	// because Enter at a prompt approves it (docs/spec/tmux-runtime.md). A
+	// delivery the hook never confirms returns ErrNudgeUnconfirmed.
+	Nudge(text string) error
 	// Cancel interrupts the Session and then kills its pane after a short
 	// grace; Result then reports StatusCancelled. The worktree is untouched.
 	Cancel()
 	// Result blocks until the Session ends.
 	Result() Result
 }
+
+// ErrNotIdle is why a Nudge was refused: the Session is not idle, or has a
+// PermissionRequest outstanding. Nothing was sent to it.
+var ErrNotIdle = errors.New("the Session is not idle")
+
+// ErrNudgeUnconfirmed is why a Nudge's delivery is in doubt: the text was
+// pasted and Enter sent, but no UserPromptSubmit hook reported it in time. The
+// text may be waiting in the Session's composer, so it is not sent again.
+var ErrNudgeUnconfirmed = errors.New("the Nudge was not confirmed by a UserPromptSubmit hook")
 
 // ErrNotQueueable is why a Session could not be messaged while busy: it is not
 // working, or the vendor has no queue.

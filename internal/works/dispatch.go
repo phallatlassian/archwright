@@ -74,6 +74,7 @@ type RunRequest struct {
 	Piece      string
 	DispatchID string
 	Worktree   string            // the Wright's own worktree; empty when the Works has no Sites
+	Rework     bool              // a piece sent back, in the worktree of its Wright's open Session: the Session is Nudged, not relaunched
 	Brief      string            // the rendered brief, Guild standards included
 	ExtraEnv   map[string]string // further variables for the runner process, such as GIT_CONFIG_GLOBAL for delivered skills
 	Trace      Trace             // where a runner reports its timeline and usage for the dashboard
@@ -99,6 +100,14 @@ func (t Trace) Consumed(runner string, inputTokens, outputTokens int, costUSD fl
 	if t.Usage != nil {
 		t.Usage(runner, inputTokens, outputTokens, costUSD)
 	}
+}
+
+// SessionReuser is a Runner that keeps the Sessions of its Wrights open after
+// they report, so a rework can be Nudged into one (ADR 0029).
+type SessionReuser interface {
+	// Reusable is the worktree of the open Session that carried out the piece
+	// of the job, or "" when it has none: never had one, or it has ended.
+	Reusable(job, piece string) string
 }
 
 // Runner carries out one Wright run (ADR 0003). Real adapters spawn a vendor
@@ -624,20 +633,24 @@ func (r *Runs) start(d store.Dispatch) error {
 	go func() {
 		defer r.wg.Done()
 		defer cancel()
-		wt, from, runErr := r.wrightWorktree(d)
+		wt, from, reused, runErr := r.wrightWorktree(d)
 		brief := d.Rendered
 		if runErr == nil && d.Round > 0 && !isMergeWright(d.Piece) && wt != "" {
-			brief += startingPoint(from)
+			if reused {
+				brief += sessionStartingPoint(from)
+			} else {
+				brief += startingPoint(from)
+			}
 		}
 		if runErr == nil {
 			r.recordBrief(env.Run, brief) // a run that never starts was not given it
 		}
 		var extra map[string]string
-		if runErr == nil {
+		if runErr == nil { // a reused Session may have ended: a fresh one then needs them
 			extra, runErr = r.deliverSkillsFor(d, env.Run, wt)
 		}
 		if runErr == nil {
-			runErr = runner.Run(ctx, RunRequest{Env: env, Job: d.JobID, Guild: d.Guild, Piece: d.Piece, DispatchID: d.ID, Worktree: wt, Brief: brief, ExtraEnv: extra, Trace: trace})
+			runErr = runner.Run(ctx, RunRequest{Env: env, Job: d.JobID, Guild: d.Guild, Piece: d.Piece, DispatchID: d.ID, Worktree: wt, Rework: reused, Brief: brief, ExtraEnv: extra, Trace: trace})
 		}
 		unreported := false
 		cur, curErr := r.st.GetDispatch(d.ID)
@@ -827,26 +840,38 @@ func commitRaw(outcome, sha string) json.RawMessage {
 // (ADR 0008). Without Sites there is none. A later round of a piece continues
 // from the branch of its previous round, whose work the Works committed when
 // that round reported (ADR 0025); from names that branch, or is empty when the
-// worktree starts from the Job's integration branch.
-func (r *Runs) wrightWorktree(d store.Dispatch) (path, from string, err error) {
+// worktree starts from the Job's integration branch. A rework of a piece whose
+// Wright Session is still open takes that Session's worktree and branch
+// instead, so the Session it is Nudged into keeps working where it was
+// (reused is true, from is the branch).
+func (r *Runs) wrightWorktree(d store.Dispatch) (path, from string, reused bool, err error) {
 	r.mu.Lock()
 	sm, kept := r.sites, r.wrightWts[d.ID]
 	r.mu.Unlock()
 	if sm == nil {
-		return "", "", nil
+		return "", "", false, nil
 	}
 	if _, err := os.Stat(kept); kept != "" && err == nil {
-		return kept, "", nil // requeued after a rate limit: the same worktree, not another
+		return kept, "", false, nil // requeued after a rate limit: the same worktree, not another
+	}
+	if path, branch := r.sessionWorktree(d); path != "" {
+		r.mu.Lock()
+		r.wrightWts[d.ID] = path
+		r.mu.Unlock()
+		if err := r.st.SetDispatchBranch(d.ID, branch); err != nil { // accept_piece merges this branch
+			return "", "", false, fmt.Errorf("recording the Wright's branch: %w", err)
+		}
+		return path, branch, true, nil
 	}
 	if isMergeWright(d.Piece) { // a merge Wright commits on the integration branch itself, so the push is a fast-forward (ADR 0022)
 		path, err := sm.IntegrationWorktree(d.JobID)
 		if err != nil {
-			return "", "", fmt.Errorf("finding the integration worktree: %w", err)
+			return "", "", false, fmt.Errorf("finding the integration worktree: %w", err)
 		}
-		return path, "", nil
+		return path, "", false, nil
 	}
 	if err := sm.EnsureIntegration(d.JobID); err != nil {
-		return "", "", fmt.Errorf("creating the integration worktree: %w", err)
+		return "", "", false, fmt.Errorf("creating the integration worktree: %w", err)
 	}
 	from = r.previousBranch(d)
 	wt, err := sm.CreateWorktree(d.JobID, store.KindWright, from)
@@ -856,15 +881,55 @@ func (r *Runs) wrightWorktree(d store.Dispatch) (path, from string, err error) {
 		wt, err = sm.CreateWorktree(d.JobID, store.KindWright, "")
 	}
 	if err != nil {
-		return "", "", fmt.Errorf("creating the Wright's worktree: %w", err)
+		return "", "", false, fmt.Errorf("creating the Wright's worktree: %w", err)
 	}
 	r.mu.Lock()
 	r.wrightWts[d.ID] = wt.Path
 	r.mu.Unlock()
 	if err := r.st.SetDispatchBranch(d.ID, wt.Branch); err != nil { // accept_piece merges this branch
-		return "", "", fmt.Errorf("recording the Wright's branch: %w", err)
+		return "", "", false, fmt.Errorf("recording the Wright's branch: %w", err)
 	}
-	return wt.Path, from, nil
+	return wt.Path, from, false, nil
+}
+
+// sessionWorktree is the worktree and branch of the open Wright Session a
+// rework of d would be Nudged into: d must be a piece sent back by its
+// Warden (an Ask's answer, or a restart after an interruption, is not a
+// rework), and the Runner must still hold that piece's Session. Both are ""
+// when there is none, and a fresh Session runs the amended brief.
+func (r *Runs) sessionWorktree(d store.Dispatch) (path, branch string) {
+	r.mu.Lock()
+	reuser, _ := r.runner.(SessionReuser)
+	r.mu.Unlock()
+	if reuser == nil || d.Round == 0 || isMergeWright(d.Piece) {
+		return "", ""
+	}
+	prev, ok := r.previousDispatch(d)
+	if !ok || prev.Status != store.DispatchRejected || prev.Branch == "" {
+		return "", ""
+	}
+	path = reuser.Reusable(d.JobID, d.Piece)
+	if _, err := os.Stat(path); path == "" || err != nil {
+		return "", ""
+	}
+	return path, prev.Branch
+}
+
+// previousDispatch is the piece's latest dispatch before d.
+func (r *Runs) previousDispatch(d store.Dispatch) (store.Dispatch, bool) {
+	ds, err := r.st.Dispatches(d.JobID)
+	if err != nil {
+		log.Printf("dispatch %s: finding the previous round: %v", d.ID, err)
+		return store.Dispatch{}, false
+	}
+	var prev store.Dispatch
+	found := false
+	for _, p := range ds {
+		if p.Piece == d.Piece && p.Round < d.Round && (!found || p.Round > prev.Round) {
+			prev, found = p, true
+		}
+	}
+	return prev, found
 }
 
 // previousBranch is the branch of the piece's latest earlier round that had a
@@ -885,6 +950,15 @@ func (r *Runs) previousBranch(d store.Dispatch) string {
 		}
 	}
 	return branch
+}
+
+// sessionStartingPoint tells a reworked Wright where its work is: the
+// worktree and branch the previous round used, with the Works' commit of it.
+// It holds for a Session that was Nudged and for the fresh one that stands in
+// when that Session ended on the way, so it does not say which this is.
+func sessionStartingPoint(branch string) string {
+	return "\n## Starting point\n\nYour worktree is the one the previous round worked in, on the same branch `" + branch + "`: the Works committed whatever that round left, finished or not. " +
+		"Look at what is there (`git log`, `git show`) and build on it instead of redoing it.\n"
 }
 
 // startingPoint tells a later round's Wright what its worktree holds: the

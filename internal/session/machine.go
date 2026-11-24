@@ -3,6 +3,7 @@ package session
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 )
 
 // Hook event names the state machine reads. Claude sends all of them; Codex
@@ -111,6 +112,7 @@ func (m *Machine) Apply(h Hook) (Change, bool) {
 			return m.move(StateIdle, h), true
 		}
 	case HookUserPromptSubmit:
+		m.info.Prompts++
 		m.beginTurn(h.TurnID)
 		m.outstanding = nil // a new turn cannot begin with a prompt still open
 		return m.settle(StateWorking, h)
@@ -161,6 +163,20 @@ func (m *Machine) stale(h Hook) bool {
 		return h.TurnID != "" && m.closed[h.TurnID]
 	}
 	return false
+}
+
+// Nudgeable says whether the Session may be Nudged: idle, with no
+// PermissionRequest outstanding. The second condition is already implied by the
+// first (a Stop never makes a Session idle while one is open), and is checked
+// anyway because a Nudge at a prompt approves it.
+func (m *Machine) Nudgeable() error {
+	switch {
+	case m.state != StateIdle:
+		return fmt.Errorf("%w: it is %s", ErrNotIdle, m.state)
+	case len(m.outstanding) > 0:
+		return fmt.Errorf("%w: a PermissionRequest is outstanding", ErrNotIdle)
+	}
+	return nil
 }
 
 // End moves to StateEnded: the SessionEnd hook, or the pane's death. It
