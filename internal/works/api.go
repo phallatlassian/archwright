@@ -703,6 +703,24 @@ func newHandler(st *store.Store, runs *Runs, sm *sites.Manager, token string, pi
 		}
 		reply(w, 201, env)
 	})
+	// The Works spawns and owns the Archwright as a Session in its tmux session; 501 says it does not host it.
+	mux.HandleFunc("POST /archwright", func(w http.ResponseWriter, r *http.Request) {
+		var in struct{ Site string }
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			fail(w, err)
+			return
+		}
+		if !runs.ArchwrightHosted() {
+			reply(w, http.StatusNotImplemented, map[string]string{"error": MsgArchwrightNotHosted})
+			return
+		}
+		info, err := runs.StartArchwright(in.Site)
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		reply(w, 200, info)
+	})
 	mux.HandleFunc("DELETE /runs/{id}", func(w http.ResponseWriter, r *http.Request) {
 		if err := runs.End(r.PathValue("id")); err != nil {
 			fail(w, err)

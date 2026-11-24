@@ -12,17 +12,19 @@ import (
 	hosted "github.com/phallatlassian/archwright/internal/session"
 )
 
-// SessionRunner is the Runner that runs a Wright as an interactive Session of
-// the vendor CLI its Guild is bound to, in a pane of the factory tmux session
-// (ADR 0026). The Wright reports through the spool like any other; this
-// launches it, follows its hook-derived state onto the run's timeline and the
-// run's record, and returns once the Wright has finished its turn.
+// SessionRunner is the Runner that runs a Wright, a Warden or a review as an
+// interactive Session of the vendor CLI its Guild is bound to, in a pane of the
+// factory tmux session (ADR 0026). The agent reports through the spool like
+// any other; this launches it, follows its hook-derived state onto the run's
+// timeline and the run's record, and returns once it has finished its turn.
 //
-// The Session is left open when Run returns: it stays in its pane until the
-// Job leaves active work (ADR 0029), which a later slice handles. Cancelling
-// the run's context cancels the Session; returning does not. A piece sent
-// back for rework is Nudged into its open Session, with the amended brief; if
-// the Session is gone, a fresh one runs the amended brief (ADR 0029).
+// The Session is left open when a run returns: it stays in its pane until the
+// Job leaves active work (ADR 0029), when CloseJob ends it. Cancelling the
+// run's context cancels the Session; returning does not. A piece sent back for
+// rework is Nudged into its Wright's open Session, with the amended brief; a
+// Job's later steps for a Guild, and its later reviews, are Nudged into the
+// Job's standing Warden Session for that Guild; if the Session is gone, a
+// fresh one runs the brief (ADR 0029).
 type SessionRunner struct {
 	Runners map[string]hosted.Runner // by the runner name a Guild binding gives
 	Guilds  GuildSource
@@ -35,8 +37,9 @@ type SessionRunner struct {
 	// giving up on it; zero means DefaultNudgeWait.
 	NudgeWait time.Duration
 
-	mu   sync.Mutex
-	live map[string]*liveSession // the open Session of each piece of each Job
+	mu    sync.Mutex
+	live  map[string]*liveSession  // the open Session of each piece of each Job, and each Guild's Warden of each Job
+	locks map[string]chan struct{} // one run at a time for each Session key
 }
 
 // DefaultNudgeWait is how long a rework waits for a Wright Session that is
@@ -52,6 +55,7 @@ const nudgePoll = 50 * time.Millisecond
 // The run it is carrying out changes with each rework; its events go to
 // whichever run holds it now.
 type liveSession struct {
+	job      string
 	s        hosted.Session
 	r        hosted.Runner
 	key      string // where the Runner keeps it
@@ -79,20 +83,32 @@ func (c *carry) finish(err error) {
 	}
 }
 
-func sessionKey(job, piece string) string { return job + "/" + piece }
+// A Wright's Session is keyed by its piece and a Warden's by its Guild, each
+// under the Job, so two Jobs never share one and a Review Warden (Hallmark)
+// never lands in a builder's Session (Masonry's Warden or any Wright).
+func wrightKey(job, piece string) string { return job + "/wright/" + piece }
+func wardenKey(job, guild string) string { return job + "/warden/" + guild }
+
+// runSpec says how a run takes its Session: which one it may re-use, and what
+// it tells that Session.
+type runSpec struct {
+	key   string                      // where the Session is kept; "" for one that is not kept
+	reuse func(ls *liveSession) bool  // whether the run is Nudged into an open Session under key
+	nudge func(req RunRequest) string // what the open Session is told
+}
 
 // Reusable implements SessionReuser.
 func (a *SessionRunner) Reusable(job, piece string) string {
-	if ls := a.open(job, piece); ls != nil {
+	if ls := a.open(wrightKey(job, piece)); ls != nil {
 		return ls.worktree
 	}
 	return ""
 }
 
-// open is the piece's Session if it has not ended.
-func (a *SessionRunner) open(job, piece string) *liveSession {
+// open is the Session kept under key, if it has not ended.
+func (a *SessionRunner) open(key string) *liveSession {
 	a.mu.Lock()
-	ls := a.live[sessionKey(job, piece)]
+	ls := a.live[key]
 	a.mu.Unlock()
 	if ls == nil || ls.s.State() == hosted.StateEnded {
 		return nil
@@ -104,13 +120,44 @@ func (a *SessionRunner) open(job, piece string) *liveSession {
 // prose: it is whether the Wright reported through the spool, which the caller
 // checks, and how the Session ended.
 func (a *SessionRunner) Run(ctx context.Context, req RunRequest) error {
+	spec := runSpec{reuse: func(ls *liveSession) bool { return req.Rework && ls.worktree == req.Worktree }, nudge: reworkNudge}
+	if req.Piece != "" && req.Env.Role == RoleWright {
+		spec.key = wrightKey(req.Job, req.Piece)
+	}
+	return a.run(ctx, req, spec)
+}
+
+// RunWarden implements WardenRunner: the step is carried out by the Job's
+// standing Warden Session for its Guild, which is launched for the first step
+// and Nudged with each later one (ADR 0029).
+func (a *SessionRunner) RunWarden(ctx context.Context, req WardenRequest) error {
+	return a.run(ctx, RunRequest{Env: req.Env, Job: req.Job, Guild: req.Guild, Piece: req.Step, Worktree: req.Worktree, Brief: req.Brief, ExtraEnv: req.ExtraEnv, Trace: req.Trace}, a.standing(req.Job, req.Guild, stepNudge))
+}
+
+// RunReview implements ReviewRunner: a read-only Session of the Review Guild,
+// which shares no context with the builder because it is the Review Guild's
+// own Warden Session, never a Wright's or a builder Guild's. Its second pass
+// is Nudged into the same Session when it reviews the same checkout; a review
+// in another checkout replaces it, so the Session's directory and skills are
+// that review's.
+func (a *SessionRunner) RunReview(ctx context.Context, req ReviewRequest) error {
+	spec := a.standing(req.Job, ReviewGuild, reviewNudge)
+	spec.reuse = func(ls *liveSession) bool { return ls.worktree == req.Worktree }
+	return a.run(ctx, RunRequest{Env: req.Env, Job: req.Job, Guild: ReviewGuild, Worktree: req.Worktree, Brief: req.Brief, ExtraEnv: req.ExtraEnv, Trace: req.Trace}, spec)
+}
+
+func (a *SessionRunner) standing(job, guild string, nudge func(RunRequest) string) runSpec {
+	return runSpec{key: wardenKey(job, guild), reuse: func(*liveSession) bool { return true }, nudge: nudge}
+}
+
+func (a *SessionRunner) run(ctx context.Context, req RunRequest, spec runSpec) error {
 	g, err := a.Guilds(req.Guild)
 	if err != nil {
 		return err
 	}
 	r, ok := a.Runners[g.Binding.Runner]
 	if !ok {
-		if a.Fallback != nil {
+		if a.Fallback != nil && req.Env.Role == RoleWright {
 			return a.Fallback.Run(ctx, req)
 		}
 		return fmt.Errorf("guild %q is bound to runner %q, which cannot run as a Session", g.Name, g.Binding.Runner)
@@ -122,16 +169,26 @@ func (a *SessionRunner) Run(ctx context.Context, req RunRequest) error {
 	if err != nil {
 		return err
 	}
-	if ls := a.open(req.Job, req.Piece); ls != nil && req.Rework && ls.worktree == req.Worktree {
-		c, err := a.nudge(ctx, req, ls)
-		if !errors.Is(err, errSessionGone) {
-			if err != nil {
-				return err
-			}
-			return a.await(ctx, req, ls, c)
+	if spec.key != "" {
+		// A Session carries out one run at a time: a Job's steps for a Guild are
+		// serialised in its Warden (ADR 0029), and two runs never both find no
+		// Session and launch two.
+		unlock, err := a.lockKey(ctx, spec.key)
+		if err != nil {
+			return err
 		}
-		// The Session ended between the check and the Nudge: a fresh one runs the
-		// amended brief, in the worktree and on the branch the round before left.
+		defer unlock()
+		if ls := a.open(spec.key); ls != nil && spec.reuse(ls) {
+			c, err := a.nudge(ctx, req, ls, spec.nudge(req))
+			if !errors.Is(err, errSessionGone) {
+				if err != nil {
+					return err
+				}
+				return a.await(ctx, req, ls, c)
+			}
+			// The Session ended between the check and the Nudge: a fresh one runs the
+			// amended brief, in the worktree and on the branch the round before left.
+		}
 	}
 	env := map[string]string{}
 	for _, kv := range req.Env.Environ() {
@@ -148,16 +205,20 @@ func (a *SessionRunner) Run(ctx context.Context, req RunRequest) error {
 		return fmt.Errorf("%s was not started: %w", r.Name(), err) // a never-list refusal fails the dispatch closed
 	}
 	a.record(req, live.Info(), hosted.StateStarting)
-	ls := &liveSession{s: live, r: r, key: sessionKey(req.Job, req.Piece), worktree: req.Worktree}
+	ls := &liveSession{job: req.Job, s: live, r: r, key: spec.key, worktree: req.Worktree}
 	c := &carry{req: req, armed: true, done: make(chan error, 1)} // the brief was its first prompt
 	ls.cur = c
-	if req.Piece != "" && req.Env.Role == RoleWright {
+	if spec.key != "" {
 		a.mu.Lock()
 		if a.live == nil {
 			a.live = map[string]*liveSession{}
 		}
-		a.live[sessionKey(req.Job, req.Piece)] = ls
+		old := a.live[spec.key]
+		a.live[spec.key] = ls
 		a.mu.Unlock()
+		if old != nil {
+			old.s.Cancel() // an ended Session's dead pane goes; it has nothing left to say
+		}
 	}
 	go a.follow(ls)
 	return a.await(ctx, req, ls, c)
@@ -177,14 +238,79 @@ func (a *SessionRunner) await(ctx context.Context, req RunRequest, ls *liveSessi
 	}
 }
 
-// errSessionGone says the Session ended before the Nudge could be delivered.
-var errSessionGone = errors.New("the Wright's Session has ended")
+// lockKey waits for the run holding the Session key, or for ctx.
+func (a *SessionRunner) lockKey(ctx context.Context, key string) (unlock func(), err error) {
+	a.mu.Lock()
+	if a.locks == nil {
+		a.locks = map[string]chan struct{}{}
+	}
+	l := a.locks[key]
+	if l == nil {
+		l = make(chan struct{}, 1)
+		a.locks[key] = l
+	}
+	a.mu.Unlock()
+	select {
+	case l <- struct{}{}:
+		return func() { <-l }, nil
+	case <-ctx.Done():
+		return nil, context.Canceled
+	}
+}
 
-// nudge hands a rework to the piece's open Session: the amended brief, and the
-// run it now reports through. It waits, up to NudgeWait, for a Session that is
+// OpenJobs lists the Jobs that hold a Session, open or ended with its pane still kept.
+func (a *SessionRunner) OpenJobs() []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	seen := map[string]bool{}
+	var jobs []string
+	for _, ls := range a.live {
+		if !seen[ls.job] {
+			seen[ls.job] = true
+			jobs = append(jobs, ls.job)
+		}
+	}
+	return jobs
+}
+
+// CloseJob ends the Sessions of a Job that has left active work (ADR 0029):
+// each one that is idle, or already ended, exits and its pane is removed, which
+// closes the Job's window with the last of them. A Session that is working, at
+// a prompt or still starting is left alone, and so is its entry; the count of
+// those is returned, for the caller to ask again.
+func (a *SessionRunner) CloseJob(job string) (remaining int) {
+	a.mu.Lock()
+	var mine []*liveSession
+	for _, ls := range a.live {
+		if ls.job == job {
+			mine = append(mine, ls)
+		}
+	}
+	a.mu.Unlock()
+	for _, ls := range mine {
+		if st := ls.s.State(); st != hosted.StateIdle && st != hosted.StateEnded {
+			remaining++
+			continue
+		}
+		ls.s.Cancel()
+		ls.s.Result() // the pane is gone once the result is
+		a.mu.Lock()
+		if a.live[ls.key] == ls {
+			delete(a.live, ls.key)
+		}
+		a.mu.Unlock()
+	}
+	return remaining
+}
+
+// errSessionGone says the Session ended before the Nudge could be delivered.
+var errSessionGone = errors.New("the Session has ended")
+
+// nudge hands a run to its open Session: text names the brief, and the run it
+// now reports through. It waits, up to NudgeWait, for a Session that is
 // working or at a prompt to be idle, and types nothing at it meanwhile; one
 // that is still not idle fails the run rather than being disturbed.
-func (a *SessionRunner) nudge(ctx context.Context, req RunRequest, ls *liveSession) (*carry, error) {
+func (a *SessionRunner) nudge(ctx context.Context, req RunRequest, ls *liveSession, text string) (*carry, error) {
 	c := &carry{req: req, done: make(chan error, 1)}
 	ls.mu.Lock()
 	prev := ls.cur
@@ -197,7 +323,6 @@ func (a *SessionRunner) nudge(ctx context.Context, req RunRequest, ls *liveSessi
 		ls.mu.Unlock()
 		return nil, err
 	}
-	text := reworkNudge(req)
 	wait := a.NudgeWait
 	if wait <= 0 {
 		wait = DefaultNudgeWait
@@ -216,9 +341,9 @@ func (a *SessionRunner) nudge(ctx context.Context, req RunRequest, ls *liveSessi
 		if st := ls.s.State(); st == hosted.StateEnded {
 			return fail(errSessionGone)
 		} else if !errors.Is(err, hosted.ErrNotIdle) {
-			return fail(fmt.Errorf("nudging the Wright's Session: %w", err))
+			return fail(fmt.Errorf("nudging the Session: %w", err))
 		} else if time.Now().After(deadline) {
-			return fail(fmt.Errorf("the Wright's Session is not idle (%s) after %s: it was left alone, and the rework was not delivered", st, wait))
+			return fail(fmt.Errorf("the Session is not idle (%s) after %s: it was left alone, and the run was not delivered to it", st, wait))
 		}
 		select {
 		case <-ctx.Done():
@@ -232,11 +357,25 @@ func (a *SessionRunner) nudge(ctx context.Context, req RunRequest, ls *liveSessi
 // amended brief, and the run its tool calls belong to from now on. The Session
 // started with the variables of its first run, which have ended.
 func reworkNudge(req RunRequest) string {
+	return nudgeText("Your last result for this piece was sent back for rework. The amended brief below replaces the one you were given; carry it out in this Session.", "this round", req)
+}
+
+// stepNudge is what a Job's standing Warden is told for its next step.
+func stepNudge(req RunRequest) string {
+	return nudgeText("You are the standing Warden of this Job for your Guild, and the Works has a new step for you. Everything you learned in earlier steps still holds; the brief below is this step's. Carry it out in this Session.", "this step", req)
+}
+
+// reviewNudge is what the Review Warden is told for a further review of the Job.
+func reviewNudge(req RunRequest) string {
+	return nudgeText("The Works has a further review for you, of the Job's code as it now stands. You have reviewed this Job before and may use that; judge this round on the code named below. The brief below is this review's.", "this review", req)
+}
+
+func nudgeText(lead, what string, req RunRequest) string {
 	var w strings.Builder
-	w.WriteString("Your last result for this piece was sent back for rework. The amended brief below replaces the one you were given; carry it out in this Session.\n\n")
+	w.WriteString(lead + "\n\n")
 	w.WriteString(strings.TrimSpace(req.Brief))
-	w.WriteString("\n\n## Reporting this round\n\nThis rework is a new run, so the variables you started with no longer work. ")
-	w.WriteString("Set these before any `archwright tool` call, report_result and ask included, and leave them set:\n\n")
+	w.WriteString("\n\n## Reporting " + what + "\n\nThis is a new run, so the variables you started with no longer work. ")
+	w.WriteString("Set these before any `archwright tool` call, handback, report_review and ask included, and leave them set:\n\n")
 	for _, kv := range req.Env.Environ() {
 		w.WriteString("export " + kv + "\n")
 	}
@@ -282,11 +421,6 @@ func (a *SessionRunner) follow(ls *liveSession) {
 			ls.mu.Unlock()
 		}
 	}
-	a.mu.Lock()
-	if a.live[ls.key] == ls {
-		delete(a.live, ls.key)
-	}
-	a.mu.Unlock()
 	ls.mu.Lock()
 	c := ls.cur
 	ls.mu.Unlock()

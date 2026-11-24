@@ -183,6 +183,40 @@ func TestTmuxKeepsADeadPaneReadable(t *testing.T) {
 	}
 }
 
+func TestTmuxCancelOfAnEndedSessionRemovesItsKeptPane(t *testing.T) {
+	r := newTmuxRig(t, "claude")
+	s := r.launch(t, r.request(t, scenEnds))
+	if res := s.Result(); res.Status != "done" {
+		t.Fatalf("result = %+v", res)
+	}
+	s.Cancel()
+	if out, _ := r.tm.tmux("list-panes", "-a", "-F", "#{pane_id}"); strings.Contains(out, s.Info().Pane) {
+		t.Fatalf("the ended Session's pane is still there: %q", out)
+	}
+}
+
+func TestTmuxPlacesTheArchwrightInTheArchwrightWindowInPlaceOfTheEmptyPane(t *testing.T) {
+	r := newTmuxRig(t, "claude")
+	req := r.request(t, scenTurn)
+	req.Role, req.Job = RoleArchwright, ""
+	s := r.launch(t, req)
+	waitFor(t, "a turn", func() bool { return s.Info().Turns == 1 })
+	out, err := r.tm.tmux("list-panes", "-a", "-F", "#{window_name} #{pane_id}")
+	if err != nil || out != "archwright "+s.Info().Pane {
+		t.Fatalf("panes = %q (%v), want the Archwright's alone in the archwright window", out, err)
+	}
+	// Once it ends, its dead pane makes way for the next one.
+	s.Cancel()
+	s.Result()
+	req2 := r.request(t, scenTurn)
+	req2.Role, req2.Job = RoleArchwright, ""
+	s2 := r.launch(t, req2)
+	out, err = r.tm.tmux("list-panes", "-a", "-F", "#{window_name} #{pane_id}")
+	if err != nil || out != "archwright "+s2.Info().Pane {
+		t.Fatalf("panes = %q (%v)", out, err)
+	}
+}
+
 func TestTmuxLaunchesClaudeInDefaultModeWithTheBriefAsThePositionalArgument(t *testing.T) {
 	r := newTmuxRig(t, "claude")
 	brief := "Fix it; don't `rm -rf $HOME`\nsecond \"line\" with 'quotes' and --flags"

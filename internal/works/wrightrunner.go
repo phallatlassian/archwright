@@ -55,7 +55,13 @@ func WrightRunnerFrom(getenv func(string) string, guilds GuildSource, st *store.
 // agents on the runner their Guild is bound to, like Wrights, or, when the
 // environment asks for the fake runner, the scripted fake Warden with no
 // review runner. The posture, never-list and preflight are the Wrights'.
-func WardenRunnersFrom(getenv func(string) string, guilds GuildSource, st *store.Store) (WardenRunner, ReviewRunner) {
+// wrights is the Runner built for Wrights: when it hosts Sessions, Wardens and
+// reviews are Sessions of the same runner, so a Job's Sessions share one window
+// and one lifecycle (ADR 0029).
+func WardenRunnersFrom(getenv func(string) string, guilds GuildSource, st *store.Store, wrights Runner) (WardenRunner, ReviewRunner) {
+	if sr, ok := wrights.(*SessionRunner); ok {
+		return sr, sr
+	}
 	if getenv(EnvWrightRunner) == wrightRunnerFake {
 		return NewFakeWarden(), nil
 	}

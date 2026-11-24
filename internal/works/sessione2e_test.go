@@ -1,6 +1,7 @@
 package works
 
 import (
+	"github.com/phallatlassian/archwright/internal/launch"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -32,6 +33,8 @@ func TestCodexWrightRunsAsASessionInARealTmuxPaneAndReportsThroughTheSpool(t *te
 type e2eRig struct {
 	*gateRig
 	tmux, sock, short string
+	tm                *hosted.Tmux
+	sr                *SessionRunner
 }
 
 func newSessionE2E(t *testing.T, vendor, standinScript string) *e2eRig {
@@ -85,14 +88,15 @@ func newSessionE2E(t *testing.T, vendor, standinScript string) *e2eRig {
 		}
 		return Guild{}, errInvalidInput
 	}
-	g.r.Configure(guilds, &SessionRunner{
+	sr := &SessionRunner{
 		Runners: map[string]hosted.Runner{"claude": tm, "codex": tm.Codex()},
 		Guilds:  guilds,
 		Record: func(run string, info hosted.Info, state hosted.State) {
 			g.st.SetRunSession(run, info.Pane, info.SessionID, info.TranscriptPath, string(state))
 		},
-	})
-	return &e2eRig{gateRig: g, tmux: tmuxBin, sock: sock, short: short}
+	}
+	g.r.Configure(guilds, sr)
+	return &e2eRig{gateRig: g, tmux: tmuxBin, sock: sock, short: short, tm: tm, sr: sr}
 }
 
 func runSessionE2E(t *testing.T, vendor string) {
@@ -192,4 +196,137 @@ func TestReworkNudgesTheSameWrightSessionInARealTmuxPane(t *testing.T) {
 	if n := len(strings.Fields(string(panes))); n != 2 { // the factory's own window and the Wright's
 		t.Errorf("%d panes: %q", n, panes)
 	}
+}
+
+// panes lists the panes of the factory session as "window pane" lines.
+func (e *e2eRig) panes(t *testing.T) []string {
+	t.Helper()
+	out, err := exec.Command(e.tmux, "-S", e.sock, "list-panes", "-a", "-F", "#{window_name} #{pane_id}").Output()
+	if err != nil {
+		t.Fatalf("list-panes: %v", err)
+	}
+	return strings.Fields(string(out))
+}
+
+// The Works spawns the Archwright in a real pane of the `archwright` window,
+// replacing the empty pane the factory session started with, and an inbox item
+// reaches the idle Session as a Nudge pasted into that pane.
+func TestWorksSpawnsTheArchwrightInTheArchwrightWindowAndNudgesItInARealTmuxPane(t *testing.T) {
+	e := newSessionE2E(t, "claude", "hook SessionStart;hook UserPromptSubmit;hook Stop;readprompt;hook UserPromptSubmit;hook Stop;hold")
+	g := e.gateRig
+	g.r.UseArchwright(&ArchwrightHost{
+		Runners:   map[string]hosted.Runner{"claude": e.tm},
+		Choice:    func() (string, error) { return "claude", nil },
+		Home:      filepath.Join(e.short, "home"),
+		SpoolRoot: func(string) string { return filepath.Join(e.short, "spool") },
+	})
+	info, err := g.r.StartArchwright("")
+	if err != nil || !info.Started {
+		t.Fatalf("StartArchwright = %+v, %v", info, err)
+	}
+	if got := e.panes(t); len(got) != 2 || got[0] != "archwright" || got[1] != info.Pane {
+		t.Fatalf("panes = %q, want the Archwright's alone in the archwright window", got)
+	}
+	eventually(t, "the Archwright to finish its first turn", func() bool {
+		a := g.r.archwrightSession()
+		return a != nil && a.s.Info().Turns == 1
+	})
+	if _, err := g.st.QueueCommand("instruct", "", "SECRET words", nil); err != nil {
+		t.Fatal(err)
+	}
+	var typed []byte
+	eventually(t, "the Nudge to reach the pane", func() bool {
+		typed, _ = os.ReadFile(filepath.Join(e.short, "out", "prompt.in"))
+		return len(typed) > 0
+	})
+	if strings.TrimSpace(string(typed)) != launch.Nudge {
+		t.Errorf("the pane was typed %q, want %q", typed, launch.Nudge)
+	}
+	eventually(t, "the agent to take the Nudge as a prompt", func() bool { return g.r.archwrightSession().s.Info().Prompts == 2 })
+}
+
+// A Job's Warden is one pane for all its steps of a Guild: the second step is
+// pasted into it, and the pane stays open until the Job leaves active work.
+func TestStandingWardenIsOnePaneForTheStepsOfItsGuildInARealTmuxPane(t *testing.T) {
+	handback := func(piece string) string {
+		return "tool dispatch_wright {\"piece\":\"" + piece + "\",\"brief\":" + noSpaces(fakeWrightBrief) + "};sleep 1;tool accept_piece {\"piece\":\"" + piece + "\"};" +
+			`tool handback {"status":"done","results":["r"],"checked":["c"],"rejected":[],"uncertainty":"none"}`
+	}
+	e := newSessionE2E(t, "claude", "hook SessionStart;hook UserPromptSubmit;"+handback("p1")+";hook Stop;readnudge;hook UserPromptSubmit;"+handback("p2")+";hook Stop;hold")
+	g := e.gateRig
+	g.r.Configure(func(string) (Guild, error) { return agentGuilds["masonry"], nil }, NewFakeRunner(nil))
+	g.r.ConfigureWarden(e.sr)
+	g.r.UseSessions(e.sr, time.Minute)
+	arch := startRun(t, g.r, RoleArchwright)
+	if _, err := g.st.SetPlan(g.job.ID, []store.Step{{ID: "one", Guild: "masonry", Title: "One"}, {ID: "two", Guild: "masonry", Title: "Two"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.st.DecidePlan(g.job.ID, true, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"one", "two"} {
+		if resp := call(t, arch, "s-"+id, "start_step", `{"job":"`+g.job.ID+`","step":"`+id+`"}`); !resp.OK {
+			t.Fatalf("start_step %s: %+v", id, resp.Error)
+		}
+		eventually(t, "step "+id+" to hand back", func() bool {
+			sr, _ := g.st.GetStepRun(g.job.ID, id)
+			if sr.Status == store.StepFailed {
+				out, _ := os.ReadFile(filepath.Join(e.short, "out", "tool.out"))
+				t.Fatalf("step %s failed: %s (last tool said %q)", id, sr.Reason, out)
+			}
+			return sr.Status == store.StepHandedBack
+		})
+	}
+	var warden int
+	for _, l := range e.panes(t) {
+		if l == g.job.ID {
+			warden++
+		}
+	}
+	if warden != 1 {
+		t.Fatalf("panes = %q: want one pane for the Job's Warden", e.panes(t))
+	}
+	// The Job ends: after the retention its Warden's pane is removed and its window with it.
+	if err := g.st.CloseJob(g.job.ID, "accepted"); err != nil {
+		t.Fatal(err)
+	}
+	left := map[string]time.Time{}
+	eventually(t, "the Warden's Session to be idle", func() bool {
+		return e.sr.CloseJob("none") == 0 && len(e.sr.OpenJobs()) == 1 && jobSessionsIdle(e.sr, g.job.ID)
+	})
+	g.r.reapSessions(left, time.Now())
+	g.r.reapSessions(left, time.Now().Add(2*time.Minute))
+	for _, l := range e.panes(t) {
+		if l == g.job.ID {
+			t.Fatalf("the Job's window is still there: %q", e.panes(t))
+		}
+	}
+}
+
+func jobSessionsIdle(sr *SessionRunner, job string) bool {
+	sr.mu.Lock()
+	defer sr.mu.Unlock()
+	for _, ls := range sr.live {
+		if ls.job == job && ls.s.State() != hosted.StateIdle {
+			return false
+		}
+	}
+	return true
+}
+
+// noSpaces is JSON with its inter-token spaces removed, which a stand-in's step list can carry.
+func noSpaces(j string) string {
+	var out strings.Builder
+	in := false
+	for _, r := range j {
+		if r == '"' {
+			in = !in
+		}
+		if r == ' ' && in {
+			out.WriteString("_")
+			continue
+		}
+		out.WriteRune(r)
+	}
+	return out.String()
 }

@@ -62,6 +62,16 @@ type Runs struct {
 
 	sched *scheduler // when dispatched Wrights may start (ADR 0008)
 
+	// The Archwright the Works hosts as a Session, when it does (archwrightsession.go).
+	archMu    sync.Mutex // serialises spawning it, launch included
+	archHost  *ArchwrightHost
+	archCurMu sync.Mutex // guards arch alone, so reading it never waits on a launch
+	arch      *archSession
+
+	// sessions are the open Sessions kept until their Job leaves active work (ADR 0029).
+	sessions         JobSessions
+	sessionRetention time.Duration
+
 	// preflight, when set, must pass before any run starts (ADR 0014): it is
 	// `archwright doctor`. A failure refuses the run with its fixes.
 	preflight func(context.Context) error
@@ -103,6 +113,8 @@ func NewRuns(st *store.Store) *Runs {
 	r := &Runs{st: st, poll: 25 * time.Millisecond, runs: map[string]*run{}, cancels: map[string]context.CancelFunc{}, cancelled: map[string]bool{}, wrightWts: map[string]string{}, bg: bg, cancelBg: cancel}
 	r.sched = newScheduler(r)
 	st.SetInboxNotifier(r.inboxChanged)
+	r.wg.Add(1)
+	go r.reapLoop()
 	return r
 }
 
@@ -242,6 +254,7 @@ func (r *Runs) Close() {
 	r.mu.Lock()
 	r.cancelBg()
 	r.mu.Unlock()
+	r.closeArchwright()
 	r.sched.stop()
 	r.wg.Wait() // dispatched Wrights end their own runs
 	r.nudges.Wait()

@@ -64,6 +64,13 @@ func (c *core) Result() Result {
 	return c.result
 }
 
+// isFinished says whether the Session has ended and its result is known.
+func (c *core) isFinished() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.finished
+}
+
 // nudgeable says whether the Session may be Nudged now; see Session.Nudge.
 func (c *core) nudgeable() error {
 	c.mu.Lock()

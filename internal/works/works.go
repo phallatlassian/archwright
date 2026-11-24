@@ -19,6 +19,7 @@ import (
 	"github.com/phallatlassian/archwright/internal/config"
 	"github.com/phallatlassian/archwright/internal/defs"
 	"github.com/phallatlassian/archwright/internal/forge"
+	"github.com/phallatlassian/archwright/internal/launch"
 	"github.com/phallatlassian/archwright/internal/paths"
 	"github.com/phallatlassian/archwright/internal/sites"
 	"github.com/phallatlassian/archwright/internal/skills"
@@ -121,8 +122,18 @@ func ServeWith(ctx context.Context, d paths.Dirs, ready chan<- struct{}, opts Op
 	ReloadDefinitions(reg)
 	runs.UseDefinitions(reg)
 	guilds := GuildsFromRegistry(reg, DefaultProfiles(), skills.Vendored())
-	runs.Configure(guilds, WrightRunnerFrom(os.Getenv, guilds, st))
-	warden, reviewer := WardenRunnersFrom(os.Getenv, guilds, st)
+	wrights := WrightRunnerFrom(os.Getenv, guilds, st)
+	runs.Configure(guilds, wrights)
+	warden, reviewer := WardenRunnersFrom(os.Getenv, guilds, st, wrights)
+	if sr, ok := wrights.(*SessionRunner); ok { // Sessions in tmux: the Works owns the Archwright too
+		runs.UseSessions(sr, 0)
+		runs.UseArchwright(&ArchwrightHost{
+			Runners:   sr.Runners,
+			Choice:    func() (string, error) { return config.Runner(d) },
+			Home:      launch.Home(d),
+			SpoolRoot: func(runner string) string { return launch.SpoolRoot(runner, os.Getuid(), os.TempDir()) },
+		})
+	}
 	runs.ConfigureWarden(warden)
 	if reviewer != nil {
 		runs.ConfigureReview(reviewer)

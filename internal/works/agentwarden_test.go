@@ -36,7 +36,7 @@ func newWardenRig(t *testing.T, fixture string) *wardenRig {
 		}
 		return Guild{}, errInvalidInput
 	}
-	w, rv := WardenRunnersFrom(func(k string) string { return env[k] }, guilds, g.st)
+	w, rv := WardenRunnersFrom(func(k string) string { return env[k] }, guilds, g.st, nil)
 	g.r.ConfigureWarden(w)
 	g.r.ConfigureReview(rv)
 	if _, err := g.st.SetPlan(g.job.ID, []store.Step{
@@ -270,7 +270,7 @@ func TestReviewWardenRunsReadOnlyInTheReviewWorktreeAndReports(t *testing.T) {
 	g.r.Configure(guilds, g.runner) // Wrights stay fake: the handback is not under test
 	td, _ := filepath.Abs("../runner/testdata")
 	env := map[string]string{EnvClaudeBinary: filepath.Join(td, "stub-claude.sh")}
-	_, rv := WardenRunnersFrom(func(k string) string { return env[k] }, guilds, g.st)
+	_, rv := WardenRunnersFrom(func(k string) string { return env[k] }, guilds, g.st, nil)
 	g.r.ConfigureReview(rv)
 	g.ok(g.arch, "link_writ", `{"job_id":"`+g.job.ID+`","writ":"Ticket 8: add notes"}`, nil)
 	g.commit("notes.md", "x")
@@ -308,11 +308,11 @@ func TestWardenRunnersFromHonoursTheFakeSwitch(t *testing.T) {
 			return "fake"
 		}
 		return ""
-	}, nil, nil)
+	}, nil, nil, nil)
 	if _, ok := w.(*FakeWarden); !ok || rv != nil {
 		t.Fatalf("fake: %T %v", w, rv)
 	}
-	w, rv = WardenRunnersFrom(func(string) string { return "" }, nil, nil)
+	w, rv = WardenRunnersFrom(func(string) string { return "" }, nil, nil, nil)
 	if aw, ok := w.(*AgentWarden); !ok || rv != ReviewRunner(aw) {
 		t.Fatalf("real is the default: %T %T", w, rv)
 	}

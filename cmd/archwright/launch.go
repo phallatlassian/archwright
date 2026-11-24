@@ -16,6 +16,7 @@ import (
 	"github.com/phallatlassian/archwright/internal/config"
 	"github.com/phallatlassian/archwright/internal/launch"
 	"github.com/phallatlassian/archwright/internal/paths"
+	hosted "github.com/phallatlassian/archwright/internal/session"
 	"github.com/phallatlassian/archwright/internal/spool"
 	"github.com/phallatlassian/archwright/internal/store"
 	"github.com/phallatlassian/archwright/internal/works"
@@ -24,22 +25,12 @@ import (
 // hookWait bounds how long a hook waits for the Works, so a dead Works never stalls a turn.
 const hookWait = 10 * time.Second
 
-// launchArchwright starts the interactive Archwright session (ADR 0001) and
-// returns once it ends. It runs the developer's own claude or codex, under
-// their own permissions, in the neutral factory home.
+// launchArchwright opens the Archwright (ADR 0001). A Works that hosts Sessions
+// spawns and owns it in the `archwright` window of its tmux session, and this
+// attaches the terminal to that window (ADR 0026). A Works that does not runs
+// the developer's own claude or codex here, as an interactive session of this
+// terminal, until the headless machinery is removed.
 func launchArchwright(dirs paths.Dirs, connect func() (*works.Client, error)) error {
-	choice, err := config.Runner(dirs)
-	if err != nil {
-		return err
-	}
-	bin, err := exec.LookPath(choice)
-	if err != nil {
-		return fmt.Errorf("the %s runner is chosen for this install but %q is not on PATH", choice, choice)
-	}
-	exe, err := os.Executable()
-	if err != nil {
-		return err
-	}
 	cwd, err := os.Getwd()
 	if err != nil {
 		return err
@@ -54,13 +45,65 @@ func launchArchwright(dirs paths.Dirs, connect func() (*works.Client, error)) er
 	if err := c.Do("GET", "/sites/resolve?path="+url.QueryEscape(cwd), nil, &found); err == nil {
 		site = found.Name
 	}
+	var info works.ArchwrightInfo
+	// The Works runs the doctor preflight before it starts any run, which can
+	// take a while on a cold start: wait for it and say so rather than hang.
+	note := time.AfterFunc(2*time.Second, func() {
+		fmt.Fprintln(os.Stderr, "archwright: running doctor before the first run (checking the installed runners), this can take a minute...")
+	})
+	err = c.DoSlow("POST", "/archwright", map[string]string{"Site": site}, &info)
+	note.Stop()
+	switch {
+	case err == nil:
+		return attachArchwright(os.Getenv)
+	case err.Error() != works.MsgArchwrightNotHosted:
+		return err
+	}
+	return runArchwrightHere(dirs, c, site)
+}
+
+// attachArchwright attaches this terminal to the Archwright's window in the
+// Works' own tmux server. The Works owns the Session: leaving the window, or
+// ending this command, does not end it.
+func attachArchwright(getenv func(string) string) error {
+	bin := getenv(works.EnvTmuxBinary)
+	if bin == "" {
+		bin = "tmux"
+	}
+	cmd := exec.Command(bin, "-L", hosted.DefaultSocketName, "attach-session", "-t", "="+hosted.DefaultSessionName+":archwright")
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	cmd.Env = append(os.Environ(), "TMUX=") // the Works' server is not the developer's own, which may be the one this runs in
+	if err := cmd.Run(); err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			return &exitError{ee.ExitCode(), fmt.Errorf("tmux exited: %w", err)}
+		}
+		return fmt.Errorf("attaching to the Archwright (tmux -L %s attach -t %s:archwright): %w", hosted.DefaultSocketName, hosted.DefaultSessionName, err)
+	}
+	return nil
+}
+
+// runArchwrightHere starts the interactive Archwright session in this terminal
+// (ADR 0001) and returns once it ends. It runs the developer's own claude or
+// codex, under their own permissions, in the neutral factory home.
+func runArchwrightHere(dirs paths.Dirs, c *works.Client, site string) error {
+	choice, err := config.Runner(dirs)
+	if err != nil {
+		return err
+	}
+	bin, err := exec.LookPath(choice)
+	if err != nil {
+		return fmt.Errorf("the %s runner is chosen for this install but %q is not on PATH", choice, choice)
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
 	home := launch.Home(dirs)
 	if err := os.MkdirAll(home, 0o700); err != nil {
 		return err
 	}
 	var env works.RunEnv
-	// The Works runs the doctor preflight before it starts any run, which can
-	// take a while on a cold start: wait for it and say so rather than hang.
 	note := time.AfterFunc(2*time.Second, func() {
 		fmt.Fprintln(os.Stderr, "archwright: running doctor before the first run (checking the installed runners), this can take a minute...")
 	})

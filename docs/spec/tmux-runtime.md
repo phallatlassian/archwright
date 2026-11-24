@@ -53,6 +53,16 @@ A Nudge is the Works delivering text to a Session. It is permitted only when sta
 - `capture-pane` is not an input check: Claude's prompt-suggestion ghost text appears in it, so composer text is not necessarily pending input.
 - A Stop with no handback gets one Nudge, then a Needs-you item (ADR 0029).
 
+## Standing Wardens, the Archwright and closing a Job's Sessions
+
+Mechanics for ADR 0029.
+
+- A Warden's Session is kept per Job and Guild, a Wright's per Job and piece, so two Jobs never share one and a Review Warden (the Review Guild's) never lands in a builder's. The first step for a Guild launches the Warden; each later step, and each later review of the same checkout, is a Nudge into it: a file with the new brief and the `export` lines of the new run (as for rework), and a pointer pasted. Runs for one Session are taken one at a time, so steps of a Guild that are started together are carried out in turn in its Warden; a Session that is working or at a prompt is waited for like a Wright's, then the run fails.
+- A review is a read-only Session (the Review Guild is read-only, so plan mode) of that Guild's own Warden, in the review's detached checkout. Its second pass in the same checkout is a Nudge into the same Session; a review in a different checkout launches a fresh Session there (so its directory and delivered skills are that review's) and cancels the superseded one.
+- Closing: the Works looks once a second at the Jobs that hold Sessions. A Job has left active work when its PR is recorded or it is closed (accepted or discarded) or purged. After a retention (default 30 s) each of its Sessions that is idle or already ended is cancelled and its pane removed, so the Job's window goes with the last pane; a Session that is working, at a prompt or starting is left and asked again. Not yet specified: a Job that fails without closing (parked, or cancelled steps) stays in active work, so its Sessions stay.
+- The Archwright: `archwright` asks the Works to spawn it (`POST /archwright`), and attaches to `factory:archwright` with `TMUX` cleared. The Works launches it in the neutral factory home in the `archwright` window, replacing the empty pane the factory session starts with (and the dead pane of a previous Archwright). Its first prompt is its instructions; there is no start context and no hook that delivers the inbox: the Archwright reads it with `read_inbox`. A Works that does not host Sessions answers 501 and the CLI runs the Archwright in its own terminal, as before. The Works cancels the Archwright when it stops; adopting it after a restart is the recovery slice.
+- The inbox wake is a Nudge with a fixed one-line text carrying no item content. It is sent when an item is unread that the Archwright has not been Nudged about, it is idle and has finished its first turn; a busy Archwright is asked again each time it goes idle. One Nudge per new item: an Archwright that ends its turn without reading is not Nudged again until something new arrives. A Nudge whose delivery is not confirmed is not repeated and is recorded as a `nudge.failed` event.
+
 ## Hook payload fields
 
 Hooks run outside the tool sandbox as the CLI's own process. Both CLIs send JSON on stdin.

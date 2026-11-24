@@ -23,9 +23,12 @@ import (
 
 // Defaults of the tmux adapter.
 const (
-	DefaultSocketName   = "archwright" // tmux -L: the Works' own server, never the developer's
-	DefaultSessionName  = "factory"
-	archwrightWindow    = "archwright"
+	DefaultSocketName  = "archwright" // tmux -L: the Works' own server, never the developer's
+	DefaultSessionName = "factory"
+	archwrightWindow   = "archwright"
+	// RoleArchwright is the LaunchRequest.Role of the Archwright, whose pane is
+	// placed in the `archwright` window rather than a Job's.
+	RoleArchwright      = "archwright"
 	DefaultStartTimeout = 60 * time.Second // no SessionStart hook within this fails the Session "failed to start"
 	DefaultCancelGrace  = 3 * time.Second
 	defaultPoll         = 200 * time.Millisecond
@@ -309,7 +312,9 @@ func (t *Tmux) place(req LaunchRequest, env map[string]string, argv []string) (p
 		envArgs = append(envArgs, "-e", k+"="+v)
 	}
 	name := req.Job
-	if name == "" {
+	if req.Role == RoleArchwright {
+		name = archwrightWindow // the Archwright's window, not a Job's (ADR 0026)
+	} else if name == "" {
 		name = "work"
 	}
 	const format = "#{pane_id} #{window_id}"
@@ -339,8 +344,30 @@ func (t *Tmux) place(req LaunchRequest, env map[string]string, argv []string) (p
 	if !ok {
 		return "", "", fmt.Errorf("tmux gave no pane for the Session: %q", out)
 	}
+	if req.Role == RoleArchwright {
+		t.clearArchwrightWindow(window, pane)
+	}
 	t.tmux("select-layout", "-t", window, "tiled") // keep panes usable as a Job's window fills; a failure is cosmetic
 	return pane, window, nil
+}
+
+// clearArchwrightWindow removes what the Archwright's window held before its
+// Session: the empty shell pane the factory session was created with, and the
+// dead pane of an Archwright that ended. keep is the new Session's pane.
+func (t *Tmux) clearArchwrightWindow(window, keep string) {
+	out, err := t.tmux("list-panes", "-t", window, "-F", "#{pane_id} #{pane_dead} #{@run}")
+	if err != nil {
+		return
+	}
+	for _, l := range strings.Split(out, "\n") {
+		f := strings.Fields(l)
+		if len(f) == 0 || f[0] == keep {
+			continue
+		}
+		if f[1] == "1" || len(f) < 3 { // dead, or never a Session: no @run
+			t.tmux("kill-pane", "-t", f[0])
+		}
+	}
 }
 
 // ensureServer starts the Works' tmux server with the factory session if it
@@ -497,8 +524,16 @@ func (s *tmuxSession) nudgePrompt(text string) (string, error) {
 	return "Read the file " + path + " in full and carry out what it says.", nil
 }
 
-// Cancel implements Session.
-func (s *tmuxSession) Cancel() { s.cancelOnce.Do(func() { close(s.cancelCh) }) }
+// Cancel implements Session. A Session that has already ended has no loop left
+// to do it, so its pane, which remain-on-exit keeps, is removed here.
+func (s *tmuxSession) Cancel() {
+	s.cancelOnce.Do(func() {
+		close(s.cancelCh)
+		if s.core.isFinished() {
+			s.t.tmux("kill-pane", "-t", s.pane) // already gone is fine
+		}
+	})
+}
 
 // run follows the Session until it ends: hooks arrive on their own through the
 // receiver; this adds the spool fallback, the start deadline and the pane's liveness.
