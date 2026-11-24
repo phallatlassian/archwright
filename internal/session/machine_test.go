@@ -162,3 +162,38 @@ func TestASecondToolStartingDoesNotAnswerAPromptStillOpen(t *testing.T) {
 	wantStates(t, feed(m, tool(HookPreToolUse, "Edit", "b", "t2"), hook(HookStop)), StateWaitingOnPermission, StateWaitingOnPermission)
 	wantStates(t, feed(m, tool(HookPostToolUse, "Bash", "a", "t1")), StateWorking)
 }
+
+func TestAStopFromAFinishedTurnDeliveredLateDoesNotEndTheNextTurn(t *testing.T) {
+	m := NewMachine()
+	p1, s1 := hook(HookUserPromptSubmit), hook(HookStop)
+	p1.TurnID, s1.TurnID = "turn-1", "turn-1"
+	p2 := hook(HookUserPromptSubmit)
+	p2.TurnID = "turn-2"
+	feed(m, hook(HookSessionStart), p1, s1, p2)
+	if m.State() != StateWorking {
+		t.Fatalf("state = %s", m.State())
+	}
+	// Turn 1's Stop arrives again, and so do its tool hooks: none of them is about turn 2.
+	late := tool(HookPreToolUse, "Bash", "ls", "t1")
+	late.TurnID = "turn-1"
+	post := tool(HookPostToolUse, "Bash", "ls", "t1")
+	post.TurnID = "turn-1"
+	wantStates(t, feed(m, s1, late, post, s1), StateWorking, StateWorking, StateWorking, StateWorking)
+	if m.Info().Turns != 1 {
+		t.Fatalf("turns = %d", m.Info().Turns)
+	}
+	s2 := hook(HookStop)
+	s2.TurnID = "turn-2"
+	wantStates(t, feed(m, s2), StateIdle)
+	// A queued message's turn begins after the Stop; the old turn's stragglers still change nothing.
+	p3 := hook(HookUserPromptSubmit)
+	p3.TurnID = "turn-3"
+	wantStates(t, feed(m, p3, s2, late), StateWorking, StateWorking, StateWorking)
+}
+
+func TestAStopForATurnWhosePromptWasNotSeenStillCounts(t *testing.T) {
+	m := NewMachine()
+	s := hook(HookStop)
+	s.TurnID = "turn-9"
+	wantStates(t, feed(m, hook(HookSessionStart), hook(HookUserPromptSubmit), s), StateIdle, StateWorking, StateIdle)
+}

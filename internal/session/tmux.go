@@ -40,22 +40,25 @@ const (
 
 var runIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
-// hookEvents are the hooks the Works observes, for both vendors; a vendor
-// that never sends one (Codex has no Notification) is not harmed by its entry.
+// hookEvents are the hooks the Works observes in a Claude Session; Codex sends
+// all but Notification (codexHookEvents).
 var hookEvents = []string{
 	HookSessionStart, HookUserPromptSubmit, HookPreToolUse, HookPermissionReq,
 	HookPostToolUse, HookNotification, HookStop, HookSessionEnd,
 }
 
-// Tmux hosts interactive Claude Sessions in panes of a tmux server it owns:
-// one `factory` session, a window per Job, a pane per Session (ADR 0026,
-// docs/spec/tmux-runtime.md). The zero value needs only Dir and HookCommand.
+// Tmux hosts interactive Sessions in panes of a tmux server it owns: one
+// `factory` session, a window per Job, a pane per Session (ADR 0026,
+// docs/spec/tmux-runtime.md). It is the Runner for Claude; Codex() is the same
+// server and factory seen as the Runner for Codex. The zero value needs only
+// Dir and HookCommand.
 type Tmux struct {
 	Tmux        string // the tmux binary; default "tmux"
 	Socket      string // the server's socket path (tmux -S); wins over SocketName
 	SocketName  string // the server's socket name (tmux -L); default DefaultSocketName
 	SessionName string // default DefaultSessionName
 	Claude      string // the claude binary; default "claude"; tests point it at a stand-in
+	CodexBin    string // the codex binary; default "codex"
 	// HookCommand is the argv of what a hook runs: `archwright session-hook`.
 	HookCommand []string
 	// Dir holds the Works' files for the factory: its tmux config and each run's
@@ -65,6 +68,13 @@ type Tmux struct {
 	// platform's unix socket limit, so it defaults to a short one under the
 	// temp directory, not Dir.
 	SocketDir string
+	// CodexHome is the CODEX_HOME every Codex Session runs with: the stable,
+	// Works-owned place of the hooks file Codex trusts by path. Default
+	// <Dir>/codex-home.
+	CodexHome string
+	// UserCodexHome is the developer's own Codex home, whose login, config and
+	// rules a Codex Session shares; default $CODEX_HOME, else ~/.codex.
+	UserCodexHome string
 	// UserConf is the developer's own tmux config, sourced before the Works';
 	// "" means ~/.tmux.conf and "-" none.
 	UserConf     string
@@ -72,9 +82,9 @@ type Tmux struct {
 	CancelGrace  time.Duration
 	Poll         time.Duration
 
-	mu      sync.Mutex // serialises server and window creation
-	recv    *Receiver
-	version string
+	mu       sync.Mutex // serialises server and window creation
+	recv     *Receiver
+	versions map[string]string
 }
 
 // Name implements Runner.
@@ -134,7 +144,14 @@ func (t *Tmux) tmux(args ...string) (string, error) {
 // Launch implements Runner. ctx bounds the launch, not the Session: a Session
 // outlives the call and ends through Cancel, its pane, or its own SessionEnd.
 func (t *Tmux) Launch(ctx context.Context, req LaunchRequest) (Session, error) {
+	return t.launch(ctx, req, vendorClaude)
+}
+
+func (t *Tmux) launch(ctx context.Context, req LaunchRequest, v vendor) (Session, error) {
 	if err := checkLaunch(req); err != nil {
+		return nil, err
+	}
+	if err := v.checkMode(req.Spawn.EffectiveMode()); err != nil {
 		return nil, err
 	}
 	if t.Dir == "" || len(t.HookCommand) == 0 {
@@ -147,25 +164,19 @@ func (t *Tmux) Launch(ctx context.Context, req LaunchRequest) (Session, error) {
 	if err := os.MkdirAll(runDir, 0o700); err != nil {
 		return nil, err
 	}
-	token, sessionID := randomHex(16), newUUID()
+	token := randomHex(16)
 	hookFile := filepath.Join(runDir, "hooks.jsonl")
 	if err := os.WriteFile(hookFile, nil, 0o600); err != nil {
-		return nil, err
-	}
-	settings, err := t.writeSettings(runDir)
-	if err != nil {
 		return nil, err
 	}
 	prompt, err := t.promptFor(runDir, req.Brief)
 	if err != nil {
 		return nil, err
 	}
-	flags := []string{"--permission-mode", req.Spawn.EffectiveMode(), "--settings", settings, "--session-id", sessionID}
-	if m := req.Limits.Model; m != "" {
-		flags = append(flags, "--model", m)
+	plan, err := v.plan(t, req, runDir, prompt)
+	if err != nil {
+		return nil, err
 	}
-	flags = append(flags, req.Spawn.ExtraArgs...)
-	argv := append(append([]string{t.or(t.Claude, "claude")}, flags...), "--", prompt) // "--": the brief is never read as a flag
 
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -182,19 +193,22 @@ func (t *Tmux) Launch(ctx context.Context, req LaunchRequest) (Session, error) {
 	}
 	// The hook wiring is the adapter's: a caller's environment cannot redirect it.
 	env[envRun], env[EnvHookSocket], env[EnvHookFile], env[EnvHookToken] = req.Run, t.recv.Path(), hookFile, token
-	pane, window, err := t.place(req, env, argv)
+	for k, val := range plan.env {
+		env[k] = val
+	}
+	pane, window, err := t.place(req, env, plan.argv)
 	if err != nil {
 		return nil, err
 	}
-	s := &tmuxSession{t: t, core: newCore(token), pane: pane, hookFile: hookFile, cancelCh: make(chan struct{}), started: time.Now()}
+	s := &tmuxSession{t: t, v: v, core: newCore(token), pane: pane, hookFile: hookFile, cancelCh: make(chan struct{}), started: time.Now()}
 	s.core.setPane(pane, window)
 	s.core.add(Event{Kind: KindPosture, Posture: &runner.Posture{
-		Runner: "claude", Version: t.claudeVersion(), Mode: req.Spawn.EffectiveMode(), Sandbox: runner.SandboxInherited,
-		Flags: flags, Notices: []string{},
+		Runner: v.name, Version: t.cliVersion(plan.bin), Mode: req.Spawn.EffectiveMode(), Sandbox: runner.SandboxInherited,
+		Flags: plan.flags, Notices: append([]string{}, plan.notices...),
 	}})
 	unregister := t.recv.Register(req.Run, token, s.core.deliver)
-	for opt, v := range map[string]string{"@run": req.Run, "@role": req.Role} {
-		if _, err := t.tmux("set-option", "-p", "-t", pane, opt, v); err != nil {
+	for opt, val := range map[string]string{"@run": req.Run, "@role": req.Role} {
+		if _, err := t.tmux("set-option", "-p", "-t", pane, opt, val); err != nil {
 			t.tmux("kill-pane", "-t", pane)
 			unregister()
 			return nil, err
@@ -204,7 +218,7 @@ func (t *Tmux) Launch(ctx context.Context, req LaunchRequest) (Session, error) {
 		defer unregister()
 		s.run()
 	}()
-	return s, nil
+	return v.wrap(s), nil
 }
 
 // checkLaunch refuses what the never-list forbids (ADR 0027) and what a pane
@@ -228,17 +242,28 @@ func checkLaunch(req LaunchRequest) error {
 // permission, allow rule or sandbox key, and every hook command only reports
 // (ADR 0027). Claude merges it with the managed settings.
 func (t *Tmux) writeSettings(runDir string) (string, error) {
-	hook := map[string]any{"type": "command", "command": shellJoin(t.HookCommand)}
-	hooks := map[string][]any{}
-	for _, e := range hookEvents {
-		hooks[e] = []any{map[string]any{"hooks": []any{hook}}}
-	}
-	b, err := json.MarshalIndent(map[string]any{"hooks": hooks}, "", "  ")
+	b, err := t.hooksJSON(hookEvents)
 	if err != nil {
 		return "", err
 	}
 	path := filepath.Join(runDir, "settings.json")
-	return path, os.WriteFile(path, append(b, '\n'), 0o600)
+	return path, os.WriteFile(path, b, 0o600)
+}
+
+// hooksJSON is the hooks block both vendors read: each event runs the hook
+// command, which only reports. The bytes depend on nothing of a run, so the
+// file Codex trusts by path stays the same across runs.
+func (t *Tmux) hooksJSON(events []string) ([]byte, error) {
+	hook := map[string]any{"type": "command", "command": shellJoin(t.HookCommand)}
+	hooks := map[string][]any{}
+	for _, e := range events {
+		hooks[e] = []any{map[string]any{"hooks": []any{hook}}}
+	}
+	b, err := json.MarshalIndent(map[string]any{"hooks": hooks}, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return append(b, '\n'), nil
 }
 
 // promptFor is the first prompt: the brief, or for a long one a pointer to a file holding it.
@@ -352,26 +377,32 @@ func (t *Tmux) findWindow(name string) (string, error) {
 	return "", nil
 }
 
-// claudeVersion is what `claude --version` prints, once; "unknown" if it cannot say.
-func (t *Tmux) claudeVersion() string {
-	if t.version != "" {
-		return t.version
+// cliVersion is what `<bin> --version` prints, once per binary; "unknown" if it
+// cannot say. The caller holds t.mu.
+func (t *Tmux) cliVersion(bin string) string {
+	if v, ok := t.versions[bin]; ok {
+		return v
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, t.or(t.Claude, "claude"), "--version").Output()
-	t.version = "unknown"
+	out, err := exec.CommandContext(ctx, bin, "--version").Output()
+	version := "unknown"
 	if err == nil {
 		if v := oneLine(string(out)); v != "" {
-			t.version = v
+			version = v
 		}
 	}
-	return t.version
+	if t.versions == nil {
+		t.versions = map[string]string{}
+	}
+	t.versions[bin] = version
+	return version
 }
 
 // tmuxSession is one Session in one pane.
 type tmuxSession struct {
 	t        *Tmux
+	v        vendor
 	core     *core
 	pane     string
 	hookFile string

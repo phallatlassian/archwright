@@ -246,6 +246,36 @@ func TestReadOnlyGuildSessionsLaunchInPlanMode(t *testing.T) {
 	}
 }
 
+func TestCodexGuildRunsAsACodexSession(t *testing.T) {
+	g := newSessionRig(t, hosted.Script{})
+	codex := hosted.NewFakeFor("codex", hosted.Turn(callsTool("report_result", `{"status":"done","result":"r","evidence":["e"]}`)))
+	g.r.runner.(*SessionRunner).Runners["codex"] = codex
+	w, err := g.r.StartFor(RoleWarden, t.TempDir(), RunContext{Job: g.job.ID, Guild: "carvers"}) // codex-bound
+	if err != nil {
+		t.Fatal(err)
+	}
+	g.ok(w, "dispatch_wright", `{"piece":"p","brief":`+goodBrief+`}`, nil)
+	d := g.waitReported("p")
+	if d.Status != store.DispatchReported || !strings.Contains(string(d.Result), `"r"`) {
+		t.Fatalf("dispatch = %s %s", d.Status, d.Result)
+	}
+	if n, c := len(codex.Launches()), len(g.fake.Launches()); n != 1 || c != 0 {
+		t.Fatalf("%d codex and %d claude Sessions launched", n, c)
+	}
+	kinds, summaries := g.timeline(d.RunID)
+	if len(summaries) == 0 || !strings.HasPrefix(strings.Join(summaries, "\n"), "codex fake:") {
+		t.Fatalf("timeline = %v %v", kinds, summaries)
+	}
+	var rec store.RunRecord
+	eventually(t, "the Codex Session to be recorded idle", func() bool {
+		rec, _ = g.st.GetRunRecord(d.RunID)
+		return rec.SessionState == "idle"
+	})
+	if rec.SessionID != "fake-session" || rec.PaneID == "" {
+		t.Fatalf("run record = %+v", rec)
+	}
+}
+
 func TestGuildBoundToARunnerWithNoSessionAdapterRunsOnTheFallback(t *testing.T) {
 	g := newSessionRig(t, hosted.Script{})
 	w, err := g.r.StartFor(RoleWarden, t.TempDir(), RunContext{Job: g.job.ID, Guild: "carvers"}) // codex-bound
@@ -287,7 +317,7 @@ func TestTmuxWrightRunnerIsOptInAndNeverFallsBackSilently(t *testing.T) {
 	env := map[string]string{EnvWrightRunner: "tmux", "HOME": t.TempDir()}
 	got := WrightRunnerFrom(func(k string) string { return env[k] }, guilds, nil)
 	sr, ok := got.(*SessionRunner)
-	if !ok || sr.Runners["claude"] == nil || sr.Fallback == nil {
+	if !ok || sr.Runners["claude"] == nil || sr.Runners["codex"] == nil || sr.Runners["codex"].Name() != "codex" || sr.Fallback == nil {
 		t.Fatalf("runner = %T", got)
 	}
 	// With no way to place its files, the tmux runner fails the run rather than running headless.

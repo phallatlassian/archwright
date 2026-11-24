@@ -59,16 +59,22 @@ type pending struct{ toolUseID, tool, input string }
 // Stop while an approval is pending. SessionStart and UserPromptSubmit are
 // deduplicated on kind plus turn id (Codex delivers them twice). Stop is not:
 // Codex sends two in one turn, one while the approval is open and one after.
-// Notification never changes state.
+// A hook of a turn a later prompt has closed (a duplicate of its Stop or tool
+// hooks delivered late) is dropped, so it cannot end or restart the turn that
+// is running. Notification never changes state.
 type Machine struct {
 	state       State
 	outstanding []pending
 	seen        map[string]bool
+	turn        string          // the turn id of the latest prompt
+	closed      map[string]bool // turn ids a later prompt has superseded
 	info        Info
 }
 
 // NewMachine starts in StateStarting.
-func NewMachine() *Machine { return &Machine{state: StateStarting, seen: map[string]bool{}} }
+func NewMachine() *Machine {
+	return &Machine{state: StateStarting, seen: map[string]bool{}, closed: map[string]bool{}}
+}
 
 // State is the current state.
 func (m *Machine) State() State { return m.state }
@@ -95,6 +101,9 @@ func (m *Machine) Apply(h Hook) (Change, bool) {
 		}
 		m.seen[key] = true
 	}
+	if m.stale(h) {
+		return Change{}, false
+	}
 	switch h.Event {
 	case HookSessionStart:
 		m.remember(h)
@@ -102,6 +111,7 @@ func (m *Machine) Apply(h Hook) (Change, bool) {
 			return m.move(StateIdle, h), true
 		}
 	case HookUserPromptSubmit:
+		m.beginTurn(h.TurnID)
 		m.outstanding = nil // a new turn cannot begin with a prompt still open
 		return m.settle(StateWorking, h)
 	case HookPreToolUse:
@@ -129,6 +139,28 @@ func (m *Machine) Apply(h Hook) (Change, bool) {
 		return m.End(h.Event), true
 	}
 	return Change{}, false
+}
+
+// beginTurn makes id the running turn and closes the one before it.
+func (m *Machine) beginTurn(id string) {
+	if id == "" || id == m.turn {
+		return
+	}
+	if m.turn != "" {
+		m.closed[m.turn] = true
+	}
+	m.turn = id
+}
+
+// stale says whether h reports on a turn a later prompt has closed. Only the
+// hooks that move a running turn are held to it: a permission request is never
+// dropped, since a human has to answer it.
+func (m *Machine) stale(h Hook) bool {
+	switch h.Event {
+	case HookPreToolUse, HookPostToolUse, HookStop:
+		return h.TurnID != "" && m.closed[h.TurnID]
+	}
+	return false
 }
 
 // End moves to StateEnded: the SessionEnd hook, or the pane's death. It

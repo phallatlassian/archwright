@@ -23,8 +23,8 @@ type SessionRunner struct {
 	Guilds  GuildSource
 	// Record keeps where a run's Session lives and what it is doing; nil ignores it.
 	Record func(run string, info hosted.Info, state hosted.State)
-	// Fallback carries out the runs of a runner that has no Session adapter
-	// yet (Codex); nil fails them.
+	// Fallback carries out the runs of a runner that has no Session adapter;
+	// nil fails them.
 	Fallback Runner
 }
 

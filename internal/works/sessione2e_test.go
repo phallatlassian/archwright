@@ -18,6 +18,16 @@ import (
 // `archwright tool report_result`, and the Works following it. Only claude is
 // not real.
 func TestWrightRunsAsASessionInARealTmuxPaneAndReportsThroughTheSpool(t *testing.T) {
+	runSessionE2E(t, "claude")
+}
+
+// The same for a Wright of a Guild bound to codex: its hooks come from the
+// stable file in the Works' Codex home, and it is a Codex Session in its pane.
+func TestCodexWrightRunsAsASessionInARealTmuxPaneAndReportsThroughTheSpool(t *testing.T) {
+	runSessionE2E(t, "codex")
+}
+
+func runSessionE2E(t *testing.T, vendor string) {
 	tmuxBin, err := exec.LookPath("tmux")
 	if err != nil {
 		t.Skip("tmux is not installed: Wrights were NOT run in a real pane")
@@ -37,7 +47,7 @@ func TestWrightRunsAsASessionInARealTmuxPaneAndReportsThroughTheSpool(t *testing
 	if out, err := exec.Command("go", "build", "-tags", "nodoctorgate", "-o", bin, "../../cmd/archwright").CombinedOutput(); err != nil {
 		t.Fatalf("building archwright: %v\n%s", err, out)
 	}
-	standin, err := filepath.Abs("../session/testdata/stand-in-claude.sh")
+	standin, err := filepath.Abs("../session/testdata/stand-in-" + vendor + ".sh")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,8 +58,14 @@ func TestWrightRunsAsASessionInARealTmuxPaneAndReportsThroughTheSpool(t *testing
 	t.Setenv("ARCHWRIGHT_STANDIN_OUT", filepath.Join(short, "out"))
 
 	tm := &hosted.Tmux{
-		Tmux: tmuxBin, Socket: sock, Claude: standin, HookCommand: []string{bin, "session-hook"},
+		Tmux: tmuxBin, HookCommand: []string{bin, "session-hook"}, Socket: sock,
 		Dir: filepath.Join(short, "state"), SocketDir: filepath.Join(short, "h"), UserConf: "-", CancelGrace: time.Second,
+		UserCodexHome: filepath.Join(short, "dev-codex"),
+	}
+	if vendor == "codex" {
+		tm.CodexBin = standin
+	} else {
+		tm.Claude = standin
 	}
 	t.Cleanup(func() {
 		tm.Close()
@@ -64,13 +80,21 @@ func TestWrightRunsAsASessionInARealTmuxPaneAndReportsThroughTheSpool(t *testing
 		return Guild{}, errInvalidInput
 	}
 	g.r.Configure(guilds, &SessionRunner{
-		Runners: map[string]hosted.Runner{"claude": tm},
+		Runners: map[string]hosted.Runner{"claude": tm, "codex": tm.Codex()},
 		Guilds:  guilds,
 		Record: func(run string, info hosted.Info, state hosted.State) {
 			g.st.SetRunSession(run, info.Pane, info.SessionID, info.TranscriptPath, string(state))
 		},
 	})
-	g.ok(g.warden, "dispatch_wright", `{"piece":"p","brief":`+goodBrief+`}`, nil)
+	warden := g.warden
+	if vendor == "codex" {
+		w, err := g.r.StartFor(RoleWarden, t.TempDir(), RunContext{Job: g.job.ID, Guild: "carvers"}) // codex-bound
+		if err != nil {
+			t.Fatal(err)
+		}
+		warden = w
+	}
+	g.ok(warden, "dispatch_wright", `{"piece":"p","brief":`+goodBrief+`}`, nil)
 	d := g.waitReported("p")
 	if d.Status != store.DispatchReported || !strings.Contains(string(d.Result), "branch-x") {
 		out, _ := os.ReadFile(filepath.Join(short, "out", "tool.out"))
@@ -85,6 +109,14 @@ func TestWrightRunsAsASessionInARealTmuxPaneAndReportsThroughTheSpool(t *testing
 	panes, err := exec.Command(tmuxBin, "-S", sock, "list-panes", "-a", "-F", "#{pane_id} #{window_name} #{session_name}").Output()
 	if err != nil || !strings.Contains(string(panes), rec.PaneID+" "+g.job.ID+" factory") {
 		t.Fatalf("pane %q is not in %q (%v)", rec.PaneID, panes, err)
+	}
+	if vendor == "codex" {
+		if _, err := os.Stat(filepath.Join(short, "state", "codex-home", "hooks.json")); err != nil {
+			t.Errorf("the Codex Session had no stable hooks file: %v", err)
+		}
+		if !strings.HasPrefix(rec.SessionID, "codex-") {
+			t.Errorf("session id %q is not the one Codex reported", rec.SessionID)
+		}
 	}
 	if rec.SessionID == "" || !strings.HasPrefix(rec.TranscriptPath, "/tmp/stand-in-") {
 		t.Errorf("run record = %+v", rec)

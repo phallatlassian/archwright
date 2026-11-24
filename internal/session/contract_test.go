@@ -25,25 +25,32 @@ const (
 	scenEnds        scenario = "ends"         // finishes its turn and exits 0
 	scenCrash       scenario = "crash"        // exits 3 after starting
 	scenNoStart     scenario = "no-start"     // never sends a SessionStart
+	scenDuplicates  scenario = "duplicates"   // every SessionStart and UserPromptSubmit is delivered twice, as Codex does
+	scenQueue       scenario = "queue"        // busy until a message is queued, then Stops and takes it as a new turn
 )
 
 // harness runs the contract against one Runner.
 type harness struct {
 	name   string
+	vendor string   // the vendor CLI the runner hosts: claude or codex
+	modes  []string // the narrowing permission modes the vendor honours
+	queue  bool     // the vendor can be messaged while busy
 	runner Runner
 	// request prepares a launch request for the scenario.
 	request func(t *testing.T, s scenario) LaunchRequest
 	// pane is true when the Session lives in a real pane the test can inspect.
 	pane *paneInspector
+	// queued checks what the vendor CLI was asked to deliver; nil when it cannot be.
+	queued func(t *testing.T, s Session, text string)
 }
 
 var runSeq atomic.Int32
 
 func runID() string { return fmt.Sprintf("run-%d", runSeq.Add(1)) }
 
-func fakeHarness() harness {
-	f := NewFake(Script{})
-	return harness{name: "fake", runner: f, request: func(t *testing.T, s scenario) LaunchRequest {
+func fakeHarness(vendor string) harness {
+	f := NewFakeFor(vendor, Script{})
+	return harness{name: "fake " + vendor, vendor: vendor, modes: vendorModes[vendor], queue: vendor == "codex", runner: f, request: func(t *testing.T, s scenario) LaunchRequest {
 		start := Step{Hook: &Hook{Event: HookSessionStart, SessionID: "fake-session", TranscriptPath: "/fake/transcript.jsonl"}}
 		prompt := Step{Hook: &Hook{Event: HookUserPromptSubmit, TurnID: "turn-1"}}
 		stop := Step{Hook: &Hook{Event: HookStop, TurnID: "turn-1"}}
@@ -63,6 +70,12 @@ func fakeHarness() harness {
 			f.SetScript(Script{Steps: []Step{start, {Act: func(context.Context, LaunchRequest) error { return errors.New("exited with status 3") }}}})
 		case scenNoStart:
 			f.SetScript(Script{NoStart: true, Steps: []Step{start}})
+		case scenDuplicates:
+			f.SetScript(Script{Steps: []Step{start, start, prompt, prompt, stop}})
+		case scenQueue:
+			second := Step{Hook: &Hook{Event: HookUserPromptSubmit, TurnID: "turn-2"}}
+			stop2 := Step{Hook: &Hook{Event: HookStop, TurnID: "turn-2"}}
+			f.SetScript(Script{Steps: []Step{start, prompt, {AwaitQueue: true}, stop, second, stop2}})
 		}
 		return LaunchRequest{Run: runID(), Job: "job-1", Role: "wright", Brief: "do it", Dir: t.TempDir()}
 	}}
@@ -71,9 +84,17 @@ func fakeHarness() harness {
 // TestContract runs the one contract suite against every Runner: the fake,
 // and the tmux adapter on a real tmux with a scripted stand-in CLI.
 func TestContract(t *testing.T) {
-	t.Run("fake", func(t *testing.T) { runContract(t, fakeHarness()) })
-	t.Run("tmux", func(t *testing.T) { runContract(t, newTmuxRig(t).harness()) })
+	for _, vendor := range []string{"claude", "codex"} {
+		t.Run(vendor, func(t *testing.T) {
+			t.Run("fake", func(t *testing.T) { runContract(t, fakeHarness(vendor)) })
+			t.Run("tmux", func(t *testing.T) { runContract(t, newTmuxRig(t, vendor).harness()) })
+		})
+	}
 }
+
+// vendorModes are the permission modes that only narrow a vendor's default and
+// that the vendor can enforce: Codex has no plan or dontAsk mode.
+var vendorModes = map[string][]string{"claude": {"plan", "dontAsk"}, "codex": nil}
 
 func collect(t *testing.T, s Session) []Event {
 	t.Helper()
@@ -151,7 +172,7 @@ func runContract(t *testing.T, h harness) {
 		if len(evs) < 2 || evs[0].Kind != KindPosture || evs[0].Posture == nil {
 			t.Fatalf("first event is not a posture: %+v", evs)
 		}
-		if p := evs[0].Posture; p.Runner != "claude" || p.Mode != "default" || p.Sandbox != "inherited" || p.Flags == nil || p.Notices == nil {
+		if p := evs[0].Posture; p.Runner != h.vendor || p.Mode != "default" || p.Sandbox != "inherited" || p.Flags == nil || p.Notices == nil {
 			t.Fatalf("posture = %+v", p)
 		}
 		for i, e := range evs {
@@ -243,6 +264,57 @@ func runContract(t *testing.T, h harness) {
 		}
 	})
 
+	t.Run("duplicate deliveries of the same hook change nothing", func(t *testing.T) {
+		sess := launch(t, scenDuplicates)
+		waitFor(t, "the turn to finish", func() bool { return sess.Info().Turns == 1 })
+		sess.Cancel()
+		evs := collect(t, sess)
+		if got := states(evs); !sameStates(got, StateIdle, StateWorking, StateIdle, StateEnded) {
+			t.Fatalf("states = %v", got)
+		}
+		if n := sess.Info().Turns; n != 1 {
+			t.Fatalf("turns = %d", n)
+		}
+	})
+
+	t.Run("a Session that cannot be queued says so", func(t *testing.T) {
+		sess := launch(t, scenPermHold)
+		waitState(t, sess, StateWaitingOnPermission)
+		q, ok := sess.(Queuer)
+		if h.queue != ok {
+			t.Fatalf("queue capability = %v, Session implements Queuer = %v", h.queue, ok)
+		}
+		if h.runner.Capabilities().Queue != h.queue {
+			t.Fatalf("capabilities = %+v", h.runner.Capabilities())
+		}
+		if ok {
+			if err := q.Queue("hello"); !errors.Is(err, ErrNotQueueable) {
+				t.Fatalf("queue at a prompt = %v", err)
+			}
+		}
+	})
+
+	if h.queue {
+		t.Run("a busy Session is queued a message that arrives as a new turn after its Stop", func(t *testing.T) {
+			sess := launch(t, scenQueue)
+			waitState(t, sess, StateWorking)
+			if err := sess.(Queuer).Queue("and also run the linter"); err != nil {
+				t.Fatalf("queue: %v", err)
+			}
+			waitFor(t, "the queued turn to finish", func() bool { return sess.Info().Turns == 2 })
+			sess.Cancel()
+			if got := states(collect(t, sess)); !sameStates(got, StateIdle, StateWorking, StateIdle, StateWorking, StateIdle, StateEnded) {
+				t.Fatalf("states = %v", got)
+			}
+			if h.queued != nil {
+				h.queued(t, sess, "and also run the linter")
+			}
+			if err := sess.(Queuer).Queue("too late"); !errors.Is(err, ErrNotQueueable) {
+				t.Fatalf("queue to an ended Session = %v", err)
+			}
+		})
+	}
+
 	t.Run("forbidden spawn requests are refused before anything runs", func(t *testing.T) {
 		before := 0
 		if h.pane != nil {
@@ -260,9 +332,11 @@ func runContract(t *testing.T, h harness) {
 		}
 		t.Run("foreign environment", func(t *testing.T) {
 			req := h.request(t, scenTurn)
-			req.Env = map[string]string{"ANTHROPIC_API_KEY": "x"}
-			if sess, err := h.runner.Launch(context.Background(), req); !errors.Is(err, runner.ErrForbidden) || sess != nil {
-				t.Fatalf("session = %v, err = %v", sess, err)
+			for _, k := range []string{"ANTHROPIC_API_KEY", "CODEX_HOME"} {
+				req.Env = map[string]string{k: "x"}
+				if sess, err := h.runner.Launch(context.Background(), req); !errors.Is(err, runner.ErrForbidden) || sess != nil {
+					t.Fatalf("%s: session = %v, err = %v", k, sess, err)
+				}
 			}
 		})
 		if h.pane != nil && h.pane.panes() != before {
@@ -271,7 +345,7 @@ func runContract(t *testing.T, h harness) {
 	})
 
 	t.Run("a Guild may only narrow the mode", func(t *testing.T) {
-		for _, mode := range []string{"plan", "dontAsk"} {
+		for _, mode := range h.modes {
 			req := h.request(t, scenTurn)
 			req.Spawn = runner.Spawn{Mode: mode}
 			sess, err := h.runner.Launch(context.Background(), req)
@@ -306,6 +380,9 @@ var forbiddenSpawns = map[string]runner.Spawn{
 	"settings write":      {SettingsWrites: []string{"/etc/claude-code/managed-settings.json"}},
 	"sandbox off":         {DisableSandbox: true},
 	"sandbox off (value)": {ExtraArgs: []string{"dangerouslyDisableSandbox"}},
+	"bypass hook trust":   {ExtraArgs: []string{"--dangerously-bypass-hook-trust"}},
+	"config override":     {ExtraArgs: []string{"-c", "hooks.state={}"}},
+	"sandbox flag":        {ExtraArgs: []string{"-s", "workspace-write"}},
 }
 
 // paneInspector reads the real tmux server a harness runs against.

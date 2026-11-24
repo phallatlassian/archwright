@@ -9,7 +9,7 @@ One Session per run, in a pane of the `factory` tmux session on the dedicated so
 ```
 tmux -L archwright -f <works.tmux.conf> new-window -d -t factory: -n <job-slug> -c <worktree> -e K=V ... '<runner command>'
 claude --permission-mode default --settings <hooks.json> [--session-id <uuid>] [--model <m>] "<brief or pointer>"
-codex  -C <worktree> [-m <m>] "<brief or pointer>"          # hooks from a stable file source, see Trust
+CODEX_HOME=<works codex home> codex -C <worktree> --no-alt-screen [-m <m>] -- "<brief or pointer>"   # hooks from a stable file, see Trust
 ```
 
 Rules:
@@ -86,6 +86,8 @@ No hooks fire before a CLI's folder-trust dialog is answered, so a Session spawn
 
 - At Site registration the Works launches a probe Session in a throwaway worktree of the Site, with the same layout a Job uses, and raises a Needs-you item asking the developer to accept folder trust once. For Codex it also captures hook trust ("Trust all and continue") once. `archwright doctor` re-checks.
 - Claude does not inherit trust from a parent folder into git repositories or worktrees; both CLIs inherit trust from a trusted repository to its worktrees, and Codex also covers subfolders (tested on Linux). Whether worktrees of the Works' bare clone (ADR 0019) inherit trust on the Mac is UNVERIFIED.
+- Codex has no flag for a hooks file elsewhere; it reads `$CODEX_HOME/hooks.json`, `<repo>/.codex/hooks.json`, `config.toml` and plugins. The Works therefore gives every Codex Session one Works-owned `CODEX_HOME` (`<state>/tmux/codex-home`) holding a `hooks.json` that is identical for every run and rewritten only when its content changes (run identity travels in the pane's environment, not the file), with `auth.json`, `config.toml`, `rules` and `AGENTS.md` linked from the developer's own Codex home; the developer's `hooks.json` is never touched. Trust is accepted once against that file. UNVERIFIED against a real Codex: that it follows those links and records trust through them.
+- Codex has no plan or dontAsk mode and the never-list forbids its approval and sandbox flags, so a Codex Session runs at its default and a narrower mode fails the launch.
 - Codex hook trust is keyed by source. `-c` hooks are keyed by position and overwrite each other's trusted hashes, so Codex hooks must come from a stable file (`hooks.json` or `config.toml` at a fixed path). `--dangerously-bypass-hook-trust` is on the never-list. Managed Codex hooks are already trusted.
 
 ## Review before push

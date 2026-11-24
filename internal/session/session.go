@@ -8,6 +8,7 @@ package session
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"sync"
 
@@ -37,6 +38,9 @@ type Capabilities struct {
 	PermissionRequests bool `json:"permission_requests"`
 	// Resume: a Session can be resumed by id.
 	Resume bool `json:"resume"`
+	// Queue: a busy Session can be messaged, the text arriving as a new turn
+	// once the current one has stopped (Codex's `codex queue`).
+	Queue bool `json:"queue"`
 }
 
 // Limits bound one Session. An interactive CLI enforces no turn or budget
@@ -122,6 +126,19 @@ type Session interface {
 	Cancel()
 	// Result blocks until the Session ends.
 	Result() Result
+}
+
+// ErrNotQueueable is why a Session could not be messaged while busy: it is not
+// working, or the vendor has no queue.
+var ErrNotQueueable = errors.New("the Session cannot be queued a message")
+
+// Queuer is a Session a busy agent can be messaged through. A Runner whose
+// Capabilities say Queue returns Sessions that implement it.
+type Queuer interface {
+	// Queue delivers text to a working Session as a new turn after its next
+	// Stop. It refuses, wrapping ErrNotQueueable, in any other state: a prompt
+	// is never typed at or answered (ADR 0027).
+	Queue(text string) error
 }
 
 // Runner launches Sessions on one vendor CLI.

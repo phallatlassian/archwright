@@ -31,9 +31,8 @@ const (
 // WrightRunnerFrom builds the Runner dispatched Wrights run on: real agents on
 // the claude or codex runner their Guild is bound to, or the fake runner when
 // the environment asks for it, or, when it asks for tmux, interactive Claude
-// Sessions in tmux panes (Guilds bound to codex stay headless until Codex
-// Sessions exist). Real runs stay gated by the preflight and the adapters'
-// never-list (ADR 0011, 0014, 0027).
+// and Codex Sessions in tmux panes. Real runs stay gated by the preflight and
+// the adapters' never-list (ADR 0011, 0014, 0027).
 func WrightRunnerFrom(getenv func(string) string, guilds GuildSource, st *store.Store) Runner {
 	if getenv(EnvWrightRunner) == wrightRunnerTmux {
 		r, err := sessionRunnerFrom(getenv, guilds, st)
@@ -89,8 +88,9 @@ type failingRunner struct{ err error }
 
 func (f failingRunner) Run(context.Context, RunRequest) error { return f.err }
 
-// sessionRunnerFrom builds the Runner that hosts Claude Wrights as Sessions in
-// the factory tmux session, with the headless runner behind it for the rest.
+// sessionRunnerFrom builds the Runner that hosts Claude and Codex Wrights as
+// Sessions in the factory tmux session, with the headless runner behind it for
+// any runner without a Session adapter.
 func sessionRunnerFrom(getenv func(string) string, guilds GuildSource, st *store.Store) (Runner, error) {
 	dirs, err := paths.Resolve(getenv)
 	if err != nil {
@@ -103,11 +103,12 @@ func sessionRunnerFrom(getenv func(string) string, guilds GuildSource, st *store
 	tm := &hosted.Tmux{
 		Tmux:        getenv(EnvTmuxBinary),
 		Claude:      getenv(EnvClaudeBinary),
+		CodexBin:    getenv(EnvCodexBinary),
 		HookCommand: []string{exe, "session-hook"},
 		Dir:         filepath.Join(dirs.State, "tmux"),
 	}
 	return &SessionRunner{
-		Runners:  map[string]hosted.Runner{"claude": tm},
+		Runners:  map[string]hosted.Runner{"claude": tm, "codex": tm.Codex()},
 		Guilds:   guilds,
 		Fallback: agentRunnerFrom(getenv, guilds, st),
 		Record: func(run string, info hosted.Info, state hosted.State) {

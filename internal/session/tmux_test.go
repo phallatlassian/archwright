@@ -15,16 +15,17 @@ import (
 // stand-in CLI in place of claude. The hook command is this test binary
 // running the real SendHook.
 type tmuxRig struct {
-	tm   *Tmux
-	bin  string
-	sock string
-	dir  string
-	out  string // where the stand-in leaves what it saw
+	vendor string
+	tm     *Tmux
+	bin    string
+	sock   string
+	dir    string
+	out    string // where the stand-in leaves what it saw
 }
 
 // newTmuxRig skips, saying so, when tmux is missing or cannot start a server
 // here (a sandbox that forbids unix sockets): the adapter is then not exercised.
-func newTmuxRig(t *testing.T) *tmuxRig {
+func newTmuxRig(t *testing.T, vendor string) *tmuxRig {
 	t.Helper()
 	bin, err := exec.LookPath("tmux")
 	if err != nil {
@@ -40,15 +41,21 @@ func newTmuxRig(t *testing.T) *tmuxRig {
 		t.Skipf("tmux cannot start a server here (%v: %s): the tmux adapter was NOT exercised", err, strings.TrimSpace(string(out)))
 	}
 	exec.Command(bin, "-S", sock, "kill-server").Run()
-	standin, err := filepath.Abs("testdata/stand-in-claude.sh")
+	standin, err := filepath.Abs("testdata/stand-in-" + vendor + ".sh")
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := &tmuxRig{bin: bin, sock: sock, dir: dir, out: filepath.Join(dir, "out")}
+	r := &tmuxRig{vendor: vendor, bin: bin, sock: sock, dir: dir, out: filepath.Join(dir, "out")}
 	r.tm = &Tmux{
-		Tmux: bin, Socket: sock, Claude: standin, HookCommand: []string{os.Args[0]},
+		Tmux: bin, Socket: sock, HookCommand: []string{os.Args[0]},
 		Dir: filepath.Join(dir, "state"), SocketDir: filepath.Join(dir, "h"), UserConf: "-",
 		StartTimeout: 3 * time.Second, CancelGrace: time.Second, Poll: 30 * time.Millisecond,
+		UserCodexHome: filepath.Join(dir, "dev-codex"),
+	}
+	if vendor == "codex" {
+		r.tm.CodexBin = standin
+	} else {
+		r.tm.Claude = standin
 	}
 	t.Cleanup(func() {
 		r.tm.Close()
@@ -66,6 +73,16 @@ var standinScripts = map[scenario]string{
 	scenEnds:        "hook SessionStart;hook UserPromptSubmit;hook Stop;hook SessionEnd;exit 0",
 	scenCrash:       "hook SessionStart;exit 3",
 	scenNoStart:     "hold",
+	scenDuplicates:  "hook SessionStart;again;hook UserPromptSubmit;again;hook Stop;hold",
+	scenQueue:       "hook SessionStart;hook UserPromptSubmit;waitqueue;hook Stop;hook UserPromptSubmit;hook Stop;hold",
+}
+
+// runner is the Runner under test: the Tmux adapter for Claude, its Codex view for Codex.
+func (r *tmuxRig) runner() Runner {
+	if r.vendor == "codex" {
+		return r.tm.Codex()
+	}
+	return r.tm
 }
 
 func (r *tmuxRig) request(t *testing.T, s scenario) LaunchRequest {
@@ -77,12 +94,26 @@ func (r *tmuxRig) request(t *testing.T, s scenario) LaunchRequest {
 }
 
 func (r *tmuxRig) harness() harness {
-	return harness{name: "tmux", runner: r.tm, request: r.request, pane: &paneInspector{tmux: r.tm.tmux, outDir: r.out}}
+	h := harness{name: "tmux " + r.vendor, vendor: r.vendor, modes: vendorModes[r.vendor], queue: r.vendor == "codex", runner: r.runner(), request: r.request, pane: &paneInspector{tmux: r.tm.tmux, outDir: r.out}}
+	if h.queue {
+		h.queued = func(t *testing.T, s Session, text string) {
+			t.Helper()
+			args, err := os.ReadFile(filepath.Join(r.tm.codexHome(), "queue-args"))
+			if err != nil {
+				t.Fatalf("codex queue was never run: %v", err)
+			}
+			want := "queue\n--thread\n" + s.Info().SessionID + "\n--message\n" + text + "\n"
+			if string(args) != want {
+				t.Fatalf("codex queue was run as %q, want %q", args, want)
+			}
+		}
+	}
+	return h
 }
 
 func (r *tmuxRig) launch(t *testing.T, req LaunchRequest) Session {
 	t.Helper()
-	s, err := r.tm.Launch(context.Background(), req)
+	s, err := r.runner().Launch(context.Background(), req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +131,7 @@ func (r *tmuxRig) saw(t *testing.T, name string) string {
 }
 
 func TestTmuxLaysOutOneFactorySessionWithAWindowPerJobAndAPanePerSession(t *testing.T) {
-	r := newTmuxRig(t)
+	r := newTmuxRig(t, "claude")
 	var sessions []Session
 	for _, job := range []string{"job-a", "job-a", "job-b"} {
 		req := r.request(t, scenTurn)
@@ -132,7 +163,7 @@ func TestTmuxLaysOutOneFactorySessionWithAWindowPerJobAndAPanePerSession(t *test
 }
 
 func TestTmuxKeepsADeadPaneReadable(t *testing.T) {
-	r := newTmuxRig(t)
+	r := newTmuxRig(t, "claude")
 	s := r.launch(t, r.request(t, scenEnds))
 	if res := s.Result(); res.Status != "done" {
 		t.Fatalf("result = %+v", res)
@@ -143,7 +174,7 @@ func TestTmuxKeepsADeadPaneReadable(t *testing.T) {
 }
 
 func TestTmuxLaunchesClaudeInDefaultModeWithTheBriefAsThePositionalArgument(t *testing.T) {
-	r := newTmuxRig(t)
+	r := newTmuxRig(t, "claude")
 	brief := "Fix it; don't `rm -rf $HOME`\nsecond \"line\" with 'quotes' and --flags"
 	req := r.request(t, scenTurn)
 	req.Brief, req.Limits = brief, Limits{Model: "sonnet"}
@@ -186,7 +217,7 @@ func mustReal(t *testing.T, p string) string {
 }
 
 func TestTmuxHooksSettingsOnlyObserve(t *testing.T) {
-	r := newTmuxRig(t)
+	r := newTmuxRig(t, "claude")
 	req := r.request(t, scenTurn)
 	s := r.launch(t, req)
 	waitFor(t, "a turn", func() bool { return s.Info().Turns == 1 })
@@ -218,7 +249,7 @@ func TestTmuxHooksSettingsOnlyObserve(t *testing.T) {
 }
 
 func TestTmuxPassesALongBriefAsAFile(t *testing.T) {
-	r := newTmuxRig(t)
+	r := newTmuxRig(t, "claude")
 	req := r.request(t, scenTurn)
 	req.Brief = strings.Repeat("a long brief line\n", 2000)
 	s := r.launch(t, req)
@@ -233,7 +264,7 @@ func TestTmuxPassesALongBriefAsAFile(t *testing.T) {
 }
 
 func TestTmuxHookFallsBackToTheSpoolWhenTheReceiverIsUnreachable(t *testing.T) {
-	r := newTmuxRig(t)
+	r := newTmuxRig(t, "claude")
 	req := r.request(t, scenTurn)
 	req.Env["ARCHWRIGHT_TEST_NO_SOCKET"] = "1"
 	s := r.launch(t, req)
@@ -244,7 +275,7 @@ func TestTmuxHookFallsBackToTheSpoolWhenTheReceiverIsUnreachable(t *testing.T) {
 }
 
 func TestTmuxCancelInterruptsThenKillsThePane(t *testing.T) {
-	r := newTmuxRig(t)
+	r := newTmuxRig(t, "claude")
 	s := r.launch(t, r.request(t, scenTurn))
 	waitFor(t, "a turn", func() bool { return s.Info().Turns == 1 })
 	start := time.Now()
@@ -258,7 +289,7 @@ func TestTmuxCancelInterruptsThenKillsThePane(t *testing.T) {
 }
 
 func TestTmuxFailedToStartKeepsTheDeadPane(t *testing.T) {
-	r := newTmuxRig(t)
+	r := newTmuxRig(t, "claude")
 	r.tm.StartTimeout = 500 * time.Millisecond
 	s := r.launch(t, r.request(t, scenNoStart))
 	res := s.Result()
@@ -272,7 +303,7 @@ func TestTmuxFailedToStartKeepsTheDeadPane(t *testing.T) {
 }
 
 func TestTmuxRefusesAContextThatIsAlreadyCancelled(t *testing.T) {
-	r := newTmuxRig(t)
+	r := newTmuxRig(t, "claude")
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if s, err := r.tm.Launch(ctx, r.request(t, scenTurn)); err == nil || s != nil {
