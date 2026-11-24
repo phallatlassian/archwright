@@ -507,3 +507,140 @@ func waitSessionIdle(t *testing.T, s hosted.Session) {
 	t.Helper()
 	eventually(t, "the Session to be idle", func() bool { return s.State() == hosted.StateIdle && s.Info().Turns > 0 })
 }
+
+// askingScript is a Wright Session that raises a blocking Ask and ends its
+// turn, and takes the answer's Nudge as a new turn that reports "second".
+func askingScript() hosted.Script {
+	s := hosted.Turn(callsTool("ask", blockingAsk))
+	s.Nudged = reworkScript().Nudged
+	return s
+}
+
+// askedPiece sends a piece whose Wright raises blockingAsk, and returns the
+// ask once the Wright's Session is idle with it open.
+func (g *sessionRig) askedPiece(piece string) (store.Ask, hosted.Session) {
+	g.t.Helper()
+	g.send(piece)
+	var ask store.Ask
+	eventually(g.t, "the Wright's ask", func() bool {
+		asks, _ := g.st.Asks(store.AskFilter{Job: g.job.ID})
+		if len(asks) == 1 {
+			ask = asks[0]
+		}
+		return len(asks) == 1
+	})
+	sess := g.fake.Sessions()[0]
+	waitSessionIdle(g.t, sess)
+	return ask, sess
+}
+
+func TestAnAnswerIsNudgedIntoTheAskersOpenSession(t *testing.T) {
+	g := newSessionRig(t, askingScript())
+	ask, sess := g.askedPiece("p")
+	first, _ := g.st.LatestDispatch(g.job.ID, "p")
+
+	// Raising the Ask did not end the Session: it waits at its prompt, with the question recorded and routed as before.
+	if first.Status != store.DispatchBlocked || sess.State() != hosted.StateIdle {
+		t.Fatalf("dispatch %s, Session %s while the Ask is open", first.Status, sess.State())
+	}
+	if ask.Holder != store.HolderWarden || ask.Status != store.AskOpen || !ask.Blocking {
+		t.Fatalf("ask %+v", ask)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if n := len(g.fake.Nudges()); n != 0 || sess.State() != hosted.StateIdle {
+		t.Fatalf("%d Nudges and Session %s with the Ask unanswered: it waits, and is never poked", n, sess.State())
+	}
+	var esc AskReceipt
+	g.ok(g.warden, "escalate_ask", `{"ask_id":"`+ask.ID+`"}`, &esc)
+	if _, err := g.r.AnswerAsk(esc.AskID, RoleArchwright, AnsweredByDashboard, []store.Answer{{QuestionID: "scheme", Values: []string{"jwt"}}, {QuestionID: "note", Values: []string{"use RS256"}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	second := g.waitReported("p")
+	if second.Round != 1 || second.Status != store.DispatchReported || !strings.Contains(string(second.Result), "second") {
+		t.Fatalf("after the answer: round %d %s %s", second.Round, second.Status, second.Result)
+	}
+	// The same Session took the answer: one launch, one Nudge, one pane.
+	if n := len(g.fake.Launches()); n != 1 {
+		t.Fatalf("%d Sessions launched for an answer, want the same one", n)
+	}
+	nudges := g.fake.Nudges()
+	if len(nudges) != 1 {
+		t.Fatalf("%d Nudges, want 1", len(nudges))
+	}
+	for _, want := range []string{"answered", "## Questions and answers", "Which auth scheme?", "A: jwt", "A: use RS256", "ARCHWRIGHT_RUN=" + second.RunID, "ARCHWRIGHT_RUN_TOKEN="} {
+		if !strings.Contains(nudges[0], want) {
+			t.Errorf("the Nudge lacks %q:\n%s", want, nudges[0])
+		}
+	}
+	// It is not the amended brief of a rework, and the Session already holds the original.
+	if strings.Contains(nudges[0], "sent back for rework") || strings.Contains(nudges[0], "Add login") {
+		t.Errorf("the Nudge repeats the brief or calls the answer a rework:\n%s", nudges[0])
+	}
+	// It carries on where it was, on the same branch, and the answer is not a rework.
+	if second.Branch == "" || second.Branch != first.Branch {
+		t.Errorf("branches %q then %q", first.Branch, second.Branch)
+	}
+	if p, _ := g.st.GetPiece(g.job.ID, "p"); p.Reworks != 0 {
+		t.Errorf("an answer counted as a rework: %+v", p)
+	}
+	if old, _ := g.st.GetDispatch(first.ID); old.Status != store.DispatchAnswered {
+		t.Errorf("the asking dispatch is %s", old.Status)
+	}
+	eventually(t, "the answered run to be recorded with the Session's pane", func() bool {
+		rec, _ := g.st.GetRunRecord(second.RunID)
+		old, _ := g.st.GetRunRecord(first.RunID)
+		return rec.SessionState == "idle" && rec.PaneID != "" && rec.PaneID == old.PaneID
+	})
+}
+
+func TestAnAnswerStartsAFreshRunWithTheBriefAndTheQAWhenTheSessionIsGone(t *testing.T) {
+	g := newSessionRig(t, askingScript())
+	ask, old := g.askedPiece("p")
+	old.Cancel() // the pane is gone while the Ask waits: killed, or the Works restarted
+	old.Result()
+	g.fake.SetScript(hosted.Turn(callsTool("report_result", `{"status":"done","result":"fresh","evidence":["go test"]}`)))
+
+	g.ok(g.warden, "answer_ask", `{"ask_id":"`+ask.ID+`",`+bothAnswers[1:], nil)
+	d := g.waitReported("p")
+	if d.Round != 1 || !strings.Contains(string(d.Result), "fresh") {
+		t.Fatalf("after the answer: round %d %s", d.Round, d.Result)
+	}
+	launches := g.fake.Launches()
+	if len(launches) != 2 || len(g.fake.Nudges()) != 0 {
+		t.Fatalf("%d launches and %d Nudges, want a fresh Session and no Nudge", len(launches), len(g.fake.Nudges()))
+	}
+	for _, want := range []string{"# Brief", "Add login", "## Questions and answers", "Which auth scheme?", "A: jwt", "A: use RS256"} {
+		if !strings.Contains(launches[1].Brief, want) {
+			t.Errorf("the fresh Session's brief lacks %q:\n%s", want, launches[1].Brief)
+		}
+	}
+	if launches[1].Env[spool.EnvRun] != d.RunID {
+		t.Errorf("the fresh Session reports through %q, not its run %s", launches[1].Env[spool.EnvRun], d.RunID)
+	}
+}
+
+func TestAnAnswerNeverReachesASessionThatIsNotIdle(t *testing.T) {
+	s := askingScript()
+	// After asking, a human types in the pane and the agent asks for a permission.
+	s.Steps = append(s.Steps,
+		hosted.Step{Hook: &hosted.Hook{Event: hosted.HookUserPromptSubmit}},
+		hosted.Step{Hook: &hosted.Hook{Event: hosted.HookPermissionReq, ToolName: "Bash", ToolInput: json.RawMessage(`{"command":"rm -rf build"}`)}},
+	)
+	g := newSessionRig(t, s)
+	g.r.runner.(*SessionRunner).NudgeWait = 300 * time.Millisecond
+	g.send("p")
+	eventually(t, "the Session to wait on a permission", func() bool {
+		ss := g.fake.Sessions()
+		return len(ss) == 1 && ss[0].State() == hosted.StateWaitingOnPermission
+	})
+	asks, _ := g.st.Asks(store.AskFilter{Job: g.job.ID})
+	g.ok(g.warden, "answer_ask", `{"ask_id":"`+asks[0].ID+`",`+bothAnswers[1:], nil)
+	d := g.waitReported("p")
+	if !strings.Contains(string(d.Result), "not idle") {
+		t.Fatalf("result = %s", d.Result)
+	}
+	if n, l := len(g.fake.Nudges()), len(g.fake.Launches()); n != 0 || l != 1 {
+		t.Fatalf("%d Nudges and %d launches: a Session at a prompt was typed at, or a second one started beside it", n, l)
+	}
+}

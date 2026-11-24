@@ -74,7 +74,8 @@ type RunRequest struct {
 	Piece      string
 	DispatchID string
 	Worktree   string            // the Wright's own worktree; empty when the Works has no Sites
-	Rework     bool              // a piece sent back, in the worktree of its Wright's open Session: the Session is Nudged, not relaunched
+	Rework     bool              // a piece sent back, or an answered Ask, in the worktree of its Wright's open Session: the Session is Nudged, not relaunched
+	Answered   bool              // the Nudge carries the answer to the Ask that parked the piece, not an amended brief
 	Brief      string            // the rendered brief, Guild standards included
 	ExtraEnv   map[string]string // further variables for the runner process, such as GIT_CONFIG_GLOBAL for delivered skills
 	Trace      Trace             // where a runner reports its timeline and usage for the dashboard
@@ -634,11 +635,13 @@ func (r *Runs) start(d store.Dispatch) error {
 		defer r.wg.Done()
 		defer cancel()
 		wt, from, reused, runErr := r.wrightWorktree(d)
+		answered := reused && r.followsAnswer(d)
 		brief := d.Rendered
 		if runErr == nil && d.Round > 0 && !isMergeWright(d.Piece) && wt != "" {
-			if reused {
+			switch {
+			case reused && !answered: // an answer's Session carries on where it stopped and already holds the brief
 				brief += sessionStartingPoint(from)
-			} else {
+			case !reused:
 				brief += startingPoint(from)
 			}
 		}
@@ -650,7 +653,7 @@ func (r *Runs) start(d store.Dispatch) error {
 			extra, runErr = r.deliverSkillsFor(d, env.Run, wt)
 		}
 		if runErr == nil {
-			runErr = runner.Run(ctx, RunRequest{Env: env, Job: d.JobID, Guild: d.Guild, Piece: d.Piece, DispatchID: d.ID, Worktree: wt, Rework: reused, Brief: brief, ExtraEnv: extra, Trace: trace})
+			runErr = runner.Run(ctx, RunRequest{Env: env, Job: d.JobID, Guild: d.Guild, Piece: d.Piece, DispatchID: d.ID, Worktree: wt, Rework: reused, Answered: answered, Brief: brief, ExtraEnv: extra, Trace: trace})
 		}
 		unreported := false
 		cur, curErr := r.st.GetDispatch(d.ID)
@@ -892,11 +895,11 @@ func (r *Runs) wrightWorktree(d store.Dispatch) (path, from string, reused bool,
 	return wt.Path, from, false, nil
 }
 
-// sessionWorktree is the worktree and branch of the open Wright Session a
-// rework of d would be Nudged into: d must be a piece sent back by its
-// Warden (an Ask's answer, or a restart after an interruption, is not a
-// rework), and the Runner must still hold that piece's Session. Both are ""
-// when there is none, and a fresh Session runs the amended brief.
+// sessionWorktree is the worktree and branch of the open Wright Session d
+// would be Nudged into: d must be a piece sent back by its Warden, or one
+// parked on an Ask that is now answered (a restart after an interruption is
+// neither), and the Runner must still hold that piece's Session. Both are ""
+// when there is none, and a fresh Session runs the brief (ADR 0029).
 func (r *Runs) sessionWorktree(d store.Dispatch) (path, branch string) {
 	r.mu.Lock()
 	reuser, _ := r.runner.(SessionReuser)
@@ -905,7 +908,7 @@ func (r *Runs) sessionWorktree(d store.Dispatch) (path, branch string) {
 		return "", ""
 	}
 	prev, ok := r.previousDispatch(d)
-	if !ok || prev.Status != store.DispatchRejected || prev.Branch == "" {
+	if !ok || (prev.Status != store.DispatchRejected && prev.Status != store.DispatchAnswered) || prev.Branch == "" {
 		return "", ""
 	}
 	path = reuser.Reusable(d.JobID, d.Piece)
@@ -913,6 +916,13 @@ func (r *Runs) sessionWorktree(d store.Dispatch) (path, branch string) {
 		return "", ""
 	}
 	return path, prev.Branch
+}
+
+// followsAnswer says whether d is the run that follows an answered Ask, not a
+// rework: the dispatch before it parked on the Ask.
+func (r *Runs) followsAnswer(d store.Dispatch) bool {
+	prev, ok := r.previousDispatch(d)
+	return ok && prev.Status == store.DispatchAnswered
 }
 
 // previousDispatch is the piece's latest dispatch before d.

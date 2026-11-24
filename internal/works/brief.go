@@ -165,7 +165,7 @@ func (b Brief) Render(guild, standards string, invocable []skills.Info, round in
 		"A run that ends without it is recorded as failed. Put your findings or review in `result` and `evidence`, not only in your last message.\n" +
 		"\n## Asking\n\nIf you need a human decision, a manual step done, or something clarified, call `archwright tool ask` with JSON on stdin:\n" +
 		"`{\"kind\":\"decision|manual-step|clarification\",\"blocking\":true,\"why\":\"...\",\"questions\":[{\"id\":\"q1\",\"text\":\"...\",\"options\":[...],\"default\":\"<recommended option>\"}]}`.\n" +
-		"With `blocking` true, stop right after the call and end your run without reporting a result: your task is parked, and a fresh run starts with this brief plus the answers. " +
+		"With `blocking` true, stop right after the call and end your turn without reporting a result: your task is parked and your Session stays open, and the answer arrives in it as a message; if the Session has ended by then, a fresh run starts with this brief plus the answers. " +
 		"A manual step is a checklist the developer confirms. Never ask for a secret or put one in an ask.\n")
 	return w.String()
 }

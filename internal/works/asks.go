@@ -78,7 +78,7 @@ func raiseAsk(c *callCtx, in json.RawMessage) (any, error) {
 	}
 	next := "Carry on; the answer will be in a later brief."
 	if ask.Blocking {
-		next = "Stop now and end your run without reporting a result: your task is parked, and a fresh run starts with this brief plus the answers."
+		next = "Stop now and end your turn without reporting a result: your task is parked and this Session stays open. The answer arrives here as a message, with the variables of a new run; if this Session has ended by then, a fresh run starts with this brief plus the answers."
 		if c.run.role != RoleWright {
 			next = "End your run. The Archwright will answer through the Needs-you inbox; no fresh run starts automatically. Read the answer with show_ask or list_asks when you are next summoned."
 		}
@@ -294,6 +294,15 @@ func renderResume(prev store.Dispatch, qa []store.Ask) string {
 		base = base[:i]
 	}
 	return base + qaSection(qa)
+}
+
+// qaRecord is the question-and-answer section of a brief that qaSection
+// built, or "" when it has none.
+func qaRecord(brief string) string {
+	if i := strings.Index(brief, qaMarker); i >= 0 {
+		return brief[i:]
+	}
+	return ""
 }
 
 // qaSection is the accumulated question-and-answer record of a piece, which

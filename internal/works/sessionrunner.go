@@ -121,6 +121,9 @@ func (a *SessionRunner) open(key string) *liveSession {
 // checks, and how the Session ended.
 func (a *SessionRunner) Run(ctx context.Context, req RunRequest) error {
 	spec := runSpec{reuse: func(ls *liveSession) bool { return req.Rework && ls.worktree == req.Worktree }, nudge: reworkNudge}
+	if req.Answered {
+		spec.nudge = answerNudge
+	}
 	if req.Piece != "" && req.Env.Role == RoleWright {
 		spec.key = wrightKey(req.Job, req.Piece)
 	}
@@ -358,6 +361,14 @@ func (a *SessionRunner) nudge(ctx context.Context, req RunRequest, ls *liveSessi
 // started with the variables of its first run, which have ended.
 func reworkNudge(req RunRequest) string {
 	return nudgeText("Your last result for this piece was sent back for rework. The amended brief below replaces the one you were given; carry it out in this Session.", "this round", req)
+}
+
+// answerNudge is what a Wright Session is told when the Ask it parked on is
+// answered: the answers, and the run its tool calls belong to from now on. The
+// Session already holds the brief, so only the Q&A record is sent.
+func answerNudge(req RunRequest) string {
+	req.Brief = qaRecord(req.Brief)
+	return nudgeText("The question you asked was answered, and you are no longer parked. Carry on with the brief you were given, taking the answers below into account; do not ask them again.", "this round", req)
 }
 
 // stepNudge is what a Job's standing Warden is told for its next step.

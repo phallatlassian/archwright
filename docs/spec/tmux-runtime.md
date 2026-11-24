@@ -63,6 +63,15 @@ Mechanics for ADR 0029.
 - The Archwright: `archwright` asks the Works to spawn it (`POST /archwright`), and attaches to `factory:archwright` with `TMUX` cleared. The Works launches it in the neutral factory home in the `archwright` window, replacing the empty pane the factory session starts with (and the dead pane of a previous Archwright). Its first prompt is its instructions; there is no start context and no hook that delivers the inbox: the Archwright reads it with `read_inbox`. A Works that does not host Sessions answers 501 and the CLI runs the Archwright in its own terminal, as before. The Works cancels the Archwright when it stops; adopting it after a restart is the recovery slice.
 - The inbox wake is a Nudge with a fixed one-line text carrying no item content. It is sent when an item is unread that the Archwright has not been Nudged about, it is idle and has finished its first turn; a busy Archwright is asked again each time it goes idle. One Nudge per new item: an Archwright that ends its turn without reading is not Nudged again until something new arrives. A Nudge whose delivery is not confirmed is not repeated and is recorded as a `nudge.failed` event.
 
+## Asks and open Sessions
+
+Mechanics for the Ask amendment in ADR 0029.
+
+- A Wright's blocking Ask is recorded, routed up and held in the Needs-you inbox as before (first answer wins, never expires). The dispatch parks as `blocked`, but its Session is not closed: the Wright ends its turn, the Session goes idle and waits, and nothing is typed at it while the Ask is open.
+- The answer, from the Warden, the Archwright or the dashboard, makes a fresh dispatch of the piece (an answer is not a rework round). When the Wright's Session is still open the dispatch is carried out in it: a Nudge in the worktree and on the branch it already has, as for rework. Its file carries only the Q&A record (the Session holds the brief) and the `export` lines of the new run. A Session that is working or at a prompt is waited for like a rework's (default 2 minutes, nothing typed meanwhile), then the run fails.
+- If the Session is gone, a fresh Session runs the original brief plus the Q&A record, as it did before Sessions stayed open.
+- Not yet specified: a Warden's own blocking Ask. Its step still fails when its run ends; the answer is read with `show_ask` when it is next summoned.
+
 ## Hook payload fields
 
 Hooks run outside the tool sandbox as the CLI's own process. Both CLIs send JSON on stdin.
