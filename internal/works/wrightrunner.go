@@ -1,10 +1,16 @@
 package works
 
 import (
+	"context"
+	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"time"
 
+	"github.com/phallatlassian/archwright/internal/paths"
 	"github.com/phallatlassian/archwright/internal/runner"
+	hosted "github.com/phallatlassian/archwright/internal/session"
 	"github.com/phallatlassian/archwright/internal/store"
 )
 
@@ -15,14 +21,27 @@ const (
 	EnvFakeRunDelay  = "ARCHWRIGHT_FAKE_RUN_DELAY"
 	EnvClaudeBinary  = "ARCHWRIGHT_CLAUDE_BIN" // the claude CLI to run, for tests and live checks with a stub
 	EnvCodexBinary   = "ARCHWRIGHT_CODEX_BIN"
+	EnvTmuxBinary    = "ARCHWRIGHT_TMUX_BIN" // the tmux the factory's panes run in
 	wrightRunnerFake = "fake"
+	// wrightRunnerTmux runs Wrights as interactive Sessions in tmux panes
+	// (ADR 0026). It is opt-in until the headless runners are removed.
+	wrightRunnerTmux = "tmux"
 )
 
 // WrightRunnerFrom builds the Runner dispatched Wrights run on: real agents on
 // the claude or codex runner their Guild is bound to, or the fake runner when
-// the environment asks for it. Real runs stay gated by the preflight and the
-// adapters' never-list (ADR 0011, 0014).
+// the environment asks for it, or, when it asks for tmux, interactive Claude
+// Sessions in tmux panes (Guilds bound to codex stay headless until Codex
+// Sessions exist). Real runs stay gated by the preflight and the adapters'
+// never-list (ADR 0011, 0014, 0027).
 func WrightRunnerFrom(getenv func(string) string, guilds GuildSource, st *store.Store) Runner {
+	if getenv(EnvWrightRunner) == wrightRunnerTmux {
+		r, err := sessionRunnerFrom(getenv, guilds, st)
+		if err != nil { // tmux is a hard dependency with no headless fallback (ADR 0026)
+			return failingRunner{fmt.Errorf("Wrights cannot run as tmux Sessions: %w", err)}
+		}
+		return r
+	}
 	if getenv(EnvWrightRunner) == wrightRunnerFake {
 		fake := NewFakeRunner(nil)
 		if d, err := time.ParseDuration(getenv(EnvFakeRunDelay)); err == nil {
@@ -62,4 +81,39 @@ func agentRunnerFrom(getenv func(string) string, guilds GuildSource, st *store.S
 			}
 		},
 	}
+}
+
+// failingRunner fails every run with its error, so a Runner that could not be
+// built is seen at the dispatch rather than hidden behind another one.
+type failingRunner struct{ err error }
+
+func (f failingRunner) Run(context.Context, RunRequest) error { return f.err }
+
+// sessionRunnerFrom builds the Runner that hosts Claude Wrights as Sessions in
+// the factory tmux session, with the headless runner behind it for the rest.
+func sessionRunnerFrom(getenv func(string) string, guilds GuildSource, st *store.Store) (Runner, error) {
+	dirs, err := paths.Resolve(getenv)
+	if err != nil {
+		return nil, err
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return nil, err
+	}
+	tm := &hosted.Tmux{
+		Tmux:        getenv(EnvTmuxBinary),
+		Claude:      getenv(EnvClaudeBinary),
+		HookCommand: []string{exe, "session-hook"},
+		Dir:         filepath.Join(dirs.State, "tmux"),
+	}
+	return &SessionRunner{
+		Runners:  map[string]hosted.Runner{"claude": tm},
+		Guilds:   guilds,
+		Fallback: agentRunnerFrom(getenv, guilds, st),
+		Record: func(run string, info hosted.Info, state hosted.State) {
+			if err := st.SetRunSession(run, info.Pane, info.SessionID, info.TranscriptPath, string(state)); err != nil {
+				log.Printf("run %s: recording its Session: %v", run, err)
+			}
+		},
+	}, nil
 }

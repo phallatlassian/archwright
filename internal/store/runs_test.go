@@ -194,3 +194,33 @@ func TestRunBriefIsTheRecordedPromptWithFallbacks(t *testing.T) {
 		t.Fatalf("purge dropped the brief: %+v", got)
 	}
 }
+
+func TestRunRecordsKeepWhereASessionLivesAndItsState(t *testing.T) {
+	s, _ := open(t)
+	j, _ := s.CreateJob("job", "")
+	if err := s.StartRunRecord("r-1", j.ID, "dsp-1", "masonry", "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ := s.GetRunRecord("r-1")
+	if rec.PaneID != "" || rec.SessionState != "" {
+		t.Fatalf("a run with no Session reports one: %+v", rec)
+	}
+	b, _ := json.Marshal(rec)
+	if strings.Contains(string(b), "pane_id") || strings.Contains(string(b), "session_state") {
+		t.Fatalf("a run with no Session reports one: %s", b)
+	}
+	if err := s.SetRunSession("r-1", "%7", "", "", "starting"); err != nil {
+		t.Fatal(err)
+	}
+	// The vendor's ids arrive later; a later update that has not learned them must not blank the pane.
+	if err := s.SetRunSession("r-1", "", "sess-1", "/t/sess-1.jsonl", "idle"); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ = s.GetRunRecord("r-1")
+	if rec.PaneID != "%7" || rec.SessionID != "sess-1" || rec.TranscriptPath != "/t/sess-1.jsonl" || rec.SessionState != "idle" {
+		t.Fatalf("run = %+v", rec)
+	}
+	if err := s.SetRunSession("nope", "%1", "", "", "idle"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("err = %v", err)
+	}
+}

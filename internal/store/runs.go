@@ -24,6 +24,12 @@ type RunRecord struct {
 	EndedAt      *time.Time `json:"ended_at,omitempty"`
 	Step         string     `json:"step,omitempty"`       // the Plan step a Warden's run carries out
 	ParentRun    string     `json:"parent_run,omitempty"` // the Warden run that dispatched a Wright's run
+
+	// A run hosted as an interactive Session in a tmux pane (ADR 0026).
+	PaneID         string `json:"pane_id,omitempty"`         // canonical: how the Works finds the Session again
+	SessionID      string `json:"session_id,omitempty"`      // the vendor's session id, from its SessionStart hook
+	TranscriptPath string `json:"transcript_path,omitempty"` // the vendor's transcript, from the same hook
+	SessionState   string `json:"session_state,omitempty"`   // starting, working, waiting-on-permission, idle or ended
 }
 
 // RunEvent is one entry of a run's timeline. Raw is served apart, on demand.
@@ -116,6 +122,17 @@ func (s *Store) RunBrief(runID string) (RunBrief, error) {
 	return RunBrief{Source: BriefNone}, nil
 }
 
+// SetRunSession records where a run's Session lives and what it is doing. The
+// pane id, session id and transcript path are kept once known: a later call
+// that has not learned them yet does not blank them.
+func (s *Store) SetRunSession(runID, paneID, sessionID, transcriptPath, state string) error {
+	res, err := s.db.Exec(`UPDATE run_records SET
+		pane_id = COALESCE(NULLIF(?, ''), pane_id), session_id = COALESCE(NULLIF(?, ''), session_id),
+		transcript_path = COALESCE(NULLIF(?, ''), transcript_path), session_state = NULLIF(?, '')
+		WHERE run_id = ?`, paneID, sessionID, transcriptPath, state, runID)
+	return mustChange(res, err, runID)
+}
+
 // SetRunUsage records what a run consumed and which runner ran it.
 func (s *Store) SetRunUsage(runID, runner string, in, out int, costUSD float64) error {
 	res, err := s.db.Exec("UPDATE run_records SET runner = CASE WHEN ? <> '' THEN ? ELSE runner END, input_tokens = ?, output_tokens = ?, cost_usd = ? WHERE run_id = ?",
@@ -175,12 +192,12 @@ func (s *Store) AddRunEvent(runID, kind, summary string, raw json.RawMessage) (i
 	return seq, err
 }
 
-const runCols = "run_id, job_id, dispatch_id, guild, runner, input_tokens, output_tokens, cost_usd, status, started_at, COALESCE(ended_at,''), COALESCE(step,''), COALESCE(parent_run,'')"
+const runCols = "run_id, job_id, dispatch_id, guild, runner, input_tokens, output_tokens, cost_usd, status, started_at, COALESCE(ended_at,''), COALESCE(step,''), COALESCE(parent_run,''), COALESCE(pane_id,''), COALESCE(session_id,''), COALESCE(transcript_path,''), COALESCE(session_state,'')"
 
 func scanRun(r scanner) (RunRecord, error) {
 	var rec RunRecord
 	var start, end string
-	if err := r.Scan(&rec.RunID, &rec.JobID, &rec.DispatchID, &rec.Guild, &rec.Runner, &rec.InputTokens, &rec.OutputTokens, &rec.CostUSD, &rec.Status, &start, &end, &rec.Step, &rec.ParentRun); err != nil {
+	if err := r.Scan(&rec.RunID, &rec.JobID, &rec.DispatchID, &rec.Guild, &rec.Runner, &rec.InputTokens, &rec.OutputTokens, &rec.CostUSD, &rec.Status, &start, &end, &rec.Step, &rec.ParentRun, &rec.PaneID, &rec.SessionID, &rec.TranscriptPath, &rec.SessionState); err != nil {
 		return RunRecord{}, err
 	}
 	rec.StartedAt, _ = time.Parse(time.RFC3339Nano, start)

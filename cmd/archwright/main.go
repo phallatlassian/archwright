@@ -20,6 +20,7 @@ import (
 
 	"github.com/phallatlassian/archwright/internal/doctor"
 	"github.com/phallatlassian/archwright/internal/paths"
+	"github.com/phallatlassian/archwright/internal/session"
 	"github.com/phallatlassian/archwright/internal/sites"
 	"github.com/phallatlassian/archwright/internal/spool"
 	"github.com/phallatlassian/archwright/internal/store"
@@ -59,6 +60,9 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 	}
 	if len(args) > 0 && args[0] == "hook" {
 		return hook(args[1:], stdout)
+	}
+	if len(args) > 0 && args[0] == "session-hook" {
+		return sessionHook(stdin)
 	}
 	dirs, err := paths.Resolve(os.Getenv)
 	if err != nil {
@@ -580,4 +584,13 @@ func tool(args []string, stdin io.Reader, stdout io.Writer) error {
 		return resp.Error
 	}
 	return enc.Encode(json.RawMessage(resp.Output))
+}
+
+// sessionHook is what every hook of a Session runs (ADR 0027): it reports the
+// payload on stdin to the Works and the run's spool, prints nothing and always
+// succeeds. A hook is observe-only, so it never answers the CLI with a
+// decision, and a hook that failed must not fail the Session it watches.
+func sessionHook(stdin io.Reader) error {
+	session.SendHook(os.Getenv, stdin)
+	return nil
 }

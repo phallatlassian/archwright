@@ -1,0 +1,556 @@
+package session
+
+import (
+	"bytes"
+	"context"
+	"crypto/rand"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+
+	"github.com/phallatlassian/archwright/internal/runner"
+)
+
+// Defaults of the tmux adapter.
+const (
+	DefaultSocketName   = "archwright" // tmux -L: the Works' own server, never the developer's
+	DefaultSessionName  = "factory"
+	archwrightWindow    = "archwright"
+	DefaultStartTimeout = 60 * time.Second // no SessionStart hook within this fails the Session "failed to start"
+	DefaultCancelGrace  = 3 * time.Second
+	defaultPoll         = 200 * time.Millisecond
+	// maxInlineBrief is the longest brief passed as the positional argument.
+	// tmux carries a command to its server in one 16 KB message, so a longer
+	// brief is written to a file and the prompt points at it.
+	maxInlineBrief = 6000
+	// endedGrace is how long a Session whose SessionEnd hook has fired gets to
+	// exit before its result is taken from what is known.
+	endedGrace = 2 * time.Second
+)
+
+var runIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+
+// hookEvents are the hooks the Works observes, for both vendors; a vendor
+// that never sends one (Codex has no Notification) is not harmed by its entry.
+var hookEvents = []string{
+	HookSessionStart, HookUserPromptSubmit, HookPreToolUse, HookPermissionReq,
+	HookPostToolUse, HookNotification, HookStop, HookSessionEnd,
+}
+
+// Tmux hosts interactive Claude Sessions in panes of a tmux server it owns:
+// one `factory` session, a window per Job, a pane per Session (ADR 0026,
+// docs/spec/tmux-runtime.md). The zero value needs only Dir and HookCommand.
+type Tmux struct {
+	Tmux        string // the tmux binary; default "tmux"
+	Socket      string // the server's socket path (tmux -S); wins over SocketName
+	SocketName  string // the server's socket name (tmux -L); default DefaultSocketName
+	SessionName string // default DefaultSessionName
+	Claude      string // the claude binary; default "claude"; tests point it at a stand-in
+	// HookCommand is the argv of what a hook runs: `archwright session-hook`.
+	HookCommand []string
+	// Dir holds the Works' files for the factory: its tmux config and each run's
+	// hook settings, hook spool and long brief.
+	Dir string
+	// SocketDir holds the hook receiver's socket. Its path must stay under the
+	// platform's unix socket limit, so it defaults to a short one under the
+	// temp directory, not Dir.
+	SocketDir string
+	// UserConf is the developer's own tmux config, sourced before the Works';
+	// "" means ~/.tmux.conf and "-" none.
+	UserConf     string
+	StartTimeout time.Duration
+	CancelGrace  time.Duration
+	Poll         time.Duration
+
+	mu      sync.Mutex // serialises server and window creation
+	recv    *Receiver
+	version string
+}
+
+// Name implements Runner.
+func (t *Tmux) Name() string { return "claude" }
+
+// Capabilities implements Runner. Resume by id is a later slice.
+func (t *Tmux) Capabilities() Capabilities {
+	return Capabilities{Hooks: true, PermissionRequests: true}
+}
+
+// Close stops the hook receiver. Sessions are left running in their panes: the
+// tmux server outlives the Works.
+func (t *Tmux) Close() {
+	t.mu.Lock()
+	r := t.recv
+	t.recv = nil
+	t.mu.Unlock()
+	if r != nil {
+		r.Close()
+	}
+}
+
+func (t *Tmux) or(v, def string) string {
+	if v != "" {
+		return v
+	}
+	return def
+}
+
+func (t *Tmux) dur(v, def time.Duration) time.Duration {
+	if v > 0 {
+		return v
+	}
+	return def
+}
+
+func (t *Tmux) session() string { return t.or(t.SessionName, DefaultSessionName) }
+
+func (t *Tmux) socketArgs() []string {
+	if t.Socket != "" {
+		return []string{"-S", t.Socket}
+	}
+	return []string{"-L", t.or(t.SocketName, DefaultSocketName)}
+}
+
+// tmux runs one tmux command against the Works' server and returns its output.
+func (t *Tmux) tmux(args ...string) (string, error) {
+	cmd := exec.Command(t.or(t.Tmux, "tmux"), append(t.socketArgs(), args...)...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("tmux %s: %w: %s", args[0], err, strings.TrimSpace(stderr.String()))
+	}
+	return strings.TrimRight(stdout.String(), "\n"), nil
+}
+
+// Launch implements Runner. ctx bounds the launch, not the Session: a Session
+// outlives the call and ends through Cancel, its pane, or its own SessionEnd.
+func (t *Tmux) Launch(ctx context.Context, req LaunchRequest) (Session, error) {
+	if err := checkLaunch(req); err != nil {
+		return nil, err
+	}
+	if t.Dir == "" || len(t.HookCommand) == 0 {
+		return nil, errors.New("the tmux adapter has no Dir or HookCommand configured")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	runDir := filepath.Join(t.Dir, "runs", req.Run)
+	if err := os.MkdirAll(runDir, 0o700); err != nil {
+		return nil, err
+	}
+	token, sessionID := randomHex(16), newUUID()
+	hookFile := filepath.Join(runDir, "hooks.jsonl")
+	if err := os.WriteFile(hookFile, nil, 0o600); err != nil {
+		return nil, err
+	}
+	settings, err := t.writeSettings(runDir)
+	if err != nil {
+		return nil, err
+	}
+	prompt, err := t.promptFor(runDir, req.Brief)
+	if err != nil {
+		return nil, err
+	}
+	flags := []string{"--permission-mode", req.Spawn.EffectiveMode(), "--settings", settings, "--session-id", sessionID}
+	if m := req.Limits.Model; m != "" {
+		flags = append(flags, "--model", m)
+	}
+	flags = append(flags, req.Spawn.ExtraArgs...)
+	argv := append(append([]string{t.or(t.Claude, "claude")}, flags...), "--", prompt) // "--": the brief is never read as a flag
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.recv == nil {
+		r, err := NewReceiver(t.or(t.SocketDir, filepath.Join(os.TempDir(), fmt.Sprintf("aw-%d", os.Getuid()))))
+		if err != nil {
+			return nil, fmt.Errorf("hook receiver: %w", err)
+		}
+		t.recv = r
+	}
+	env := map[string]string{}
+	for k, v := range req.Env {
+		env[k] = v
+	}
+	// The hook wiring is the adapter's: a caller's environment cannot redirect it.
+	env[envRun], env[EnvHookSocket], env[EnvHookFile], env[EnvHookToken] = req.Run, t.recv.Path(), hookFile, token
+	pane, window, err := t.place(req, env, argv)
+	if err != nil {
+		return nil, err
+	}
+	s := &tmuxSession{t: t, core: newCore(token), pane: pane, hookFile: hookFile, cancelCh: make(chan struct{}), started: time.Now()}
+	s.core.setPane(pane, window)
+	s.core.add(Event{Kind: KindPosture, Posture: &runner.Posture{
+		Runner: "claude", Version: t.claudeVersion(), Mode: req.Spawn.EffectiveMode(), Sandbox: runner.SandboxInherited,
+		Flags: flags, Notices: []string{},
+	}})
+	unregister := t.recv.Register(req.Run, token, s.core.deliver)
+	for opt, v := range map[string]string{"@run": req.Run, "@role": req.Role} {
+		if _, err := t.tmux("set-option", "-p", "-t", pane, opt, v); err != nil {
+			t.tmux("kill-pane", "-t", pane)
+			unregister()
+			return nil, err
+		}
+	}
+	go func() {
+		defer unregister()
+		s.run()
+	}()
+	return s, nil
+}
+
+// checkLaunch refuses what the never-list forbids (ADR 0027) and what a pane
+// cannot be named or placed for.
+func checkLaunch(req LaunchRequest) error {
+	if err := runner.CheckRequest(runner.StartRequest{Brief: req.Brief, Dir: req.Dir, Env: req.Env, Spawn: req.Spawn}); err != nil {
+		return err
+	}
+	switch {
+	case !runIDPattern.MatchString(req.Run):
+		return fmt.Errorf("run id %q is not a plain id", req.Run)
+	case req.Dir == "":
+		return errors.New("the Session has no working directory")
+	case req.Brief == "":
+		return errors.New("the Session has no brief")
+	}
+	return nil
+}
+
+// writeSettings writes the hooks the Works observes, and nothing else: no
+// permission, allow rule or sandbox key, and every hook command only reports
+// (ADR 0027). Claude merges it with the managed settings.
+func (t *Tmux) writeSettings(runDir string) (string, error) {
+	hook := map[string]any{"type": "command", "command": shellJoin(t.HookCommand)}
+	hooks := map[string][]any{}
+	for _, e := range hookEvents {
+		hooks[e] = []any{map[string]any{"hooks": []any{hook}}}
+	}
+	b, err := json.MarshalIndent(map[string]any{"hooks": hooks}, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	path := filepath.Join(runDir, "settings.json")
+	return path, os.WriteFile(path, append(b, '\n'), 0o600)
+}
+
+// promptFor is the first prompt: the brief, or for a long one a pointer to a file holding it.
+func (t *Tmux) promptFor(runDir, brief string) (string, error) {
+	if len(brief) <= maxInlineBrief {
+		return brief, nil
+	}
+	path := filepath.Join(runDir, "brief.md")
+	if err := os.WriteFile(path, []byte(brief), 0o600); err != nil {
+		return "", err
+	}
+	return "Your brief is in the file " + path + ". Read all of it, then carry it out.", nil
+}
+
+// place puts the command in a pane of the Job's window, creating the factory
+// session and the window as needed, and returns the pane and window ids. The
+// command is passed as argv, so tmux runs it without a shell and the brief
+// needs no quoting.
+func (t *Tmux) place(req LaunchRequest, env map[string]string, argv []string) (pane, window string, err error) {
+	if err := t.ensureServer(); err != nil {
+		return "", "", err
+	}
+	var envArgs []string
+	for k, v := range env {
+		envArgs = append(envArgs, "-e", k+"="+v)
+	}
+	name := req.Job
+	if name == "" {
+		name = "work"
+	}
+	const format = "#{pane_id} #{window_id}"
+	// A Job's window disappears with its last pane, so the window found can be
+	// gone by the time the split runs: look again and, with no window, make one.
+	var out string
+	for attempt := 0; ; attempt++ {
+		window, err = t.findWindow(name)
+		if err != nil {
+			return "", "", err
+		}
+		var args []string
+		if window == "" {
+			args = []string{"new-window", "-d", "-t", t.session() + ":", "-n", name, "-c", req.Dir, "-P", "-F", format}
+		} else {
+			args = []string{"split-window", "-d", "-t", window, "-c", req.Dir, "-P", "-F", format}
+		}
+		out, err = t.tmux(append(append(append(args, envArgs...), "--"), argv...)...)
+		if err == nil {
+			break
+		}
+		if window == "" || attempt >= 2 || !strings.Contains(err.Error(), "can't find window") {
+			return "", "", err
+		}
+	}
+	pane, window, ok := strings.Cut(out, " ")
+	if !ok {
+		return "", "", fmt.Errorf("tmux gave no pane for the Session: %q", out)
+	}
+	t.tmux("select-layout", "-t", window, "tiled") // keep panes usable as a Job's window fills; a failure is cosmetic
+	return pane, window, nil
+}
+
+// ensureServer starts the Works' tmux server with the factory session if it
+// is not running. The config is Works-supplied: the developer's own first, then
+// what the factory requires (docs/spec/tmux-runtime.md).
+func (t *Tmux) ensureServer() error {
+	if _, err := t.tmux("has-session", "-t", "="+t.session()); err == nil {
+		// A server from an earlier Works keeps its options; the factory still needs this one.
+		t.tmux("set-option", "-g", "remain-on-exit", "on")
+		return nil
+	}
+	conf, err := t.writeConf()
+	if err != nil {
+		return err
+	}
+	// -x/-y: a detached session defaults to 80x24, too small to split.
+	_, err = t.tmux("-f", conf, "new-session", "-d", "-s", t.session(), "-n", archwrightWindow, "-x", "200", "-y", "50")
+	return err
+}
+
+func (t *Tmux) writeConf() (string, error) {
+	conf := t.UserConf
+	if conf == "" {
+		if home, err := os.UserHomeDir(); err == nil {
+			conf = filepath.Join(home, ".tmux.conf")
+		}
+	}
+	var b strings.Builder
+	if conf != "" && conf != "-" {
+		fmt.Fprintf(&b, "source-file -q %s\n", tmuxQuote(conf))
+	}
+	b.WriteString("# set by the Works, after the developer's own config\n")
+	b.WriteString("set-option -g remain-on-exit on\n") // a dead pane keeps its final screen readable
+	if err := os.MkdirAll(t.Dir, 0o700); err != nil {
+		return "", err
+	}
+	path := filepath.Join(t.Dir, "tmux.conf")
+	return path, os.WriteFile(path, []byte(b.String()), 0o600)
+}
+
+// findWindow returns the id of the Job's window, or "" if it has none.
+func (t *Tmux) findWindow(name string) (string, error) {
+	out, err := t.tmux("list-windows", "-t", t.session()+":", "-F", "#{window_id} #{window_name}")
+	if err != nil {
+		return "", err
+	}
+	for _, l := range strings.Split(out, "\n") {
+		if id, n, ok := strings.Cut(l, " "); ok && n == name {
+			return id, nil
+		}
+	}
+	return "", nil
+}
+
+// claudeVersion is what `claude --version` prints, once; "unknown" if it cannot say.
+func (t *Tmux) claudeVersion() string {
+	if t.version != "" {
+		return t.version
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, t.or(t.Claude, "claude"), "--version").Output()
+	t.version = "unknown"
+	if err == nil {
+		if v := oneLine(string(out)); v != "" {
+			t.version = v
+		}
+	}
+	return t.version
+}
+
+// tmuxSession is one Session in one pane.
+type tmuxSession struct {
+	t        *Tmux
+	core     *core
+	pane     string
+	hookFile string
+	started  time.Time
+
+	cancelCh   chan struct{}
+	cancelOnce sync.Once
+
+	spoolOff int64
+	spoolBuf []byte
+}
+
+func (s *tmuxSession) Info() Info           { return s.core.Info() }
+func (s *tmuxSession) State() State         { return s.core.State() }
+func (s *tmuxSession) Events() <-chan Event { return s.core.Events() }
+func (s *tmuxSession) Result() Result       { return s.core.Result() }
+
+// Cancel implements Session.
+func (s *tmuxSession) Cancel() { s.cancelOnce.Do(func() { close(s.cancelCh) }) }
+
+// run follows the Session until it ends: hooks arrive on their own through the
+// receiver; this adds the spool fallback, the start deadline and the pane's liveness.
+func (s *tmuxSession) run() {
+	t := s.t
+	tick := time.NewTicker(t.dur(t.Poll, defaultPoll))
+	defer tick.Stop()
+	startBy := s.started.Add(t.dur(t.StartTimeout, DefaultStartTimeout))
+	var endedAt time.Time
+	lost := 0
+	for {
+		select {
+		case <-s.cancelCh:
+			s.cancel()
+			return
+		case <-tick.C:
+		}
+		s.drainSpool()
+		dead, status, err := s.paneState()
+		switch {
+		case err != nil:
+			if lost++; lost >= 3 { // one failed query is a busy server; three is a lost pane
+				s.core.finish(Result{Status: runner.StatusFailed, ExitStatus: -1, Error: "the pane is gone: " + err.Error()})
+				return
+			}
+			continue
+		case dead:
+			s.drainSpool() // hooks written just before the exit
+			s.finishDead(status)
+			return
+		}
+		lost = 0
+		switch st := s.core.State(); {
+		case st == StateEnded: // SessionEnd fired; the process should follow
+			if endedAt.IsZero() {
+				endedAt = time.Now()
+			}
+			if time.Since(endedAt) > endedGrace {
+				s.core.finish(Result{Status: runner.StatusDone, ExitStatus: -1})
+				return
+			}
+		case st == StateStarting && time.Now().After(startBy):
+			s.failToStart()
+			return
+		}
+	}
+}
+
+// finishDead ends the Session from a dead pane's exit status.
+func (s *tmuxSession) finishDead(status int) {
+	res := Result{Status: runner.StatusDone, ExitStatus: status}
+	if status != 0 {
+		res.Status, res.Error = runner.StatusFailed, fmt.Sprintf("the Session exited with status %d", status)
+	}
+	if s.core.State() == StateStarting {
+		res.Status, res.Error = runner.StatusFailed, fmt.Sprintf("failed to start: the pane exited with status %d before the first hook", status)
+	}
+	s.core.finish(res)
+}
+
+// failToStart ends a Session that never reported a SessionStart. Its process
+// is stopped but its pane is kept, so the developer can read where it stuck
+// (usually a folder-trust dialog, which no hook reports).
+func (s *tmuxSession) failToStart() {
+	if out, err := s.t.tmux("display-message", "-p", "-t", s.pane, "#{pane_pid}"); err == nil {
+		if pid, err := strconv.Atoi(strings.TrimSpace(out)); err == nil && pid > 1 {
+			syscall.Kill(pid, syscall.SIGTERM)
+		}
+	}
+	s.core.finish(Result{Status: runner.StatusFailed, ExitStatus: -1, Error: fmt.Sprintf("failed to start: no SessionStart hook within %s; the pane %s is kept", s.t.dur(s.t.StartTimeout, DefaultStartTimeout), s.pane)})
+}
+
+// cancel interrupts the Session, then kills its pane after the grace. At a
+// permission prompt it types nothing: Enter at a prompt approves it, and the
+// Works never answers one (ADR 0027).
+func (s *tmuxSession) cancel() {
+	if st := s.core.State(); st != StateWaitingOnPermission && st != StateEnded {
+		s.t.tmux("send-keys", "-t", s.pane, "C-c")
+	}
+	deadline := time.Now().Add(s.t.dur(s.t.CancelGrace, DefaultCancelGrace))
+	for time.Now().Before(deadline) {
+		if dead, _, err := s.paneState(); err != nil || dead {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	s.t.tmux("kill-pane", "-t", s.pane) // already gone is fine
+	s.core.finish(Result{Status: runner.StatusCancelled, ExitStatus: -1})
+}
+
+// paneState reads whether the pane's process has exited, and its status.
+func (s *tmuxSession) paneState() (dead bool, status int, err error) {
+	out, err := s.t.tmux("display-message", "-p", "-t", s.pane, "#{pane_dead} #{pane_dead_status}")
+	if err != nil {
+		return false, 0, err
+	}
+	d, st, _ := strings.Cut(out, " ")
+	status, _ = strconv.Atoi(st)
+	return d == "1", status, nil
+}
+
+// drainSpool delivers hook lines the receiver did not: the fallback for a hook
+// whose post failed. A line already delivered over the socket is dropped by id.
+func (s *tmuxSession) drainSpool() {
+	f, err := os.Open(s.hookFile)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	if _, err := f.Seek(s.spoolOff, io.SeekStart); err != nil {
+		return
+	}
+	b, err := io.ReadAll(io.LimitReader(f, maxLine*4))
+	if err != nil || len(b) == 0 {
+		return
+	}
+	s.spoolOff += int64(len(b))
+	b = append(s.spoolBuf, b...)
+	for {
+		i := bytes.IndexByte(b, '\n')
+		if i < 0 {
+			break
+		}
+		var d Delivery
+		if json.Unmarshal(b[:i], &d) == nil {
+			s.core.deliver(d)
+		}
+		b = b[i+1:]
+	}
+	s.spoolBuf = append([]byte(nil), b...) // a partial last line waits for the rest
+}
+
+// shellJoin renders argv as one shell command line.
+func shellJoin(argv []string) string {
+	q := make([]string, len(argv))
+	for i, a := range argv {
+		q[i] = "'" + strings.ReplaceAll(a, "'", `'\''`) + "'"
+	}
+	return strings.Join(q, " ")
+}
+
+// tmuxQuote quotes a path for a tmux config file.
+func tmuxQuote(s string) string {
+	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`, "$", `\$`).Replace(s) + `"`
+}
+
+func randomHex(n int) string {
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		panic(err)
+	}
+	return fmt.Sprintf("%x", b)
+}
+
+// newUUID is a random (version 4) UUID, for claude's --session-id.
+func newUUID() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		panic(err)
+	}
+	b[6], b[8] = b[6]&0x0f|0x40, b[8]&0x3f|0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:])
+}

@@ -121,6 +121,7 @@ var commands = []command{
 // internalCommands are agent-only: hidden from the top-level listing, shown by `help internal`.
 var internalCommands = []command{
 	{"Internal", "hook", "session-start|prompt|post-tool|stop", "the Archwright's runner hooks (rehydrate, inbox)", ""},
+	{"Internal", "session-hook", "", "a Session's hooks: report its state to the Works (observe-only)", ""},
 	{"Internal", "tool", "NAME [--id ID] [--wait D]", "call a Works tool inside a run",
 		"call a Works tool inside a run: JSON on stdin, JSON on stdout\n(exit 75 if the Works does not answer within D, default 60s)"},
 	{"Internal", "ask record", "ID", "record a page's submitted answer, inside a run",
