@@ -18,3 +18,5 @@ Local commits remain the agent's own work, which assumes a sandboxed Wright can 
 This amends ADR 0008 (the Warden no longer pushes or opens the PR itself; the Works does at the Warden's request) and ADR 0014 (adds the Forge tools to the catalogue). It is consistent with ADR 0011: brokering widens no runner permission, because the Works acts only within what the caller's role permits and the guard on `--add-dir`, `--sandbox`, `-c` and settings writes is unchanged. Build commands that managed policy also blocks (`pnpm`, `go test`, dependency installs, Codex network access) are out of scope here.
 
 Amended by ADR 0025: the Works also runs gates and commits for Wrights; the assumption above that a sandboxed Wright can `git commit` no longer applies.
+
+Superseded by ADR 0028: agents run `gh` and `git push` themselves; the Forge tools are removed.
