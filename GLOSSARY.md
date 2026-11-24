@@ -37,7 +37,7 @@ A worker that does one scoped piece of work from a brief and returns the result,
 _Avoid_: worker, subagent, sub-agent
 
 **Session**:
-A live interactive claude or codex process, hosted in a tmux pane, that carries out a run.
+A live interactive claude or codex process that carries out a run.
 _Avoid_: process, terminal, pane
 
 **Nudge**:
