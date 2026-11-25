@@ -216,6 +216,11 @@ func newHandler(st *store.Store, runs *Runs, sm *sites.Manager, token string, pi
 			fail(w, err)
 			return
 		}
+		for i := range b {
+			if s, ok := runs.PRStatus(b[i].ID); ok {
+				b[i].PRStatus = &s
+			}
+		}
 		reply(w, 200, b)
 	})
 	mux.HandleFunc("GET /usage", func(w http.ResponseWriter, r *http.Request) {
@@ -278,7 +283,11 @@ func newHandler(st *store.Store, runs *Runs, sm *sites.Manager, token string, pi
 		resp := struct {
 			JobWithPlan
 			StepStates map[string]string `json:"step_states"`
+			PRStatus   *PRStatus         `json:"pr_status,omitempty"`
 		}{JobWithPlan: out, StepStates: map[string]string{}}
+		if s, ok := runs.PRStatus(out.ID); ok {
+			resp.PRStatus = &s
+		}
 		if out.Plan != nil {
 			ds, err := st.Dispatches(out.ID)
 			if err != nil {

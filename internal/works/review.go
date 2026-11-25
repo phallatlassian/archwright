@@ -104,6 +104,9 @@ func specMaterial(st *store.Store, job store.Job) (basis, material string, err e
 	if !blank(job.Description) {
 		w.WriteString("\n" + strings.TrimSpace(job.Description) + "\n")
 	}
+	if !blank(job.SourceIssue) {
+		w.WriteString("\nSource issue: " + strings.TrimSpace(job.SourceIssue) + "\n")
+	}
 	if len(briefs) > 0 {
 		w.WriteString("\nPlan step briefs:\n\n" + strings.Join(briefs, "\n") + "\n")
 	}

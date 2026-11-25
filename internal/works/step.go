@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/phallatlassian/archwright/internal/remote"
 	"github.com/phallatlassian/archwright/internal/store"
 )
 
@@ -178,11 +179,14 @@ var wardenMD string
 // names artifacts such as "fix.diff", which only resolve through it.
 func renderStepBrief(job store.Job, step store.Step, g Guild, charter, prior string) string {
 	var w strings.Builder
-	fmt.Fprintf(&w, "# Task: %s\n\nYou are the %s Warden for step %q of job %s. Work only through the Archwright tools: dispatch_wright, inspect_wright, rework_wright, accept_piece and finally handback, plus the Forge tools listed below.\n", step.Title, g.Name, step.ID, job.ID)
+	fmt.Fprintf(&w, "# Task: %s\n\nYou are the %s Warden for step %q of job %s. Work through the Archwright tools: dispatch_wright, inspect_wright, rework_wright, accept_piece and finally handback, plus record_pr in the open-pr step; reach the Forge yourself with gh and git, as described below.\n", step.Title, g.Name, step.ID, job.ID)
 	w.WriteString("\n" + strings.TrimSpace(wardenMD) + "\n")
 	w.WriteString("\n## The Job's request\n\n" + strings.TrimSpace(job.Title))
 	if d := strings.TrimSpace(job.Description); d != "" {
 		w.WriteString("\n\n" + d)
+	}
+	if u := strings.TrimSpace(job.SourceIssue); u != "" {
+		w.WriteString("\n\nSource issue: " + u + " (read it with `gh issue view`; put its URL in the inputs of a Wright's brief if the Wright needs it)")
 	}
 	w.WriteString("\n\n## This step\n\n" + step.Title)
 	if b := strings.TrimSpace(step.Brief); b != "" {
@@ -229,7 +233,16 @@ func (r *Runs) priorWork(job store.Job) (string, error) {
 	r.mu.Unlock()
 	if sm != nil && job.Site != "" {
 		if t, err := sm.IntegrationPushTarget(job.ID); err == nil {
-			fmt.Fprintf(&w, "The accepted pieces are merged into the Job's integration branch `%s` on Site %s, based on `%s`; the Inputs named in this step refer to that work. Your own checkout is empty, so do not run git against it: read the work through inspect_wright.\n\n", t.Branch, job.Site, t.DefaultBranch)
+			fmt.Fprintf(&w, "The accepted pieces are merged into the Job's integration branch `%s` on Site %s, based on `%s`; the Inputs named in this step refer to that work. Your own checkout is empty, so do not run git against it: read the work through inspect_wright.\n", t.Branch, job.Site, t.DefaultBranch)
+			if wt, err := sm.IntegrationWorktree(job.ID); err == nil {
+				fmt.Fprintf(&w, "The branch is checked out at `%s`: push it from there, `git -C %s push origin %s`, only in the %s step.\n", wt, wt, t.Branch, OpenPRStep)
+			}
+			if site, err := r.st.GetSite(job.Site); err == nil {
+				if repo, err := remote.Normalize(site.URL); err == nil {
+					fmt.Fprintf(&w, "The Site's repository, for `gh -R`, is `%s`.\n", repo)
+				}
+			}
+			w.WriteString("\n")
 		}
 	}
 	w.WriteString("Accepted pieces; inspect_wright takes these names (not step ids or Input labels):\n" + strings.Join(accepted, "\n"))

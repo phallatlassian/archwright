@@ -15,9 +15,7 @@ import (
 const mergePiecePiece = "merge-piece"
 
 // isMergeWright is a piece a merge Wright works on, in the integration worktree.
-func isMergeWright(piece string) bool {
-	return isMergeBasePiece(piece) || strings.HasPrefix(piece, mergePiecePiece+"-")
-}
+func isMergeWright(piece string) bool { return strings.HasPrefix(piece, mergePiecePiece+"-") }
 
 // Statuses of an AcceptInfo.
 const (
@@ -171,7 +169,7 @@ func pieceMergeBrief(piece, branch string, pm sites.PieceMerge) Brief {
 	cons := []string{
 		"Run `git merge --no-edit " + branch + "` and resolve the conflicts it reports; the branch is already in this repository.",
 		"Never rebase, reset, amend, cherry-pick, squash, or otherwise rewrite history; never force anything. Only add the merge commit on top of the branch as it is.",
-		"Never run `git push`, `git fetch` or `gh`; the Works does that.",
+		"Never run `git push`, `git fetch` or `gh`: this merge only joins two branches that are already in this repository.",
 		"Run one simple command per Bash call, with no pipes, heredocs, `cd` or command substitution.",
 		"If a conflict cannot be resolved without a decision that is not yours, run `git merge --abort`, then ask.",
 	}

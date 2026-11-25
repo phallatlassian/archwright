@@ -22,7 +22,7 @@ type Job struct {
 	Description string    `json:"description,omitempty"`
 	Site        string    `json:"site,omitempty"`
 	SourceIssue string    `json:"source_issue,omitempty"` // URL of the Forge issue the Job is for; empty when it has none
-	PR          string    `json:"pr,omitempty"`           // URL of the Job's pull request once opened; the Forge push tool is allowed while it is set and the Job is open (ADR 0022)
+	PR          string    `json:"pr,omitempty"`           // URL of the Job's pull request once its Warden records it (record_pr, ADR 0028)
 	Outcome     string    `json:"outcome,omitempty"`      // accepted or discarded once closed
 	ParkedFor   string    `json:"parked_for,omitempty"`   // why the Job awaits the Archwright, after a partial handback or a second failed review
 	Writ        string    `json:"writ,omitempty"`         // the ticket that authorised the Job's work, once linked

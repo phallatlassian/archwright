@@ -1,55 +1,49 @@
 package works
 
 import (
-	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/phallatlassian/archwright/internal/store"
 )
 
-// The Works brokers every Forge action (ADR 0022), so the briefs agents start
-// from must send them to the Forge tools and away from gh and git push, and
-// ask for one simple command per Bash call. These tests check the briefs the
-// stub runners receive; whether a real agent obeys is for a run on a fixture
-// Site.
+// Agents reach the Forge themselves with plain gh and git (ADR 0028), so the
+// briefs they start from must say so, point them to record_pr for the one
+// thing the Works needs told, and ask for one simple command per Bash call.
+// These tests check the briefs the stub runners receive; whether a real agent
+// obeys is for a run on a fixture Site.
 
-// ghWord matches gh as a command word, not inside another word.
-var ghWord = regexp.MustCompile(`(^|[^A-Za-z])gh([^A-Za-z]|$)`)
+// removedForgeTools are the brokered tools no brief may still send an agent to.
+var removedForgeTools = []string{"read_issue", "push_branch", "open_pr", "read_pr", "comment_pr", "merge_base"}
 
 // assertAgentRules checks that text carries the Forge and command guidance
-// and that every mention of gh or git push is a prohibition.
+// and sends nobody to a tool that no longer exists.
 func assertAgentRules(t *testing.T, who, text string) {
 	t.Helper()
 	for _, want := range []string{
-		"Never run `gh`", "`git push`", "one simple command per Bash call",
-		"no pipes, heredocs, `cd`, command substitution",
+		"`gh issue view <URL>`", "Never push, open a pull request or comment on one",
+		"one simple command per Bash call", "no pipes, heredocs, `cd`, command substitution",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("%s brief lacks %q:\n%s", who, want, text)
 		}
 	}
-	assertNoForgeShellInstruction(t, who, text)
+	assertNoRemovedForgeTool(t, who, text)
 }
 
-// assertNoForgeShellInstruction fails on any line that tells the agent to run
-// gh or git push: a line naming either must also forbid it.
-func assertNoForgeShellInstruction(t *testing.T, who, text string) {
+func assertNoRemovedForgeTool(t *testing.T, who, text string) {
 	t.Helper()
-	if strings.Contains(text, "gh pr create") {
-		t.Errorf("%s mentions gh pr create", who)
+	for _, name := range removedForgeTools {
+		if strings.Contains(text, name) {
+			t.Errorf("%s brief still names the removed tool %s", who, name)
+		}
 	}
-	for _, line := range strings.Split(text, "\n") {
-		if !ghWord.MatchString(line) && !strings.Contains(line, "git push") {
-			continue
-		}
-		if l := strings.ToLower(line); !strings.Contains(l, "never") && !strings.Contains(l, "do not") {
-			t.Errorf("%s has a line that does not forbid gh or git push: %q", who, line)
-		}
+	if strings.Contains(text, "fail in your sandbox") || strings.Contains(text, "Never run `gh`") {
+		t.Errorf("%s brief still says gh and git push are unavailable", who)
 	}
 }
 
-func TestWardenStepBriefSendsAgentsToTheForgeTools(t *testing.T) {
+func TestWardenStepBriefTellsTheWardenToUseGhAndRecordThePR(t *testing.T) {
 	g := newStepRig(t, true)
 	if resp := g.start("a"); !resp.OK {
 		t.Fatalf("start: %+v", resp)
@@ -60,20 +54,29 @@ func TestWardenStepBriefSendsAgentsToTheForgeTools(t *testing.T) {
 		t.Fatalf("warden requests: %+v", reqs)
 	}
 	brief := reqs[0].Brief
-	assertAgentRules(t, "Warden", brief)
-	// every Forge tool the registry defines is named, and the argument shapes are the tools' own
-	for name := range forgeTools {
-		if !strings.Contains(brief, "`"+name+"`") {
-			t.Errorf("Warden brief does not name the Forge tool %s", name)
-		}
-	}
-	if _, ok := catalogue["merge_base"]; !ok || !strings.Contains(brief, "`merge_base`") {
-		t.Error("Warden brief does not name merge_base")
-	}
-	for _, want := range []string{`{"title":"<one line>","body":"<markdown>"}`, `{"body":"<markdown>"}`} {
+	assertNoRemovedForgeTool(t, "Warden", brief)
+	for _, want := range []string{
+		"`gh` and `git` yourself", "`gh issue view <URL>`", "`record_pr`", `{"url":"<the PR's URL>","number":<its number>}`,
+		"Review before it is Plan ordering only", "one simple command per Bash call",
+	} {
 		if !strings.Contains(brief, want) {
-			t.Errorf("Warden brief lacks the argument shape %s", want)
+			t.Errorf("Warden brief lacks %q", want)
 		}
+	}
+	if _, ok := catalogue["record_pr"]; !ok {
+		t.Error("record_pr is not in the catalogue")
+	}
+}
+
+func TestStepBriefNamesTheJobsSourceIssue(t *testing.T) {
+	job := store.Job{ID: "job-1", Title: "Fix login", SourceIssue: "https://github.com/acme/app/issues/7"}
+	brief := renderStepBrief(job, store.Step{ID: "build", Title: "Build"}, Guild{Name: "masonry"}, "", "")
+	if !strings.Contains(brief, "Source issue: https://github.com/acme/app/issues/7") {
+		t.Errorf("the step brief does not name the source issue:\n%s", brief)
+	}
+	job.SourceIssue = ""
+	if brief := renderStepBrief(job, store.Step{ID: "build", Title: "Build"}, Guild{Name: "masonry"}, "", ""); strings.Contains(brief, "Source issue") {
+		t.Errorf("the step brief names a source issue the Job has not:\n%s", brief)
 	}
 }
 
@@ -85,9 +88,6 @@ func TestWrightBriefCarriesTheAgentRules(t *testing.T) {
 		t.Fatalf("wright requests: %d", len(reqs))
 	}
 	assertAgentRules(t, "Wright", reqs[0].Brief)
-	if !strings.Contains(reqs[0].Brief, "archwright tool read_issue") {
-		t.Error("Wright brief does not name read_issue")
-	}
 	if _, ok := catalogue["run_gate"]; ok {
 		t.Error("run_gate is still in the Works tool catalogue")
 	}

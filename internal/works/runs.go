@@ -56,7 +56,7 @@ type Runs struct {
 	reviewer  ReviewRunner // runs Reviews (ADR 0012)
 	warden    WardenRunner // runs the Wardens of started Plan steps (ADR 0020)
 	skills    *SkillsDelivery
-	forge     forge.Forge       // what Forge tools act through (ADR 0022); nil means forge.Default
+	forge     forge.Forge       // what the Works reads PRs through (ADR 0028); nil means forge.Default
 	spoolRoot string            // when set, every run's spool lives here; otherwise each run's runner picks (ADR 0018)
 	wrightWts map[string]string // dispatch id -> its Wright's worktree, kept across a rate-limit requeue
 	bg        context.Context
@@ -84,6 +84,14 @@ type Runs struct {
 	// sessions are the open Sessions kept until their Job leaves active work (ADR 0029).
 	sessions         JobSessions
 	sessionRetention time.Duration
+
+	// prStates are the Works' latest readings of Jobs' pull requests, kept by
+	// Job; prBusy marks the Jobs being read, and prAge is how old a reading may
+	// get before it is made again (prstatus.go).
+	prMu     sync.Mutex
+	prStates map[string]PRStatus
+	prBusy   map[string]bool
+	prAge    time.Duration
 
 	// preflight, when set, must pass before any run starts (ADR 0014): it is
 	// `archwright doctor`. A failure refuses the run with its fixes.
@@ -123,11 +131,12 @@ type run struct {
 // NewRuns returns an empty registry over st.
 func NewRuns(st *store.Store) *Runs {
 	bg, cancel := context.WithCancelCause(context.Background())
-	r := &Runs{st: st, poll: 25 * time.Millisecond, runs: map[string]*run{}, cancels: map[string]context.CancelFunc{}, cancelled: map[string]bool{}, wrightWts: map[string]string{}, bg: bg, cancelBg: cancel}
+	r := &Runs{st: st, poll: 25 * time.Millisecond, runs: map[string]*run{}, cancels: map[string]context.CancelFunc{}, cancelled: map[string]bool{}, wrightWts: map[string]string{}, prStates: map[string]PRStatus{}, prBusy: map[string]bool{}, prAge: prReadAge, bg: bg, cancelBg: cancel}
 	r.sched = newScheduler(r)
 	st.SetInboxNotifier(r.inboxChanged)
-	r.wg.Add(1)
+	r.wg.Add(2)
 	go r.reapLoop()
+	go r.prLoop()
 	return r
 }
 
@@ -185,19 +194,23 @@ func (r *Runs) spoolRootFor(guild string) (string, error) {
 	return launch.SpoolRoot(runnerName, os.Getuid(), os.TempDir()), nil
 }
 
-// UseForge sets the Forge the Forge tools act through. Without one the Works
-// uses forge.Default.
+// UseForge sets the Forge the Works reads Jobs' pull requests through. Without
+// one the Works uses forge.Default.
 func (r *Runs) UseForge(f forge.Forge) {
 	r.mu.Lock()
 	r.forge = f
 	r.mu.Unlock()
 }
 
+// defaultForge is the Forge a Works with none set reads through. Tests replace
+// it so that none can reach a real one.
+var defaultForge = forge.Default
+
 func (r *Runs) forgeOrDefault() forge.Forge {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.forge == nil {
-		return forge.Default()
+		return defaultForge()
 	}
 	return r.forge
 }
