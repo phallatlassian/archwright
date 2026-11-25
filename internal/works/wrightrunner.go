@@ -57,20 +57,9 @@ func WardenRunnersFrom(wrights Runner) (WardenRunner, ReviewRunner) {
 // sessionRunnerFrom builds the Runner that hosts Claude and Codex Wrights,
 // Wardens and reviews as Sessions in the factory tmux session.
 func sessionRunnerFrom(getenv func(string) string, guilds GuildSource, st *store.Store) (Runner, error) {
-	dirs, err := paths.Resolve(getenv)
+	tm, err := tmuxFrom(getenv)
 	if err != nil {
 		return nil, err
-	}
-	exe, err := os.Executable()
-	if err != nil {
-		return nil, err
-	}
-	tm := &hosted.Tmux{
-		Tmux:        getenv(EnvTmuxBinary),
-		Claude:      getenv(EnvClaudeBinary),
-		CodexBin:    getenv(EnvCodexBinary),
-		HookCommand: []string{exe, "session-hook"},
-		Dir:         filepath.Join(dirs.State, "tmux"),
 	}
 	return &SessionRunner{
 		Runners: map[string]hosted.Runner{"claude": tm, "codex": tm.Codex()},
@@ -81,6 +70,37 @@ func sessionRunnerFrom(getenv func(string) string, guilds GuildSource, st *store
 			}
 		},
 	}, nil
+}
+
+// tmuxFrom builds the factory's tmux host from the environment: the binaries,
+// the state dir its files live in, and the developer's <config>/tmux.conf.
+func tmuxFrom(getenv func(string) string) (*hosted.Tmux, error) {
+	dirs, err := paths.Resolve(getenv)
+	if err != nil {
+		return nil, err
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return nil, err
+	}
+	return &hosted.Tmux{
+		Tmux:        getenv(EnvTmuxBinary),
+		Claude:      getenv(EnvClaudeBinary),
+		CodexBin:    getenv(EnvCodexBinary),
+		HookCommand: []string{exe, "session-hook"},
+		Dir:         filepath.Join(dirs.State, "tmux"),
+		UserConf:    filepath.Join(dirs.Config, "tmux.conf"),
+	}, nil
+}
+
+// WriteTmuxConf writes the tmux config the factory server would start with
+// and returns its path, so it can be inspected.
+func WriteTmuxConf(getenv func(string) string) (string, error) {
+	tm, err := tmuxFrom(getenv)
+	if err != nil {
+		return "", err
+	}
+	return tm.WriteConf()
 }
 
 // sessionRecord is what the run's record keeps of its Session.
