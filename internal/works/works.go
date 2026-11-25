@@ -123,9 +123,12 @@ func ServeWith(ctx context.Context, d paths.Dirs, ready chan<- struct{}, opts Op
 	ReloadDefinitions(reg)
 	runs.UseDefinitions(reg)
 	guilds := GuildsFromRegistry(reg, DefaultProfiles(), skills.Vendored())
-	wrights := WrightRunnerFrom(os.Getenv, guilds, st)
+	wrights, err := WrightRunnerFrom(os.Getenv, guilds, st)
+	if err != nil {
+		return err
+	}
 	runs.Configure(guilds, wrights)
-	warden, reviewer := WardenRunnersFrom(os.Getenv, guilds, st, wrights)
+	warden, reviewer := WardenRunnersFrom(wrights)
 	// The shell environment Sessions are spawned with: what the CLI that
 	// started this Works had, allow-listed, and then what each CLI call reports.
 	env := envsnap.NewHolder(os.Environ())

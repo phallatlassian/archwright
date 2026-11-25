@@ -1,8 +1,8 @@
 // Package doctor is `archwright doctor` (ADR 0014, 0016): read-only checks of
 // everything a run depends on, each reporting pass or the exact fix. It never
 // writes a settings file, an allow rule or any configuration; it prints what
-// the developer should do (ADR 0011). The one thing it writes is the probe's
-// short-lived spool directory in each runner's own temp area, removed again.
+// the developer should do (ADR 0027). What it writes is throwaway and removed
+// again: a tmux socket directory and a hook delivery, both in the temp area.
 // A failing report also stops runs from starting (Gate).
 package doctor
 
@@ -64,8 +64,6 @@ type Deps struct {
 	// Output runs a read-only command (a --version or --help check, a git
 	// read) and returns its combined output.
 	Output func(ctx context.Context, name string, args ...string) (string, error)
-	// Probe exercises each installed runner from inside its own sandbox.
-	Probe Prober
 	// WorksRunning reports a live Works without starting one.
 	WorksRunning func() (pid, port int, ok bool)
 	Exe          string // this binary, to compare with the archwright on PATH
@@ -74,16 +72,15 @@ type Deps struct {
 	// PolicyFiles are the files a runner reads its permissions from (the
 	// developer's own and managed ones), for the prompt checks.
 	PolicyFiles func(runner string) []string
-	UID         int
 	TempDir     string
 }
 
-// DefaultDeps is doctor on this machine, probing the real runners.
+// DefaultDeps is doctor on this machine.
 func DefaultDeps(dirs paths.Dirs) Deps {
 	exe, _ := os.Executable()
 	d := Deps{
 		Dirs: dirs, Getenv: os.Getenv, LookPath: exec.LookPath, Output: execOutput, Exe: exe,
-		UID: os.Getuid(), TempDir: os.TempDir(),
+		TempDir: os.TempDir(),
 		WorksRunning: func() (int, int, bool) {
 			c, ok := works.Running(dirs)
 			if !ok {
@@ -92,7 +89,6 @@ func DefaultDeps(dirs paths.Dirs) Deps {
 			return c.Info.PID, c.Info.Port, true
 		},
 	}
-	d.Probe = RunnerProber{UID: d.UID, TempDir: d.TempDir}
 	d.Hooks = HookDelivery{Exe: exe, TempDir: d.TempDir}
 	home, _ := os.UserHomeDir()
 	d.PolicyFiles = DefaultPolicyFiles(home, os.Getenv)

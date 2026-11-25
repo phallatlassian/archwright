@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/phallatlassian/archwright/internal/defs"
 	"github.com/phallatlassian/archwright/internal/runner"
 	hosted "github.com/phallatlassian/archwright/internal/session"
 )
@@ -37,9 +38,6 @@ type SessionRunner struct {
 	Guilds  GuildSource
 	// Record keeps where a run's Session lives and what it is doing; nil ignores it.
 	Record func(run string, info hosted.Info, state hosted.State)
-	// Fallback carries out the runs of a runner that has no Session adapter;
-	// nil fails them.
-	Fallback Runner
 	// NudgeWait is how long a rework waits for its Session to be idle before
 	// giving up on it; zero means DefaultNudgeWait.
 	NudgeWait time.Duration
@@ -195,9 +193,6 @@ func (a *SessionRunner) run(ctx context.Context, req RunRequest, spec runSpec) e
 	}
 	r, ok := a.Runners[g.Binding.Runner]
 	if !ok {
-		if a.Fallback != nil && req.Env.Role == RoleWright {
-			return a.Fallback.Run(ctx, req)
-		}
 		return fmt.Errorf("guild %q is bound to runner %q, which cannot run as a Session", g.Name, g.Binding.Runner)
 	}
 	if req.Worktree == "" {
@@ -595,6 +590,26 @@ func (a *SessionRunner) ended(r hosted.Runner, s hosted.Session) error {
 	}
 	return nil
 }
+
+// spawnFor is the permission posture a Guild's binding asks for. It can only
+// narrow what the runner would do; the adapter refuses anything the never-list
+// forbids, and a restriction the runner cannot enforce fails the run.
+func spawnFor(runnerName string, g Guild) (runner.Spawn, error) {
+	var s runner.Spawn
+	if g.Binding.Access == defs.ReadOnly {
+		s.Mode = "plan"
+	}
+	if len(g.Binding.DeniedTools) > 0 {
+		if runnerName != "claude" {
+			return s, fmt.Errorf("guild %q denies tools, which %s cannot enforce", g.Name, runnerName)
+		}
+		s.ExtraArgs = append(s.ExtraArgs, "--disallowed-tools", strings.Join(g.Binding.DeniedTools, ","))
+	}
+	return s, nil
+}
+
+// summaryMax is the longest a timeline entry's summary is.
+const summaryMax = 200
 
 // timelineKind is the run timeline's kind for a Session event.
 func timelineKind(e hosted.Event) string {

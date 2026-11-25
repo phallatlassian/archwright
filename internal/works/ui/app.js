@@ -368,7 +368,6 @@ const views = {
     const cap = Object.fromEntries(sites.map((x) => [x.name, x.concurrency_cap]));
     const out = [crumbs('Runner'), h('h1', {}, 'Runner'),
       h('p', { class: 'muted' }, 'The scheduler that starts Wrights. Work waits in a queue, oldest first, when a cap is reached.')];
-    if (queue.paused) out.push(h('div', { class: 'panel attn' }, h('strong', {}, 'Paused after rate limits '), `until ${queue.paused.until} (${queue.paused.failures} in a row). Nothing new starts until then.`));
     out.push(h('h2', {}, 'Capacity'), table(['Cap', 'In use', 'Limit'], [
       ['Total', queue.running.length, queue.limits.total],
       ...[...perSite].map(([k, n]) => ['Site ' + (k || '(none)'), n, cap[k] || queue.limits.per_site]),

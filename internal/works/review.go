@@ -32,7 +32,7 @@ type ReviewRequest struct {
 	Trace    Trace             // where a runner reports its timeline and usage for the dashboard
 }
 
-// ReviewRunner carries out one review run (ADR 0003). An error, or returning
+// ReviewRunner carries out one review run (ADR 0026). An error, or returning
 // without a report, errors the review: it says nothing about the work.
 type ReviewRunner interface {
 	RunReview(ctx context.Context, req ReviewRequest) error

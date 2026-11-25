@@ -225,12 +225,6 @@ func (s *Store) StartDispatch(id string) error {
 	return s.moveDispatch(id, DispatchQueued, DispatchRunning, "wright.started")
 }
 
-// RequeueDispatch returns a running dispatch to the queue, as when its runner
-// was rate-limited before it could report.
-func (s *Store) RequeueDispatch(id string) error {
-	return s.moveDispatch(id, DispatchRunning, DispatchQueued, "wright.requeued")
-}
-
 func (s *Store) moveDispatch(id, from, to, event string) error {
 	tx, err := s.db.Begin()
 	if err != nil {

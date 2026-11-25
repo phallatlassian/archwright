@@ -23,7 +23,7 @@ func TestFormatEvent(t *testing.T) {
 		want string
 	}{
 		{ev("step.failed", "job-1", `{"step":"fix","reason":"the Warden ended\nwithout handing back"}`), "2026-11-21T04:21:46Z job-1 step.failed fix: the Warden ended without handing back"},
-		{ev("needs_you.permission-wanted", "job-1", `{"summary":"Masonry wants to run go test"}`), "2026-11-21T04:21:46Z job-1 needs_you.permission-wanted Masonry wants to run go test"},
+		{ev("needs_you.review-parked", "job-1", `{"summary":"Hallmark parked the Job after a second failed review"}`), "2026-11-21T04:21:46Z job-1 needs_you.review-parked Hallmark parked the Job after a second failed review"},
 		{ev("job.created", "job-1", `{"title":"T","site":"s"}`), "2026-11-21T04:21:46Z job-1 job.created T"},
 		{ev("run.started", "job-1", `{"run":"r1","guild":"masonry","runner":"codex"}`), "2026-11-21T04:21:46Z job-1 run.started r1 guild=masonry runner=codex"},
 		{ev("run.ended", "job-1", `{"run":"r1","status":"ok"}`), "2026-11-21T04:21:46Z job-1 run.ended r1 ok"},

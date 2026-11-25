@@ -13,7 +13,7 @@ import (
 )
 
 // binary is built without the doctor gate (-tags nodoctorgate), so the tests that
-// are not about doctor never probe a runner on this machine; gatedBinary is the
+// are not about doctor never run its checks against this machine; gatedBinary is the
 // production build, for the tests of doctor and of the gate.
 var binary, gatedBinary string
 
@@ -42,11 +42,14 @@ type sandbox struct {
 	st  string
 }
 
+// fakeRunnerEnv has the Works run the scripted fakes: a test never starts Sessions in a tmux server.
+const fakeRunnerEnv = "ARCHWRIGHT_WRIGHT_RUNNER=fake"
+
 // newSandbox points the real binary at private directories and stops its Works on cleanup.
 func newSandbox(t *testing.T) *sandbox {
 	root := t.TempDir()
 	s := &sandbox{t: t, cfg: filepath.Join(root, "cfg"), st: filepath.Join(root, "state")}
-	s.env = append(os.Environ(), "ARCHWRIGHT_CONFIG_HOME="+s.cfg, "ARCHWRIGHT_STATE_HOME="+s.st)
+	s.env = append(os.Environ(), "ARCHWRIGHT_CONFIG_HOME="+s.cfg, "ARCHWRIGHT_STATE_HOME="+s.st, fakeRunnerEnv)
 	t.Cleanup(func() { s.run("works", "stop") })
 	return s
 }
@@ -162,7 +165,7 @@ func TestStateLayoutHonoursOverridesAndIsPrivate(t *testing.T) {
 func TestXDGDefaultsWithoutOverrides(t *testing.T) {
 	root := t.TempDir()
 	s := &sandbox{t: t}
-	s.env = append(os.Environ(), "ARCHWRIGHT_CONFIG_HOME=", "ARCHWRIGHT_STATE_HOME=",
+	s.env = append(os.Environ(), "ARCHWRIGHT_CONFIG_HOME=", "ARCHWRIGHT_STATE_HOME=", fakeRunnerEnv,
 		"XDG_CONFIG_HOME="+filepath.Join(root, "c"), "XDG_STATE_HOME="+filepath.Join(root, "s"))
 	t.Cleanup(func() { s.run("works", "stop") })
 	s.run("job", "list")

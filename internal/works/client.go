@@ -42,8 +42,8 @@ func ExecSpawner(d paths.Dirs) error {
 	return cmd.Process.Release()
 }
 
-// slowTimeout bounds DoSlow: room for the doctor to probe each runner (3 minutes
-// apiece) before the Works answers.
+// slowTimeout bounds DoSlow: room for the doctor, which starts a throwaway tmux
+// server and delivers a hook, to run before the Works answers.
 const slowTimeout = 10 * time.Minute
 
 // Client talks to a running Works.

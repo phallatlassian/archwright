@@ -286,7 +286,7 @@ func (t *Tmux) ensureReceiverLocked() error {
 // checkLaunch refuses what the never-list forbids (ADR 0027) and what a pane
 // cannot be named or placed for.
 func checkLaunch(req LaunchRequest) error {
-	if err := runner.CheckRequest(runner.StartRequest{Brief: req.Brief, Dir: req.Dir, Env: req.Env, Spawn: req.Spawn}); err != nil {
+	if err := runner.CheckRequest(req.Env, req.Spawn); err != nil {
 		return err
 	}
 	switch {

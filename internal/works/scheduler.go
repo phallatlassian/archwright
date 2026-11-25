@@ -1,7 +1,6 @@
 package works
 
 import (
-	"errors"
 	"fmt"
 	"log"
 	"sort"
@@ -36,28 +35,6 @@ func (l Limits) withDefaults() Limits {
 	return l
 }
 
-// RateLimitError is what a Runner returns when its vendor refuses the run for
-// rate or usage limits. The Works pauses the Runner with backoff and retries
-// the dispatch rather than failing it.
-type RateLimitError struct {
-	RetryAfter time.Duration // the vendor's hint, if it gave one
-	Err        error
-}
-
-func (e *RateLimitError) Error() string {
-	if e.Err != nil {
-		return "rate limited: " + e.Err.Error()
-	}
-	return "rate limited"
-}
-
-func (e *RateLimitError) Unwrap() error { return e.Err }
-
-const (
-	defaultBackoffBase = 2 * time.Second
-	defaultBackoffMax  = 5 * time.Minute
-)
-
 // QueueEntry is one dispatch as the scheduler shows it.
 type QueueEntry struct {
 	DispatchID string `json:"dispatch_id"`
@@ -69,18 +46,11 @@ type QueueEntry struct {
 	Waiting    string `json:"waiting,omitempty"`  // what a queued entry is waiting on
 }
 
-// Pause says the Runner is paused after rate-limit errors.
-type Pause struct {
-	Until    time.Time `json:"until"`
-	Failures int       `json:"failures"` // consecutive rate-limited runs, which set the backoff
-}
-
 // QueueStatus is the visible state of the scheduler.
 type QueueStatus struct {
 	Limits  Limits       `json:"limits"`
 	Running []QueueEntry `json:"running"`
 	Queued  []QueueEntry `json:"queued"` // FIFO
-	Paused  *Pause       `json:"paused,omitempty"`
 	// Wardens are the running Warden runs of Plan steps. They are active runs
 	// but sit outside the per-Site cap, which is about Wrights (ADR 0021).
 	Wardens []WardenEntry `json:"wardens"`
@@ -107,22 +77,18 @@ type entry struct {
 type scheduler struct {
 	r *Runs
 
-	mu          sync.Mutex
-	limits      Limits
-	backoffBase time.Duration
-	backoffMax  time.Duration
-	now         func() time.Time
-	seq         int
-	running     map[string]entry
-	queue       []entry
-	paused      map[string]bool // Jobs the developer paused: none of their queued dispatches start
-	pausedUntil time.Time
-	failures    int
-	timer       *time.Timer
+	mu      sync.Mutex
+	limits  Limits
+	now     func() time.Time
+	seq     int
+	running map[string]entry
+	queue   []entry
+	paused  map[string]bool // Jobs the developer paused: none of their queued dispatches start
+	timer   *time.Timer
 }
 
 func newScheduler(r *Runs) *scheduler {
-	return &scheduler{r: r, limits: DefaultLimits, backoffBase: defaultBackoffBase, backoffMax: defaultBackoffMax, now: time.Now, running: map[string]entry{}, paused: map[string]bool{}}
+	return &scheduler{r: r, limits: DefaultLimits, now: time.Now, running: map[string]entry{}, paused: map[string]bool{}}
 }
 
 // LimitsFromEnv reads the caps from ARCHWRIGHT_MAX_RUNS, ARCHWRIGHT_MAX_RUNS_PER_SITE
@@ -264,13 +230,6 @@ func (s *scheduler) pumpLocked() map[string]error {
 	if s.r.bg.Err() != nil { // shutting down: queued work stays queued
 		return errs
 	}
-	if wait := s.pausedUntil.Sub(s.now()); wait > 0 {
-		if s.timer != nil {
-			s.timer.Stop()
-		}
-		s.timer = time.AfterFunc(wait, s.wake)
-		return errs
-	}
 	for i := 0; i < len(s.queue); {
 		e := s.queue[i]
 		if s.blockedLocked(e) != "" {
@@ -334,58 +293,18 @@ func (s *scheduler) startLocked(e entry) error {
 }
 
 // finished releases a dispatch's slot once its run is over and starts what now fits.
-func (s *scheduler) finished(id string, runnerAnswered bool) {
+func (s *scheduler) finished(id string) {
 	s.mu.Lock()
 	delete(s.running, id)
-	if runnerAnswered {
-		s.failures = 0
-	}
 	errs := s.pumpLocked()
 	s.mu.Unlock()
 	s.report(errs)
-}
-
-// rateLimited puts a dispatch back at its place in the queue and pauses the
-// Runner: for the vendor's hint or an exponential backoff, whichever is longer.
-func (s *scheduler) rateLimited(id string, rl *RateLimitError) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e, ok := s.running[id]
-	delete(s.running, id)
-	if !ok {
-		return
-	}
-	if err := s.r.st.RequeueDispatch(id); err != nil {
-		s.r.failDispatch(id, "the run was rate limited and could not be requeued: "+err.Error())
-		s.report(s.pumpLocked())
-		return
-	}
-	if !s.now().Before(s.pausedUntil) { // runs already in flight when the pause began are the same event
-		s.failures++
-	}
-	wait := s.backoffBase
-	for i := 1; i < s.failures && wait < s.backoffMax; i++ {
-		wait *= 2
-	}
-	wait = min(wait, s.backoffMax)
-	wait = max(wait, rl.RetryAfter)
-	if until := s.now().Add(wait); until.After(s.pausedUntil) {
-		s.pausedUntil = until
-	}
-	at := sort.Search(len(s.queue), func(i int) bool { return s.queue[i].seq > e.seq })
-	s.queue = append(s.queue, entry{})
-	copy(s.queue[at+1:], s.queue[at:])
-	s.queue[at] = e
-	s.report(s.pumpLocked())
 }
 
 func (s *scheduler) status() QueueStatus {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	st := QueueStatus{Limits: s.limits, Running: []QueueEntry{}, Queued: []QueueEntry{}}
-	if s.pausedUntil.After(s.now()) {
-		st.Paused = &Pause{Until: s.pausedUntil, Failures: s.failures}
-	}
 	view := func(e entry) QueueEntry {
 		return QueueEntry{DispatchID: e.d.ID, Job: e.d.JobID, Piece: e.d.Piece, Guild: e.d.Guild, Site: e.site}
 	}
@@ -401,9 +320,6 @@ func (s *scheduler) status() QueueStatus {
 		q := view(e)
 		q.Position = i + 1
 		q.Waiting = s.blockedLocked(e)
-		if st.Paused != nil {
-			q.Waiting = "the runner is paused until " + st.Paused.Until.UTC().Format(time.RFC3339)
-		}
 		st.Queued = append(st.Queued, q)
 	}
 	return st
@@ -416,9 +332,4 @@ func (s *scheduler) stop() {
 		s.timer = nil
 	}
 	s.mu.Unlock()
-}
-
-func asRateLimit(err error) (*RateLimitError, bool) {
-	var rl *RateLimitError
-	return rl, errors.As(err, &rl)
 }

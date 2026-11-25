@@ -56,9 +56,8 @@ type Runs struct {
 	reviewer  ReviewRunner // runs Reviews (ADR 0012)
 	warden    WardenRunner // runs the Wardens of started Plan steps (ADR 0020)
 	skills    *SkillsDelivery
-	forge     forge.Forge       // what the Works reads PRs through (ADR 0028); nil means forge.Default
-	spoolRoot string            // when set, every run's spool lives here; otherwise each run's runner picks (ADR 0018)
-	wrightWts map[string]string // dispatch id -> its Wright's worktree, kept across a rate-limit requeue
+	forge     forge.Forge // what the Works reads PRs through (ADR 0028); nil means forge.Default
+	spoolRoot string      // when set, every run's spool lives here; otherwise each run's runner picks (ADR 0018)
 	bg        context.Context
 	cancelBg  context.CancelCauseFunc
 	wg        sync.WaitGroup
@@ -131,7 +130,7 @@ type run struct {
 // NewRuns returns an empty registry over st.
 func NewRuns(st *store.Store) *Runs {
 	bg, cancel := context.WithCancelCause(context.Background())
-	r := &Runs{st: st, poll: 25 * time.Millisecond, runs: map[string]*run{}, cancels: map[string]context.CancelFunc{}, cancelled: map[string]bool{}, wrightWts: map[string]string{}, prStates: map[string]PRStatus{}, prBusy: map[string]bool{}, prAge: prReadAge, bg: bg, cancelBg: cancel}
+	r := &Runs{st: st, poll: 25 * time.Millisecond, runs: map[string]*run{}, cancels: map[string]context.CancelFunc{}, cancelled: map[string]bool{}, prStates: map[string]PRStatus{}, prBusy: map[string]bool{}, prAge: prReadAge, bg: bg, cancelBg: cancel}
 	r.sched = newScheduler(r)
 	st.SetInboxNotifier(r.inboxChanged)
 	r.wg.Add(2)

@@ -19,6 +19,14 @@ import (
 	"github.com/phallatlassian/archwright/internal/store"
 )
 
+// agentGuilds are the Guilds the Session tests bind: by runner and by access.
+var agentGuilds = map[string]Guild{
+	"masonry":   {Name: "masonry", Binding: defs.Binding{Guild: "masonry", Runner: "claude", Access: defs.ReadWrite}},
+	"carvers":   {Name: "carvers", Binding: defs.Binding{Guild: "carvers", Runner: "codex", Access: defs.ReadWrite}},
+	"surveyors": {Name: "surveyors", Binding: defs.Binding{Guild: "surveyors", Runner: "claude", Access: defs.ReadOnly}},
+	"lockedout": {Name: "lockedout", Binding: defs.Binding{Guild: "lockedout", Runner: "codex", Access: defs.ReadWrite, DeniedTools: []string{"Bash"}}},
+}
+
 // sessionRig dispatches Wrights through the real SessionRunner onto a fake
 // Session runner that plays hooks and calls the Works' tools through the spool
 // as a Claude Session would.
@@ -37,9 +45,8 @@ func newSessionRig(t *testing.T, script hosted.Script) *sessionRig {
 		return Guild{}, errInvalidInput
 	}
 	sr := &SessionRunner{
-		Runners:  map[string]hosted.Runner{"claude": g.fake},
-		Guilds:   guilds,
-		Fallback: NewFakeRunner(nil),
+		Runners: map[string]hosted.Runner{"claude": g.fake},
+		Guilds:  guilds,
 		Record: func(run string, info hosted.Info, state hosted.State) {
 			g.st.SetRunSession(run, sessionRecord(info, state))
 		},
@@ -281,19 +288,42 @@ func TestCodexGuildRunsAsACodexSession(t *testing.T) {
 	}
 }
 
-func TestGuildBoundToARunnerWithNoSessionAdapterRunsOnTheFallback(t *testing.T) {
+func TestGuildBoundToARunnerWithNoSessionAdapterFailsTheDispatch(t *testing.T) {
 	g := newSessionRig(t, hosted.Script{})
-	w, err := g.r.StartFor(RoleWarden, t.TempDir(), RunContext{Job: g.job.ID, Guild: "carvers"}) // codex-bound
+	w, err := g.r.StartFor(RoleWarden, t.TempDir(), RunContext{Job: g.job.ID, Guild: "carvers"}) // codex-bound; this rig has no codex Session runner
 	if err != nil {
 		t.Fatal(err)
 	}
 	g.ok(w, "dispatch_wright", `{"piece":"p","brief":`+goodBrief+`}`, nil)
 	d := g.waitReported("p")
-	if d.Status != store.DispatchReported || !strings.Contains(string(d.Result), "fake://p") {
-		t.Fatalf("dispatch = %s %s", d.Status, d.Result)
+	if !strings.Contains(string(d.Result), "cannot run as a Session") {
+		t.Fatalf("result = %s", d.Result)
 	}
 	if n := len(g.fake.Launches()); n != 0 {
 		t.Fatalf("%d Sessions launched for a codex Guild", n)
+	}
+}
+
+func TestGuildThatDeniesToolsFailsClosedOnCodex(t *testing.T) {
+	g := newSessionRig(t, hosted.Script{})
+	codex := hosted.NewFakeFor("codex", hosted.Turn(nil))
+	g.r.runner.(*SessionRunner).Runners["codex"] = codex
+	w, err := g.r.StartFor(RoleWarden, t.TempDir(), RunContext{Job: g.job.ID, Guild: "lockedout"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	g.ok(w, "dispatch_wright", `{"piece":"p","brief":`+goodBrief+`}`, nil)
+	d := g.waitReported("p")
+	if !strings.Contains(string(d.Result), "denies tools, which codex cannot enforce") || len(codex.Launches()) != 0 {
+		t.Fatalf("result = %s, %d launches", d.Result, len(codex.Launches()))
+	}
+}
+
+func TestWrightWithoutAWorktreeIsNotRun(t *testing.T) {
+	g := newSessionRig(t, hosted.Script{})
+	err := g.r.runner.Run(context.Background(), RunRequest{Guild: "masonry", Brief: "b"})
+	if err == nil || !strings.Contains(err.Error(), "no worktree") || len(g.fake.Launches()) != 0 {
+		t.Fatalf("err = %v, %d launches", err, len(g.fake.Launches()))
 	}
 }
 
@@ -317,21 +347,27 @@ func TestRefusedLaunchFailsTheDispatchClosedAndSpawnsNothing(t *testing.T) {
 	}
 }
 
-func TestTmuxWrightRunnerIsOptInAndNeverFallsBackSilently(t *testing.T) {
+func TestSessionsAreTheOnlyRunnerAndTheFakeStaysSelectable(t *testing.T) {
 	guilds := func(string) (Guild, error) { return Guild{}, errInvalidInput }
-	env := map[string]string{EnvWrightRunner: "tmux", "HOME": t.TempDir()}
-	got := WrightRunnerFrom(func(k string) string { return env[k] }, guilds, nil)
+	env := map[string]string{"HOME": t.TempDir()}
+	got, err := WrightRunnerFrom(func(k string) string { return env[k] }, guilds, nil)
 	sr, ok := got.(*SessionRunner)
-	if !ok || sr.Runners["claude"] == nil || sr.Runners["codex"] == nil || sr.Runners["codex"].Name() != "codex" || sr.Fallback == nil {
-		t.Fatalf("runner = %T", got)
+	if err != nil || !ok || sr.Runners["claude"] == nil || sr.Runners["codex"] == nil || sr.Runners["codex"].Name() != "codex" {
+		t.Fatalf("runner = %T, %v", got, err)
 	}
-	// With no way to place its files, the tmux runner fails the run rather than running headless.
-	got = WrightRunnerFrom(func(k string) string { return map[string]string{EnvWrightRunner: "tmux"}[k] }, guilds, nil)
-	if err := got.Run(context.Background(), RunRequest{}); err == nil || !strings.Contains(err.Error(), "tmux Sessions") {
-		t.Fatalf("err = %v", err)
+	if w, rv := WardenRunnersFrom(got); w != WardenRunner(sr) || rv != ReviewRunner(sr) {
+		t.Fatalf("Wardens and reviews are Sessions too: %T %T", w, rv)
 	}
-	if _, ok := WrightRunnerFrom(func(string) string { return "" }, guilds, nil).(*AgentRunner); !ok {
-		t.Fatal("the default is no longer the headless runner")
+
+	fake := func(k string) string { return map[string]string{EnvWrightRunner: "fake"}[k] }
+	got, err = WrightRunnerFrom(fake, nil, nil)
+	if _, ok := got.(*FakeRunner); err != nil || !ok {
+		t.Fatalf("the fake runner was not selected: %T, %v", got, err)
+	}
+	if w, rv := WardenRunnersFrom(got); rv != nil {
+		t.Fatalf("fake: %T %v", w, rv)
+	} else if _, ok := w.(*FakeWarden); !ok {
+		t.Fatalf("fake: %T", w)
 	}
 }
 
@@ -439,7 +475,7 @@ func TestReworkRunsAFreshSessionWithTheAmendedBriefWhenTheSessionIsGone(t *testi
 	}
 }
 
-func TestReworkFallbackSessionGetsTheGuildSkills(t *testing.T) {
+func TestReworkFreshSessionGetsTheGuildSkills(t *testing.T) {
 	g := newSessionRig(t, reworkScript())
 	root := t.TempDir()
 	reg := defs.New(defs.Shipped(), "")

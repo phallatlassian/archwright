@@ -72,7 +72,7 @@ func (g *sessionRig) restart() (*Runs, SessionRecovery) {
 		return Guild{}, errInvalidInput
 	}
 	sr := &SessionRunner{
-		Runners: map[string]hosted.Runner{"claude": g.fake}, Guilds: guilds, Fallback: NewFakeRunner(nil),
+		Runners: map[string]hosted.Runner{"claude": g.fake}, Guilds: guilds,
 		Record: func(run string, info hosted.Info, state hosted.State) {
 			g.st.SetRunSession(run, sessionRecord(info, state))
 		},

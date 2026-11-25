@@ -82,7 +82,7 @@ func Build(in Input) (Command, error) {
 	if in.Site != "" {
 		env[EnvSite] = in.Site
 	}
-	if err := runner.CheckRequest(runner.StartRequest{Env: env}); err != nil {
+	if err := runner.CheckRequest(env, runner.Spawn{}); err != nil {
 		return Command{}, err
 	}
 	cmd := Command{Dir: in.Home}

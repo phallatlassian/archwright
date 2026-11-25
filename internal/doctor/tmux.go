@@ -17,14 +17,14 @@ var tmuxVersion = regexp.MustCompile(`(\d+)\.(\d+)`)
 
 const installTmux = "install tmux (macOS: brew install tmux; Debian or Ubuntu: apt install tmux; Fedora: dnf install tmux) so `tmux` is on PATH, then re-run `archwright doctor`"
 
-// checkTmux: tmux is a hard dependency with no headless fallback (ADR 0026):
+// checkTmux: tmux is a hard dependency (ADR 0026):
 // every agent runs in a pane of a tmux server the Works owns. It is present
 // and new enough, and it can start a server on a socket of its own, as the
 // Works' does (`-L archwright`): a throwaway one here, torn down again.
 func checkTmux(ctx context.Context, r *collector, d Deps) {
 	bin, err := d.LookPath("tmux")
 	if err != nil {
-		r.fail("tmux", "`tmux` is not on PATH, and the factory runs every agent in a tmux pane (there is no headless fallback)", installTmux)
+		r.fail("tmux", "`tmux` is not on PATH, and the factory runs every agent in a tmux pane", installTmux)
 		return
 	}
 	out, err := d.Output(ctx, bin, "-V")

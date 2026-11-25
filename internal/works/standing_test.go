@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -300,6 +301,34 @@ func TestWardenSessionOfAGuildBoundToNoSessionRunnerFailsItsStep(t *testing.T) {
 	})
 	if !strings.Contains(sr.Reason, "cannot run as a Session") {
 		t.Errorf("reason = %q", sr.Reason)
+	}
+}
+
+func TestRunningWardensAreShownInTheQueueAndCountedActive(t *testing.T) {
+	g := newStandingRig(t)
+	release := make(chan struct{})
+	var once sync.Once
+	t.Cleanup(func() { once.Do(func() { close(release) }) })
+	g.fake.SetScript(hosted.Turn(func(ctx context.Context, _ hosted.LaunchRequest) error {
+		select {
+		case <-release:
+		case <-ctx.Done():
+		}
+		return nil
+	}))
+	g.planFor(g.job.ID, "a:masonry")
+	g.startStep(g.job.ID, "a")
+	eventually(t, "the Warden's Session to launch", func() bool { return len(g.fake.Launches()) == 1 })
+	q := g.r.Queue()
+	if len(q.Wardens) != 1 || q.Wardens[0].Step != "a" || q.Wardens[0].Guild != "masonry" || len(q.Running) != 0 || len(q.Queued) != 0 {
+		t.Fatalf("queue = %+v", q)
+	}
+	if n, err := g.r.ActiveRuns(); err != nil || n != 1 {
+		t.Fatalf("active runs = %d, %v", n, err)
+	}
+	b, _ := json.Marshal(q)
+	if !strings.Contains(string(b), `"wardens":[{"job"`) {
+		t.Errorf("queue json = %s", b)
 	}
 }
 

@@ -19,8 +19,8 @@ import (
 // report its state (ADR 0027).
 
 // MsgArchwrightNotHosted is what the Works says when asked to spawn an
-// Archwright Session and it does not host Sessions; the CLI then runs the
-// Archwright itself, as before.
+// Archwright Session and it does not host Sessions (it runs the scripted
+// fakes); the CLI then runs the Archwright itself.
 const MsgArchwrightNotHosted = "this Works does not host the Archwright as a Session"
 
 // ArchwrightHost is what the Works needs to spawn its Archwright.

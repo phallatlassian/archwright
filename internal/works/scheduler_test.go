@@ -12,17 +12,15 @@ import (
 )
 
 // holdRunner parks each run until the test releases its piece, then reports
-// through a FakeRunner. fail, if set, may refuse a run with an error first.
+// through a FakeRunner.
 type holdRunner struct {
 	inner *FakeRunner
 	mu    sync.Mutex
 	hold  map[string]chan struct{}
-	fail  func(piece string, attempt int) error
-	tries map[string]int
 }
 
 func newHoldRunner() *holdRunner {
-	return &holdRunner{inner: NewFakeRunner(nil), hold: map[string]chan struct{}{}, tries: map[string]int{}}
+	return &holdRunner{inner: NewFakeRunner(nil), hold: map[string]chan struct{}{}}
 }
 
 func (h *holdRunner) gate(piece string) chan struct{} {
@@ -37,27 +35,12 @@ func (h *holdRunner) gate(piece string) chan struct{} {
 func (h *holdRunner) release(piece string) { close(h.gate(piece)) }
 
 func (h *holdRunner) Run(ctx context.Context, req RunRequest) error {
-	h.mu.Lock()
-	h.tries[req.Piece]++
-	n := h.tries[req.Piece]
-	h.mu.Unlock()
-	if h.fail != nil {
-		if err := h.fail(req.Piece, n); err != nil {
-			return err
-		}
-	}
 	select {
 	case <-h.gate(req.Piece):
 	case <-ctx.Done():
 		return ctx.Err()
 	}
 	return h.inner.Run(ctx, req)
-}
-
-func (h *holdRunner) attempts(piece string) int {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return h.tries[piece]
 }
 
 func newHeldRig(t *testing.T, limits Limits) (*rig, *holdRunner) {
@@ -193,64 +176,6 @@ func TestSitesOwnCapReplacesTheDefault(t *testing.T) {
 	}
 	if g.queue().Limits != DefaultLimits {
 		t.Fatalf("defaults: %+v", g.queue().Limits)
-	}
-}
-
-func TestRateLimitedRunnerPausesWithBackoffAndTheDispatchRetries(t *testing.T) {
-	g, h := newHeldRig(t, Limits{})
-	g.r.sched.backoffBase, g.r.sched.backoffMax = 250*time.Millisecond, 500*time.Millisecond
-	h.fail = func(piece string, n int) error {
-		if piece == "a" && n <= 2 {
-			return &RateLimitError{Err: fmt.Errorf("429")}
-		}
-		return nil
-	}
-	h.release("a")
-	h.release("b")
-	g.send("a")
-	eventually(t, "the runner to be paused", func() bool { return g.queue().Paused != nil })
-	q := g.queue()
-	if len(q.Running) != 0 || fmt.Sprint(pieces(q.Queued)) != "[a]" || q.Paused.Failures != 1 {
-		t.Fatalf("a rate-limited dispatch is requeued, not failed: %+v", q)
-	}
-	if d, _ := g.st.LatestDispatch(g.job.ID, "a"); d.Status == store.DispatchRejected || d.Result != nil {
-		t.Fatalf("dispatch must not fail: %+v", d)
-	}
-	// While paused nothing new starts, but it is accepted and queued behind a.
-	if b := g.send("b"); b.Status != store.DispatchQueued || b.QueuePos != 2 {
-		t.Fatalf("paused runner queues new work: %+v", b)
-	}
-	d := g.waitReported("a")
-	if d.Status != store.DispatchReported || h.attempts("a") != 3 {
-		t.Fatalf("a should succeed on its third attempt: %s after %d", d.Status, h.attempts("a"))
-	}
-	g.waitReported("b")
-	if g.queue().Paused != nil {
-		t.Fatalf("pause clears once the runner answers: %+v", g.queue())
-	}
-}
-
-func TestBackoffGrowsAndHonoursRetryAfter(t *testing.T) {
-	g, h := newHeldRig(t, Limits{})
-	s := g.r.sched
-	s.backoffBase, s.backoffMax = time.Hour, 3*time.Hour
-	now := time.Now()
-	s.now = func() time.Time { return now }
-	h.fail = func(string, int) error { return &RateLimitError{} }
-	g.send("a")
-	eventually(t, "first pause", func() bool { return g.queue().Paused != nil })
-	if p := g.queue().Paused; p.Until.Sub(now) != time.Hour {
-		t.Fatalf("first backoff = base: %v", p.Until.Sub(now))
-	}
-	s.mu.Lock()
-	e := s.queue[0]
-	s.running[e.d.ID], s.queue = e, nil // simulate the retry having started
-	s.mu.Unlock()
-	now = now.Add(2 * time.Hour) // the first pause is over
-	g.st.StartDispatch(e.d.ID)
-	s.rateLimited(e.d.ID, &RateLimitError{RetryAfter: 10 * time.Hour})
-	if p := g.queue().Paused; p.Failures != 2 || p.Until.Sub(now) != 10*time.Hour {
-		t.Fatalf("a longer vendor hint wins: %+v", p)
 	}
 }
 

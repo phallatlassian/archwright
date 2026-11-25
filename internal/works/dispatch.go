@@ -112,9 +112,9 @@ type SessionReuser interface {
 	Reusable(job, piece string) string
 }
 
-// Runner carries out one Wright run (ADR 0003). Real adapters spawn a vendor
-// CLI; the fake runner plays a script. An error, or returning without a
-// report, fails the dispatch.
+// Runner carries out one Wright run (ADR 0026). The SessionRunner hosts it as
+// an interactive Session of a vendor CLI; the fake runner plays a script. An
+// error, or returning without a report, fails the dispatch.
 type Runner interface {
 	Run(ctx context.Context, req RunRequest) error
 }
@@ -581,7 +581,7 @@ func (r *Runs) failDispatch(id, msg string) {
 
 // start launches the Wright run for a dispatch the scheduler has released.
 // The run ends when the Runner returns: a dispatch that never reported then
-// fails, unless the Runner was rate-limited, which requeues it.
+// fails.
 func (r *Runs) start(d store.Dispatch) error {
 	r.mu.Lock()
 	runner, closed := r.runner, r.bg.Err() != nil
@@ -669,9 +669,6 @@ func (r *Runs) start(d store.Dispatch) error {
 		r.End(env.Run)
 		r.mu.Lock()
 		wasCancelled := r.cancelled[d.ID]
-		if _, limited := asRateLimit(runErr); !limited || !unreported {
-			delete(r.wrightWts, d.ID) // only a requeued dispatch runs in it again
-		}
 		delete(r.cancels, d.ID)
 		delete(r.cancelled, d.ID)
 		r.mu.Unlock()
@@ -687,11 +684,7 @@ func (r *Runs) start(d store.Dispatch) error {
 		}
 		if wasCancelled && unreported {
 			r.failDispatch(d.ID, cancelledByDeveloper)
-			r.sched.finished(d.ID, false)
-			return
-		}
-		if rl, ok := asRateLimit(runErr); ok && unreported {
-			r.sched.rateLimited(d.ID, rl)
+			r.sched.finished(d.ID)
 			return
 		}
 		if unreported {
@@ -704,7 +697,7 @@ func (r *Runs) start(d store.Dispatch) error {
 			}
 			r.failDispatch(d.ID, msg)
 		}
-		r.sched.finished(d.ID, runErr == nil)
+		r.sched.finished(d.ID)
 	}()
 	return nil
 }
@@ -815,18 +808,12 @@ func (r *Runs) traceFor(run string) Trace {
 // (reused is true, from is the branch).
 func (r *Runs) wrightWorktree(d store.Dispatch) (path, from string, reused bool, err error) {
 	r.mu.Lock()
-	sm, kept := r.sites, r.wrightWts[d.ID]
+	sm := r.sites
 	r.mu.Unlock()
 	if sm == nil {
 		return "", "", false, nil
 	}
-	if _, err := os.Stat(kept); kept != "" && err == nil {
-		return kept, "", false, nil // requeued after a rate limit: the same worktree, not another
-	}
 	if path, branch := r.sessionWorktree(d); path != "" {
-		r.mu.Lock()
-		r.wrightWts[d.ID] = path
-		r.mu.Unlock()
 		if err := r.st.SetDispatchBranch(d.ID, branch); err != nil { // accept_piece merges this branch
 			return "", "", false, fmt.Errorf("recording the Wright's branch: %w", err)
 		}
@@ -852,9 +839,6 @@ func (r *Runs) wrightWorktree(d store.Dispatch) (path, from string, reused bool,
 	if err != nil {
 		return "", "", false, fmt.Errorf("creating the Wright's worktree: %w", err)
 	}
-	r.mu.Lock()
-	r.wrightWts[d.ID] = wt.Path
-	r.mu.Unlock()
 	if err := r.st.SetDispatchBranch(d.ID, wt.Branch); err != nil { // accept_piece merges this branch
 		return "", "", false, fmt.Errorf("recording the Wright's branch: %w", err)
 	}

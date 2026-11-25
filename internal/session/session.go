@@ -1,8 +1,7 @@
 // Package session is the contract between the Works and the interactive
 // Sessions it hosts (ADR 0026): launch a stock vendor CLI in a pane, follow
-// its state through the vendor's hooks, and cancel it. It replaces the
-// headless contract of package runner, which stays until it is removed; the
-// never-list is that package's (ADR 0027), so it holds for both.
+// its state through the vendor's hooks, and cancel it. The never-list it
+// launches under is package runner's (ADR 0027).
 package session
 
 import (

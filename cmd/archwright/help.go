@@ -114,7 +114,7 @@ var commands = []command{
 	{"Works", "works stop", "", "stop the Works", ""},
 	{"Works", "works upgrade", "", "restart the Works on this binary",
 		"restart the Works on this binary (migrating the database, keeping the three\nmost recent pre-migration copies); refuses while runs are active unless you confirm"},
-	{"Works", "queue show", "", "show running and queued Wrights, the caps and any runner pause", ""},
+	{"Works", "queue show", "", "show running and queued Wrights and the caps", ""},
 	{"Works", "catalogue show", "", "show the loaded Guilds and Jigs and any that failed to load", ""},
 	{"Works", "catalogue reload", "", "re-read definitions from the config directory",
 		"re-read definitions from the config directory; an invalid one keeps its\nprevious good version and is reported"},

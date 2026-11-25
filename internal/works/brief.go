@@ -126,8 +126,8 @@ func bullets(w *strings.Builder, items []string) {
 
 // Render writes the brief the Wright receives: the Warden's fields, the
 // Guild's standards, the Guild's skills the Wright can invoke, and how to
-// return the result. round and reason are set for a rework, which is a fresh
-// run (ADR 0003) and so is told what was wrong.
+// return the result. round and reason are set for a rework, which is told
+// what was wrong (ADR 0029).
 func (b Brief) Render(guild, standards string, invocable []skills.Info, round int, reason string) string {
 	var w strings.Builder
 	w.WriteString("# Brief\n\n")

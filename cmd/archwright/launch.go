@@ -29,7 +29,8 @@ const hookWait = 10 * time.Second
 // spawns and owns it in the `archwright` window of its tmux session, and this
 // attaches the terminal to that window (ADR 0026). A Works that does not runs
 // the developer's own claude or codex here, as an interactive session of this
-// terminal, until the headless machinery is removed.
+// terminal: that is the Works running the scripted fakes, which have no Session
+// to host it in.
 func launchArchwright(dirs paths.Dirs, connect func() (*works.Client, error)) error {
 	cwd, err := os.Getwd()
 	if err != nil {
