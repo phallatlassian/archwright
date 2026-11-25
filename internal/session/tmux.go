@@ -630,6 +630,16 @@ func (s *tmuxSession) run() {
 	t := s.t
 	tick := time.NewTicker(t.dur(t.Poll, defaultPoll))
 	defer tick.Stop()
+	// A Cancel that lands while the loop is ending the Session itself is not seen
+	// by the select below, and Cancel found the Session not yet finished: the
+	// pane, which remain-on-exit keeps, is removed here.
+	defer func() {
+		select {
+		case <-s.cancelCh:
+			s.t.tmux("kill-pane", "-t", s.pane) // already gone is fine
+		default:
+		}
+	}()
 	startBy := s.started.Add(s.startWithin)
 	var endedAt time.Time
 	lost := 0

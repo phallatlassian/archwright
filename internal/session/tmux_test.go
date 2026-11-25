@@ -373,6 +373,32 @@ func TestTmuxLaunchOwnStartTimeoutWins(t *testing.T) {
 	}
 }
 
+// A Session whose process ends on its own just as it is cancelled (a trust
+// probe, cancelled once it has started) still has its pane, and so its window,
+// removed: Cancel landing while the loop is finishing the Session was lost.
+func TestTmuxCancelRemovesThePaneOfASessionThatEndsAsItIsCancelled(t *testing.T) {
+	r := newTmuxRig(t, "claude")
+	r.tm.CancelGrace = 200 * time.Millisecond
+	left := 0
+	for i := 0; i < 30; i++ {
+		req := r.request(t, scenTurn)
+		req.Job, req.Role = "probe-demo", "probe"
+		req.Env["ARCHWRIGHT_STANDIN"] = "hook SessionStart;sleep 0.05;exit 0"
+		s := r.launch(t, req)
+		time.Sleep(time.Duration(40+i%8*5) * time.Millisecond)
+		s.Cancel()
+		s.Result()
+		time.Sleep(150 * time.Millisecond)
+		if out, _ := r.tm.tmux("list-panes", "-a", "-F", "#{window_name}"); strings.Contains(out, "probe-demo") {
+			left++
+			r.tm.tmux("kill-window", "-t", "probe-demo")
+		}
+	}
+	if left != 0 {
+		t.Errorf("%d of 30 cancelled Sessions left their pane (and so the window) open", left)
+	}
+}
+
 func TestTmuxRefusesAContextThatIsAlreadyCancelled(t *testing.T) {
 	r := newTmuxRig(t, "claude")
 	ctx, cancel := context.WithCancel(context.Background())
