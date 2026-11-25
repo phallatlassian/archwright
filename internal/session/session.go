@@ -11,6 +11,7 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/phallatlassian/archwright/internal/runner"
 )
@@ -64,8 +65,12 @@ type LaunchRequest struct {
 	// vendor no longer has it) ends without starting, as any Session that
 	// fails to start does.
 	Resume string
-	Env    map[string]string // ARCHWRIGHT_RUN, ARCHWRIGHT_SPOOL, ... (ADR 0018)
-	Spawn  runner.Spawn      // what the caller asks of the permission posture; checked against the never-list
+	// StartTimeout, when set, replaces the adapter's for this Session: how long
+	// it may take to send its first SessionStart hook. A trust probe waits on a
+	// person answering a dialog, which takes longer than an agent starting.
+	StartTimeout time.Duration
+	Env          map[string]string // ARCHWRIGHT_RUN, ARCHWRIGHT_SPOOL, ... (ADR 0018)
+	Spawn        runner.Spawn      // what the caller asks of the permission posture; checked against the never-list
 }
 
 // EventKind says what an Event reports.

@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/phallatlassian/archwright/internal/envsnap"
 	"github.com/phallatlassian/archwright/internal/runner"
 )
 
@@ -88,7 +89,13 @@ type Tmux struct {
 	UserCodexHome string
 	// UserConf is the developer's own tmux config, sourced before the Works';
 	// "" means ~/.tmux.conf and "-" none.
-	UserConf     string
+	UserConf string
+	// BaseEnv, when set, is the developer's shell environment as the Works
+	// snapshotted it (envsnap): the tmux server is started with exactly that and
+	// every Session is spawned with the current snapshot. The Works' own
+	// environment goes no further. Unset, Sessions inherit the server's, which
+	// is the Works' own: only tests run that way.
+	BaseEnv      func() map[string]string
 	StartTimeout time.Duration
 	CancelGrace  time.Duration
 	Poll         time.Duration
@@ -101,6 +108,15 @@ type Tmux struct {
 	recv     *Receiver
 	versions map[string]string
 }
+
+// BaseEnvUser is a Runner that takes the developer's shell environment from a
+// source the Works keeps current, instead of inheriting the Works' own.
+type BaseEnvUser interface {
+	UseBaseEnv(func() map[string]string)
+}
+
+// UseBaseEnv implements BaseEnvUser. Call it before the first launch.
+func (t *Tmux) UseBaseEnv(f func() map[string]string) { t.BaseEnv = f }
 
 // Name implements Runner.
 func (t *Tmux) Name() string { return "claude" }
@@ -146,11 +162,19 @@ func (t *Tmux) socketArgs() []string {
 }
 
 // tmux runs one tmux command against the Works' server and returns its output.
-func (t *Tmux) tmux(args ...string) (string, error) { return t.tmuxIn("", args...) }
+func (t *Tmux) tmux(args ...string) (string, error) { return t.tmuxRun("", nil, args...) }
 
 // tmuxIn is tmux with stdin as the command's standard input.
 func (t *Tmux) tmuxIn(stdin string, args ...string) (string, error) {
+	return t.tmuxRun(stdin, nil, args...)
+}
+
+// tmuxRun is tmux with stdin as the command's standard input and, when env is
+// not nil, exactly that environment: a command that starts the server gives
+// the server its environment.
+func (t *Tmux) tmuxRun(stdin string, env []string, args ...string) (string, error) {
 	cmd := exec.Command(t.or(t.Tmux, "tmux"), append(t.socketArgs(), args...)...)
+	cmd.Env = env
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if stdin != "" {
@@ -208,6 +232,9 @@ func (t *Tmux) launch(ctx context.Context, req LaunchRequest, v vendor) (Session
 		return nil, err
 	}
 	env := map[string]string{}
+	if t.BaseEnv != nil {
+		env = envsnap.Filter(t.BaseEnv()) // the allow-list holds however the snapshot was made
+	}
 	for k, v := range req.Env {
 		env[k] = v
 	}
@@ -220,7 +247,7 @@ func (t *Tmux) launch(ctx context.Context, req LaunchRequest, v vendor) (Session
 	if err != nil {
 		return nil, err
 	}
-	s := &tmuxSession{t: t, v: v, core: newCore(token), pane: pane, runDir: runDir, hookFile: hookFile, cancelCh: make(chan struct{}), started: time.Now()}
+	s := &tmuxSession{t: t, v: v, startWithin: t.dur(req.StartTimeout, t.dur(t.StartTimeout, DefaultStartTimeout)), core: newCore(token), pane: pane, runDir: runDir, hookFile: hookFile, cancelCh: make(chan struct{}), started: time.Now()}
 	s.core.setPane(pane, window)
 	s.core.setPlace(req.Dir, v.name)
 	s.core.add(Event{Kind: KindPosture, Posture: &runner.Posture{
@@ -397,8 +424,14 @@ func (t *Tmux) ensureServer() error {
 	if err != nil {
 		return err
 	}
+	// The server is the parent of every pane, so it is started with the
+	// snapshot and not the Works' own environment.
+	var env []string
+	if t.BaseEnv != nil {
+		env = append([]string{}, envsnap.Environ(envsnap.Filter(t.BaseEnv()))...) // not nil: an empty snapshot is an empty environment
+	}
 	// -x/-y: a detached session defaults to 80x24, too small to split.
-	_, err = t.tmux("-f", conf, "new-session", "-d", "-s", t.session(), "-n", archwrightWindow, "-x", "200", "-y", "50")
+	_, err = t.tmuxRun("", env, "-f", conf, "new-session", "-d", "-s", t.session(), "-n", archwrightWindow, "-x", "200", "-y", "50")
 	return err
 }
 
@@ -467,6 +500,8 @@ type tmuxSession struct {
 	runDir   string
 	hookFile string
 	started  time.Time
+	// startWithin is how long the Session may take to send its first SessionStart hook.
+	startWithin time.Duration
 
 	nudgeMu sync.Mutex // one Nudge at a time: two pastes must not interleave
 	nudges  int        // Nudges that wrote a file, for its name
@@ -557,7 +592,7 @@ func (s *tmuxSession) run() {
 	t := s.t
 	tick := time.NewTicker(t.dur(t.Poll, defaultPoll))
 	defer tick.Stop()
-	startBy := s.started.Add(t.dur(t.StartTimeout, DefaultStartTimeout))
+	startBy := s.started.Add(s.startWithin)
 	var endedAt time.Time
 	lost := 0
 	for {
@@ -619,7 +654,7 @@ func (s *tmuxSession) failToStart() {
 			syscall.Kill(pid, syscall.SIGTERM)
 		}
 	}
-	s.core.finish(Result{Status: runner.StatusFailed, ExitStatus: -1, Error: fmt.Sprintf("failed to start: no SessionStart hook within %s; the pane %s is kept", s.t.dur(s.t.StartTimeout, DefaultStartTimeout), s.pane)})
+	s.core.finish(Result{Status: runner.StatusFailed, ExitStatus: -1, Error: fmt.Sprintf("failed to start: no SessionStart hook within %s; the pane %s is kept", s.startWithin, s.pane)})
 }
 
 // cancel interrupts the Session, then kills its pane after the grace. At a

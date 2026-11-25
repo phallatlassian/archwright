@@ -13,7 +13,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/phallatlassian/archwright/internal/envsnap"
 	"github.com/phallatlassian/archwright/internal/paths"
+	"github.com/phallatlassian/archwright/internal/spool"
 )
 
 // Spawner starts a detached Works. The default re-executes this binary.
@@ -127,6 +129,9 @@ func (c *Client) do(hc *http.Client, method, path string, in, out any) error {
 		return err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.Info.Token)
+	if os.Getenv(spool.EnvRun) == "" { // a Session's own calls carry the Session's environment, not the developer's shell's
+		req.Header.Set(EnvHeader, envsnap.Encode(envsnap.Capture(os.Environ())))
+	}
 	resp, err := hc.Do(req)
 	if err != nil {
 		return err

@@ -18,6 +18,7 @@ import (
 
 	"github.com/phallatlassian/archwright/internal/config"
 	"github.com/phallatlassian/archwright/internal/defs"
+	"github.com/phallatlassian/archwright/internal/envsnap"
 	"github.com/phallatlassian/archwright/internal/forge"
 	"github.com/phallatlassian/archwright/internal/launch"
 	"github.com/phallatlassian/archwright/internal/paths"
@@ -125,7 +126,13 @@ func ServeWith(ctx context.Context, d paths.Dirs, ready chan<- struct{}, opts Op
 	wrights := WrightRunnerFrom(os.Getenv, guilds, st)
 	runs.Configure(guilds, wrights)
 	warden, reviewer := WardenRunnersFrom(os.Getenv, guilds, st, wrights)
+	// The shell environment Sessions are spawned with: what the CLI that
+	// started this Works had, allow-listed, and then what each CLI call reports.
+	env := envsnap.NewHolder(os.Environ())
+	runs.UseEnv(env)
 	if sr, ok := wrights.(*SessionRunner); ok { // Sessions in tmux: the Works owns the Archwright too
+		sr.UseBaseEnv(env.Get)
+		runs.UseTrustProbe(&TrustProber{St: st, Sites: sm, Runners: sr.Runners, Installed: cliInstalled(os.Getenv)})
 		runs.UseSessions(sr, 0)
 		runs.UseArchwright(&ArchwrightHost{
 			Runners:   sr.Runners,

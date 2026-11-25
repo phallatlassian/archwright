@@ -23,14 +23,15 @@ type doctorEnv struct {
 	bin      string
 	cfg, st  string
 	modeFile string
+	home     string
 }
 
 func newDoctorEnv(t *testing.T, mode string, lavish bool) *doctorEnv {
 	t.Helper()
 	root := t.TempDir()
-	e := &doctorEnv{t: t, bin: filepath.Join(root, "bin"), cfg: filepath.Join(root, "cfg"), st: filepath.Join(root, "state"), modeFile: filepath.Join(root, "mode")}
+	e := &doctorEnv{t: t, home: root, bin: filepath.Join(root, "bin"), cfg: filepath.Join(root, "cfg"), st: filepath.Join(root, "state"), modeFile: filepath.Join(root, "mode")}
 	os.MkdirAll(e.bin, 0o755)
-	for name, src := range map[string]string{"claude": "stub-claude.sh", "codex": "stub-codex.sh"} {
+	for name, src := range map[string]string{"claude": "stub-claude.sh", "codex": "stub-codex.sh", "tmux": "stub-tmux.sh"} {
 		b, err := os.ReadFile(filepath.Join("..", "..", "internal", "doctor", "testdata", src))
 		if err != nil {
 			t.Fatal(err)
@@ -99,6 +100,44 @@ func TestDoctorPassesAndWarnsOnlyForLavish(t *testing.T) {
 	rep, _, _ = newDoctorEnv(t, "ok", true).report("doctor")
 	if c := status(rep, "lavish-axi"); c.Status != doctor.Pass {
 		t.Errorf("lavish installed: %+v", c)
+	}
+}
+
+// Doctor's session checks on the production binary: tmux, the real hook
+// command delivering to a receiver, and the push and gh policy read from files.
+func TestDoctorChecksTmuxHooksAndPromptPolicy(t *testing.T) {
+	e := newDoctorEnv(t, "ok", true)
+	rep, _, err := e.report("doctor")
+	if err != nil || !rep.OK {
+		t.Fatalf("%v: %+v", err, rep.Failures())
+	}
+	for _, name := range []string{"tmux", "tmux-server", "hooks"} {
+		if c := status(rep, name); c.Status != doctor.Pass {
+			t.Errorf("%s: %+v", name, c)
+		}
+	}
+	// What the push and gh checks say depends on the machine's own managed
+	// policy, which a test does not control: they are there, and read the user's file.
+	for _, name := range []string{"prompt:git-push", "prompt:gh"} {
+		if c := status(rep, name); c.Status == "absent" {
+			t.Errorf("%s: %+v", name, c)
+		}
+	}
+	// A tmux that is too old fails, with the way to upgrade it.
+	os.WriteFile(filepath.Join(e.bin, "tmux"), []byte("#!/bin/sh\ncase \"$1\" in -V) echo tmux 2.9a;; esac\n"), 0o755)
+	rep, _, err = e.report("doctor")
+	if err == nil || status(rep, "tmux").Status != doctor.Fail || !strings.Contains(status(rep, "tmux").Fix, "upgrade") {
+		t.Fatalf("an old tmux passed doctor: %+v", status(rep, "tmux"))
+	}
+	// A push the developer's own settings allow without a prompt is reported, with the file to change.
+	if err := os.MkdirAll(filepath.Join(e.home, ".claude"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	settings := filepath.Join(e.home, ".claude", "settings.json")
+	os.WriteFile(settings, []byte(`{"permissions":{"allow":["Bash(git push:*)"]}}`), 0o644)
+	rep, _, _ = e.report("doctor")
+	if c := status(rep, "prompt:git-push"); c.Status != doctor.Warn || !strings.Contains(c.Detail, settings) {
+		t.Errorf("%+v", c)
 	}
 }
 

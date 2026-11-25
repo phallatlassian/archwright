@@ -69,8 +69,13 @@ type Deps struct {
 	// WorksRunning reports a live Works without starting one.
 	WorksRunning func() (pid, port int, ok bool)
 	Exe          string // this binary, to compare with the archwright on PATH
-	UID          int
-	TempDir      string
+	// Hooks delivers one hook as a Session's CLI does, to show hook delivery works.
+	Hooks HookProber
+	// PolicyFiles are the files a runner reads its permissions from (the
+	// developer's own and managed ones), for the prompt checks.
+	PolicyFiles func(runner string) []string
+	UID         int
+	TempDir     string
 }
 
 // DefaultDeps is doctor on this machine, probing the real runners.
@@ -88,6 +93,9 @@ func DefaultDeps(dirs paths.Dirs) Deps {
 		},
 	}
 	d.Probe = RunnerProber{UID: d.UID, TempDir: d.TempDir}
+	d.Hooks = HookDelivery{Exe: exe, TempDir: d.TempDir}
+	home, _ := os.UserHomeDir()
+	d.PolicyFiles = DefaultPolicyFiles(home, os.Getenv)
 	return d
 }
 
@@ -119,8 +127,12 @@ func Run(ctx context.Context, d Deps) Report {
 	for _, spec := range runnerSpecs {
 		checkRunner(ctx, r, d, spec, chosen)
 	}
+	checkTmux(ctx, r, d)
+	checkHooks(ctx, r, d)
 	checkSites(ctx, r, d, snap)
+	checkTrust(r, snap)
 	checkForge(ctx, r, d, snap)
+	checkPrompts(r, d)
 
 	rep := Report{Checks: r.checks}
 	rep.OK = len(rep.Failures()) == 0

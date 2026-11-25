@@ -165,6 +165,12 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 			return err
 		}
 		return call("DELETE", "/sites/"+url.PathEscape(name), nil)
+	case "site probe":
+		name, err := arg(args, 2)
+		if err != nil {
+			return err
+		}
+		return call("POST", "/sites/"+url.PathEscape(name)+"/probe", nil)
 	case "site list":
 		return call("GET", "/sites", nil)
 	case "site register":

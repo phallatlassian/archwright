@@ -51,6 +51,17 @@ type SessionRunner struct {
 	detached  atomic.Bool              // the Works has stopped: Sessions are left alone and nothing more is recorded
 }
 
+// UseBaseEnv gives every Runner that takes one the developer's shell
+// environment as the Works keeps it (envsnap), so a Session is spawned with
+// the allow-listed snapshot and never the Works' own environment.
+func (a *SessionRunner) UseBaseEnv(f func() map[string]string) {
+	for _, rn := range a.Runners {
+		if u, ok := rn.(hosted.BaseEnvUser); ok {
+			u.UseBaseEnv(f)
+		}
+	}
+}
+
 // DefaultNudgeWait is how long a rework waits for a Wright Session that is
 // working, or at a prompt, to be idle. A Session that is not idle by then is
 // left alone and the rework fails: it is never typed at, and a second Session

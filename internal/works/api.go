@@ -554,7 +554,23 @@ func newHandler(st *store.Store, runs *Runs, sm *sites.Manager, token string, pi
 			fail(w, err)
 			return
 		}
+		runs.ProbeSite(site.Name) // trust is captured once, here, so no later Session stalls at a dialog
 		reply(w, 201, site)
+	})
+	// A Site's trust probe runs again on request: after the developer answers a
+	// dialog it left open, or to re-check a Site (`archwright doctor` points here).
+	mux.HandleFunc("POST /sites/{name}/probe", func(w http.ResponseWriter, r *http.Request) {
+		site, err := st.GetSite(r.PathValue("name"))
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		started, hosted := runs.ProbeSite(site.Name)
+		if !hosted {
+			reply(w, http.StatusNotImplemented, map[string]string{"error": MsgProbeNotHosted})
+			return
+		}
+		reply(w, http.StatusAccepted, map[string]bool{"started": started})
 	})
 	mux.HandleFunc("GET /sites", func(w http.ResponseWriter, r *http.Request) {
 		list, err := st.ListSites()
@@ -729,7 +745,7 @@ func newHandler(st *store.Store, runs *Runs, sm *sites.Manager, token string, pi
 		reply(w, 200, map[string]bool{"ok": true})
 	})
 
-	return withUI(guard(token, mux))
+	return withUI(guard(token, withEnv(runs, mux)))
 }
 
 // maxBody caps a request body; commands are small.

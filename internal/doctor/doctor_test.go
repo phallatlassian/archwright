@@ -31,12 +31,15 @@ func newDeps(t *testing.T) Deps {
 	if err := dirs.Ensure(); err != nil {
 		t.Fatal(err)
 	}
-	found := map[string]string{"archwright": "/usr/bin/archwright", "claude": "/bin/claude", "codex": "/bin/codex", "lavish-axi": "/bin/lavish-axi", "gh": "/bin/gh"}
+	found := map[string]string{"archwright": "/usr/bin/archwright", "claude": "/bin/claude", "codex": "/bin/codex", "lavish-axi": "/bin/lavish-axi", "gh": "/bin/gh", "tmux": "/bin/tmux"}
 	return Deps{
 		Dirs:     dirs,
 		Getenv:   func(string) string { return "" },
 		LookPath: func(n string) (string, error) { return lookup(found, n) },
 		Output: func(_ context.Context, name string, args ...string) (string, error) {
+			if filepath.Base(name) == "tmux" {
+				return "tmux 3.8", nil
+			}
 			if len(args) > 0 && args[0] == "--version" {
 				return "1.2.3 (" + filepath.Base(name) + ")", nil
 			}
@@ -46,6 +49,8 @@ func newDeps(t *testing.T) Deps {
 			return "--no-session-persistence --ephemeral", nil
 		},
 		Probe:        fakeProber{"claude": healthy, "codex": healthy},
+		Hooks:        fakeHooks{Socket: true, Spool: true},
+		PolicyFiles:  func(string) []string { return nil },
 		WorksRunning: func() (int, int, bool) { return 0, 0, false },
 		UID:          501, TempDir: "/tmp",
 	}

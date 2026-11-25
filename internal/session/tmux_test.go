@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/phallatlassian/archwright/internal/envsnap"
 )
 
 // tmuxRig is a real tmux server on a throwaway socket with the scripted
@@ -358,6 +360,19 @@ func TestTmuxFailedToStartKeepsTheDeadPane(t *testing.T) {
 	})
 }
 
+// A launch can allow itself longer to start than the adapter's default (a trust probe waits on a person).
+func TestTmuxLaunchOwnStartTimeoutWins(t *testing.T) {
+	r := newTmuxRig(t, "claude")
+	r.tm.StartTimeout = 5 * time.Second
+	req := r.request(t, scenNoStart)
+	req.StartTimeout = 300 * time.Millisecond
+	begun := time.Now()
+	res := r.launch(t, req).Result()
+	if res.Status != "failed" || !strings.Contains(res.Error, "no SessionStart hook within 300ms") || time.Since(begun) > 3*time.Second {
+		t.Fatalf("result = %+v after %s", res, time.Since(begun))
+	}
+}
+
 func TestTmuxRefusesAContextThatIsAlreadyCancelled(t *testing.T) {
 	r := newTmuxRig(t, "claude")
 	ctx, cancel := context.WithCancel(context.Background())
@@ -374,5 +389,43 @@ func TestTmuxDefaultsToItsOwnSocketName(t *testing.T) {
 	}
 	if tm.session() != "factory" {
 		t.Fatalf("session = %q", tm.session())
+	}
+}
+
+// A Session takes the developer's shell environment as the Works snapshotted
+// it, cut to the allow-list, and nothing else of the Works' own environment:
+// not through the pane's variables, and not through the tmux server it starts.
+func TestTmuxSpawnsSessionsWithTheSnapshotAndNotTheWorksOwnEnvironment(t *testing.T) {
+	t.Setenv("WORKS_ONLY_SECRET", "leaked")
+	r := newTmuxRig(t, "claude")
+	r.tm.BaseEnv = func() map[string]string {
+		snap := envsnap.Capture(os.Environ())
+		snap["EDITOR"] = "snapshot-editor"
+		snap["ARCHWRIGHT_RUN"] = "not-the-runs-id" // a snapshot never names a run
+		return snap
+	}
+	req := r.request(t, scenTurn)
+	req.Env["ARCHWRIGHT_FROM_REQUEST"] = "kept" // what the caller adds is the caller's
+	s := r.launch(t, req)
+	waitFor(t, "a turn", func() bool { return s.Info().Turns == 1 })
+	env := r.saw(t, "env")
+	for _, want := range []string{"EDITOR=snapshot-editor\n", "ARCHWRIGHT_FROM_REQUEST=kept\n", "ARCHWRIGHT_RUN=" + req.Run + "\n"} {
+		if !strings.Contains(env, want) {
+			t.Errorf("the Session's environment lacks %q", want)
+		}
+	}
+	for _, leak := range []string{"WORKS_ONLY_SECRET", "not-the-runs-id"} {
+		if strings.Contains(env, leak) {
+			t.Errorf("the Session's environment holds %q", leak)
+		}
+	}
+	// A server already running keeps what it started with; a later Session still gets the current snapshot per spawn.
+	r.tm.BaseEnv = func() map[string]string {
+		return map[string]string{"PATH": os.Getenv("PATH"), "EDITOR": "newer-editor"}
+	}
+	s2 := r.launch(t, r.request(t, scenTurn))
+	waitFor(t, "a turn", func() bool { return s2.Info().Turns == 1 })
+	if env := r.saw(t, "env"); !strings.Contains(env, "EDITOR=newer-editor\n") {
+		t.Errorf("the second Session did not take the current snapshot:\n%s", env)
 	}
 }

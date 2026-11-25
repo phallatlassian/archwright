@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"time"
 
@@ -128,4 +129,20 @@ func sessionRunnerFrom(getenv func(string) string, guilds GuildSource, st *store
 // sessionRecord is what the run's record keeps of its Session.
 func sessionRecord(info hosted.Info, state hosted.State) store.SessionRecord {
 	return store.SessionRecord{PaneID: info.Pane, SessionID: info.SessionID, TranscriptPath: info.TranscriptPath, State: string(state), Dir: info.Dir, Runner: info.Runner}
+}
+
+// cliInstalled says whether a runner's CLI is on this machine: the binary the
+// environment names for it, or `claude` or `codex` on PATH.
+func cliInstalled(getenv func(string) string) func(runner string) bool {
+	return func(name string) bool {
+		bin, env := name, EnvClaudeBinary
+		if name == "codex" {
+			env = EnvCodexBinary
+		}
+		if v := getenv(env); v != "" {
+			bin = v
+		}
+		_, err := exec.LookPath(bin)
+		return err == nil
+	}
 }

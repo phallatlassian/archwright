@@ -64,6 +64,9 @@ func (t *Tmux) Codex() Runner { return codexRunner{t} }
 
 type codexRunner struct{ t *Tmux }
 
+// UseBaseEnv implements BaseEnvUser: Codex Sessions share the server and its environment.
+func (c codexRunner) UseBaseEnv(f func() map[string]string) { c.t.UseBaseEnv(f) }
+
 // Name implements Runner.
 func (c codexRunner) Name() string { return "codex" }
 

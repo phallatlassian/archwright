@@ -64,6 +64,8 @@ var commands = []command{
 		"approve a proposed change (confirms at a terminal and asks for your approval credential)"},
 	{"Sites", "site gate-reject", "ID", "reject a proposed gate change", ""},
 	{"Sites", "site list", "", "list Sites", ""},
+	{"Sites", "site probe", "NAME", "run a Site's trust probe again",
+		"start a Session of each installed runner in the Site's worktree folder,\nto capture folder trust (and Codex's hook trust) once; registering a Site does\nthis. A dialog it waits at raises a Needs-you item: answer it in the probe's\nwindow, then run this again to re-check"},
 	{"Sites", "site remove", "NAME", "unregister a Site and delete its clone",
 		"unregister a Site and delete its clone (Job history is kept)"},
 	{"Sites", "site resolve", "DIR", "show the Site whose remote is DIR's git origin",

@@ -870,3 +870,27 @@ func TestConcurrentRegistrationsOfOneRepoLeaveOneWorkingSite(t *testing.T) {
 		t.Fatalf("the registered Site has no working clone: %+v %v", site, err)
 	}
 }
+
+func TestProbeDirIsTheFolderTheJobWorktreesSitIn(t *testing.T) {
+	e := setup(t)
+	dir, err := e.m.ProbeDir("demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(e.root, "demo"); dir != want {
+		t.Errorf("probe dir %s, want %s", dir, want)
+	}
+	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
+		t.Fatalf("probe dir not made: %v", err)
+	}
+	w, err := e.m.CreateWorktree(e.job(t).ID, store.KindIntegration, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := filepath.Dir(w.Path); got != dir {
+		t.Errorf("a Job worktree sits in %s, not the probe dir %s", got, dir)
+	}
+	if _, err := e.m.ProbeDir("nope"); err == nil {
+		t.Error("a probe dir of a Site that is not registered")
+	}
+}

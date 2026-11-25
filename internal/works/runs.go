@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/phallatlassian/archwright/internal/defs"
+	"github.com/phallatlassian/archwright/internal/envsnap"
 	"github.com/phallatlassian/archwright/internal/forge"
 	"github.com/phallatlassian/archwright/internal/launch"
 	"github.com/phallatlassian/archwright/internal/sites"
@@ -76,6 +77,11 @@ type Runs struct {
 	archHost  *ArchwrightHost
 	archCurMu sync.Mutex // guards arch alone, so reading it never waits on a launch
 	arch      *archSession
+
+	// probes runs the trust probe of each registered Site, and env is the
+	// developer's shell environment as the CLI last reported it (trustprobe.go, envsnap).
+	probes *TrustProber
+	env    *envsnap.Holder
 
 	// sessions are the open Sessions kept until their Job leaves active work (ADR 0029).
 	sessions         JobSessions
@@ -262,8 +268,12 @@ func (r *Runs) End(id string) error {
 func (r *Runs) Close() {
 	r.mu.Lock()
 	r.cancelBg(ErrWorksStopping)
+	probes := r.probes
 	sessions := r.sessions
 	r.mu.Unlock()
+	if probes != nil {
+		probes.Close() // its Sessions are cancelled and its worktrees removed
+	}
 	r.closeArchwright()
 	r.sched.stop()
 	r.wg.Wait() // dispatched Wrights end their own runs
