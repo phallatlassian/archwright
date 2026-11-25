@@ -50,7 +50,7 @@ func newTmuxRig(t *testing.T, vendor string) *tmuxRig {
 	r := &tmuxRig{vendor: vendor, bin: bin, sock: sock, dir: dir, out: filepath.Join(dir, "out")}
 	r.tm = &Tmux{
 		Tmux: bin, Socket: sock, HookCommand: []string{os.Args[0]},
-		Dir: filepath.Join(dir, "state"), SocketDir: filepath.Join(dir, "h"), UserConf: "-", ThemePlugin: "-",
+		Dir: filepath.Join(dir, "state"), SocketDir: filepath.Join(dir, "h"), UserConf: "-",
 		StartTimeout: 3 * time.Second, CancelGrace: time.Second, Poll: 30 * time.Millisecond,
 		NudgeTimeout: time.Second, NudgePasteDelay: 20 * time.Millisecond,
 		UserCodexHome: filepath.Join(dir, "dev-codex"),

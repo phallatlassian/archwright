@@ -1,8 +1,6 @@
 package session
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -124,13 +122,12 @@ func TestTmuxBorderLabelFollowsThePaneOptionsAndStateTransitions(t *testing.T) {
 	waitFor(t, "the permission mark", func() bool { return strings.Contains(label(), "masonry · wright · "+req.Run+" · ⚠ permission") })
 }
 
-func TestTmuxFactoryConfigWorksWithoutTheThemePlugin(t *testing.T) {
+func TestTmuxFactoryConfigSetsTheFactoryLook(t *testing.T) {
 	r := newTmuxRig(t, "claude")
-	r.tm.ThemePlugin = "-"
 	req := r.request(t, scenTurn)
 	req.Guild = "masonry"
 	r.launch(t, req)
-	for opt, want := range map[string]string{"prefix": "C-a", "pane-border-status": "top", "status-right": `''`, "window-status-format": `"[#I] #W"`} {
+	for opt, want := range map[string]string{"pane-border-status": "top", "status-right": `''`, "window-status-format": `"[#I] #W"`} {
 		got, err := r.tm.tmux("show-options", "-gw", opt)
 		if err != nil {
 			got, err = r.tm.tmux("show-options", "-g", opt)
@@ -141,25 +138,6 @@ func TestTmuxFactoryConfigWorksWithoutTheThemePlugin(t *testing.T) {
 	}
 	if got, _ := r.tm.tmux("show-options", "-gw", "pane-border-lines"); !strings.HasSuffix(got, " double") {
 		t.Errorf("pane-border-lines = %q", got)
-	}
-}
-
-func TestTmuxFactoryConfigRunsTheThemePluginDirectlyAndRewritesItsTabs(t *testing.T) {
-	r := newTmuxRig(t, "claude")
-	plugin := filepath.Join(r.dir, "ukiyo.tmux")
-	script := "#!/bin/sh\n" + shellJoin([]string{r.bin}) + " -S " + shellJoin([]string{r.sock}) + " set-option -gw window-status-format '#[fg=red]#I #W'\n"
-	if err := os.WriteFile(plugin, []byte(script), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	r.tm.ThemePlugin = plugin
-	req := r.request(t, scenTurn)
-	req.Guild = "masonry"
-	r.launch(t, req)
-	if got, _ := r.tm.tmux("show-options", "-gwv", "window-status-format"); got != "#[fg=red][#I] #W" {
-		t.Errorf("window-status-format = %q, want the theme's colours with [#I] #W", got)
-	}
-	if got, _ := r.tm.tmux("show-options", "-gv", "@ukiyo-theme"); got != "nord/default" {
-		t.Errorf("@ukiyo-theme = %q", got)
 	}
 }
 
