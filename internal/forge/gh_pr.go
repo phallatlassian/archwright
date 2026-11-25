@@ -7,10 +7,7 @@ import (
 	"errors"
 	"os/exec"
 	"regexp"
-	"strconv"
 	"strings"
-
-	"github.com/phallatlassian/archwright/internal/remote"
 )
 
 // run executes gh with args and optional stdin, bounded by the adapter's
@@ -43,15 +40,15 @@ func (g GH) run(ctx context.Context, stdin string, args ...string) (string, erro
 	return stdout.String(), nil
 }
 
-// prFields is what ReadPR and the existing-PR lookup ask gh for.
-const prFields = "url,number,title,body,state,isDraft,headRefName,baseRefName,mergeable,statusCheckRollup"
+// prFields is what ReadPR asks gh for.
+const prFields = "url,number,state,isDraft,headRefName,baseRefName,mergeable,statusCheckRollup"
 
 type ghPR struct {
-	URL, Title, Body, State, Mergeable string
-	Number                             int
-	IsDraft                            bool
-	HeadRefName, BaseRefName           string
-	StatusCheckRollup                  []struct {
+	URL, State, Mergeable    string
+	Number                   int
+	IsDraft                  bool
+	HeadRefName, BaseRefName string
+	StatusCheckRollup        []struct {
 		Typename   string `json:"__typename"`
 		Name       string // CheckRun
 		Status     string
@@ -64,7 +61,7 @@ type ghPR struct {
 }
 
 func (p ghPR) pr() PullRequest {
-	out := PullRequest{URL: p.URL, Number: p.Number, Title: p.Title, Body: p.Body, State: p.State, Draft: p.IsDraft,
+	out := PullRequest{URL: p.URL, Number: p.Number, State: p.State, Draft: p.IsDraft,
 		Head: p.HeadRefName, Base: p.BaseRefName, Mergeable: p.Mergeable}
 	for _, c := range p.StatusCheckRollup {
 		if c.Typename == "StatusContext" || (c.Name == "" && c.Context != "") {
@@ -83,74 +80,9 @@ func (p ghPR) pr() PullRequest {
 	return out
 }
 
-// repoOf names the repository of a Site's remote URL as gh's HOST/OWNER/REPO.
-func repoOf(siteURL string) (string, error) {
-	key, err := remote.Normalize(siteURL)
-	if err != nil {
-		return "", &Error{Kind: KindOther, Detail: "the Site's remote URL names no repository: " + err.Error()}
-	}
-	return key, nil
-}
-
-// OpenPR looks for an open pull request from req.Head into req.Base and
-// returns it; only if there is none does it run `gh pr create`.
-func (g GH) OpenPR(ctx context.Context, req OpenPRRequest) (PullRequest, error) {
-	repo, err := repoOf(req.SiteURL)
-	if err != nil {
-		return PullRequest{}, err
-	}
-	switch {
-	case req.Head == "" || req.Base == "" || req.Head == req.Base:
-		return PullRequest{}, &Error{Kind: KindOther, Detail: "a pull request needs distinct head and base branches"}
-	case strings.HasPrefix(req.Head, "-") || strings.HasPrefix(req.Base, "-"):
-		return PullRequest{}, &Error{Kind: KindOther, Detail: "head and base must be plain branch names"}
-	}
-	if pr, ok, err := g.findOpenPR(ctx, repo, req); err != nil || ok {
-		return pr, err
-	}
-	out, err := g.run(ctx, req.Body, "pr", "create", "-R", repo, "--head", req.Head, "--base", req.Base, "--title="+req.Title, "--body-file", "-")
-	if err != nil {
-		// A concurrent open may have won the race: if the PR now exists, that is the answer.
-		if pr, ok, ferr := g.findOpenPR(ctx, repo, req); ferr == nil && ok {
-			return pr, nil
-		}
-		return PullRequest{}, err
-	}
-	u := prURLIn(out)
-	if u == "" {
-		return PullRequest{}, &Error{Kind: KindOther, Detail: "gh pr create printed no pull request URL"}
-	}
-	pr := PullRequest{URL: u, Title: req.Title, Body: req.Body, State: "OPEN", Head: req.Head, Base: req.Base}
-	pr.Number = prNumber(u)
-	return pr, nil
-}
-
-// findOpenPR looks for the open pull request from req.Head into req.Base.
-func (g GH) findOpenPR(ctx context.Context, repo string, req OpenPRRequest) (PullRequest, bool, error) {
-	out, err := g.run(ctx, "", "pr", "list", "-R", repo, "--head", req.Head, "--base", req.Base, "--state", "open", "--limit", "1", "--json", prFields)
-	if err != nil {
-		return PullRequest{}, false, err
-	}
-	var found []ghPR
-	if err := json.Unmarshal([]byte(out), &found); err != nil {
-		return PullRequest{}, false, &Error{Kind: KindOther, Detail: "gh returned unreadable output: " + err.Error()}
-	}
-	if len(found) == 0 {
-		return PullRequest{}, false, nil
-	}
-	pr := found[0].pr()
-	pr.Existing = true
-	return pr, true, nil
-}
-
 var prURLRe = regexp.MustCompile(`https?://\S+/pull/\d+`)
 
 func prURLIn(s string) string { return prURLRe.FindString(s) }
-
-func prNumber(u string) int {
-	n, _ := strconv.Atoi(u[strings.LastIndex(u, "/")+1:])
-	return n
-}
 
 // ReadPR runs `gh pr view URL --json ...`.
 func (g GH) ReadPR(ctx context.Context, prURL string) (PullRequest, error) {
@@ -170,13 +102,4 @@ func (g GH) ReadPR(ctx context.Context, prURL string) (PullRequest, error) {
 		pr.URL = prURL
 	}
 	return pr, nil
-}
-
-// CommentPR runs `gh pr comment URL --body-file -`, the body on stdin.
-func (g GH) CommentPR(ctx context.Context, prURL, body string) error {
-	if prURLIn(prURL) != prURL {
-		return &Error{Kind: KindOther, Detail: "not a pull request URL"}
-	}
-	_, err := g.run(ctx, body, "pr", "comment", prURL, "--body-file", "-")
-	return err
 }

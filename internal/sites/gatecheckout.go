@@ -92,18 +92,16 @@ func (m *Manager) IntegrationTip(jobID string) (branch, sha string, err error) {
 	return branch, sha, nil
 }
 
-// PushTarget is what the Forge push of a Job's integration branch is built
-// from: all of it read from the Job and its Site, none of it from an agent.
+// PushTarget names a Job's integration branch and the Site's base branch, both
+// read from the Job and its Site, none of it from an agent.
 type PushTarget struct {
-	SiteURL       string
-	ClonePath     string
 	Branch        string
 	DefaultBranch string
 }
 
-// IntegrationPushTarget resolves where a Job's integration branch is pushed
-// from: the Works' own clone of the Job's Site. It is the Job's recorded
-// integration branch or an error, so no other branch can be named.
+// IntegrationPushTarget resolves a Job's integration branch and the Site's
+// base branch it is opened against. It is the Job's recorded integration
+// branch or an error, so no other branch can be named.
 func (m *Manager) IntegrationPushTarget(jobID string) (PushTarget, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -119,5 +117,23 @@ func (m *Manager) IntegrationPushTarget(jobID string) (PushTarget, error) {
 	if len(integration) == 0 {
 		return PushTarget{}, fmt.Errorf("job %s has no integration branch to push: %w", jobID, store.ErrConflict)
 	}
-	return PushTarget{SiteURL: site.URL, ClonePath: site.ClonePath, Branch: integration[0].Branch, DefaultBranch: site.BaseBranch}, nil
+	return PushTarget{Branch: integration[0].Branch, DefaultBranch: site.BaseBranch}, nil
+}
+
+// IntegrationWorktree is where a Job's integration branch is checked out.
+func (m *Manager) IntegrationWorktree(jobID string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, _, err := m.jobSite(jobID); err != nil {
+		return "", err
+	}
+	wts, err := m.st.Worktrees(jobID)
+	if err != nil {
+		return "", err
+	}
+	integration := activeOf(wts, store.KindIntegration)
+	if len(integration) == 0 {
+		return "", fmt.Errorf("job %s has no integration worktree: %w", jobID, store.ErrConflict)
+	}
+	return integration[0].Path, nil
 }

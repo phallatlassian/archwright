@@ -1,6 +1,7 @@
-// Package forge is the seam to the service that hosts a Site's repository,
-// issues and pull requests (ADR 0022). The Works owns the interface and performs
-// every Forge action itself; agents never reach the Forge directly.
+// Package forge is the seam to the service that hosts a Site's repository and
+// pull requests. Agents reach the Forge themselves, as the developer (ADR
+// 0028); the Works only reads the state of a Job's recorded PR, and checks the
+// PR it is told about against the Site's remote.
 package forge
 
 import (
@@ -8,40 +9,11 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/phallatlassian/archwright/internal/remote"
 )
-
-// Issue is a Forge issue as read. Everything in it is third-party text.
-type Issue struct {
-	URL    string   `json:"url"`
-	Title  string   `json:"title"`
-	Body   string   `json:"body"`
-	State  string   `json:"state,omitempty"`
-	Author string   `json:"author,omitempty"`
-	Labels []string `json:"labels,omitempty"`
-}
-
-// PushRequest names one push of a Job's integration branch. Every field is
-// resolved by the Works from the Job and its Site, never taken from an agent.
-type PushRequest struct {
-	SiteURL       string // the Site's remote URL: picks the adapter
-	ClonePath     string // the Works' own clone to push from
-	Branch        string // the Job's integration branch, a local branch of the clone
-	DefaultBranch string // the Site's default branch, which is never pushed
-}
-
-// OpenPRRequest names one pull request to open. Head and Base are resolved by
-// the Works (the Job's integration branch and the Site's base branch); only
-// Title and Body come from the Warden.
-type OpenPRRequest struct {
-	SiteURL string // the Site's remote URL: picks the adapter and names the repository
-	Head    string
-	Base    string
-	Title   string
-	Body    string
-}
 
 // Check is one CI check on a pull request.
 type Check struct {
@@ -51,37 +23,23 @@ type Check struct {
 	URL        string `json:"url,omitempty"`
 }
 
-// PullRequest is a Forge pull request as opened or read. Title and Body are
-// third-party text.
+// PullRequest is a Forge pull request as read. It carries no title or body:
+// the Works has no use for third-party text.
 type PullRequest struct {
 	URL       string  `json:"url"`
 	Number    int     `json:"number,omitempty"`
-	Title     string  `json:"title,omitempty"`
-	Body      string  `json:"body,omitempty"`
 	State     string  `json:"state,omitempty"`
 	Draft     bool    `json:"draft,omitempty"`
 	Head      string  `json:"head,omitempty"`
 	Base      string  `json:"base,omitempty"`
 	Mergeable string  `json:"mergeable,omitempty"`
 	Checks    []Check `json:"checks,omitempty"`
-	Existing  bool    `json:"existing,omitempty"` // set by OpenPR when the branch already had an open PR
 }
 
 // Forge is what the Works asks of a Forge. A second Forge is a second adapter.
 type Forge interface {
-	// ReadIssue reads the issue at the given issue URL.
-	ReadIssue(ctx context.Context, issueURL string) (Issue, error)
-	// PushBranch pushes req.Branch to the Site's remote under the same name. It
-	// is never forced: a push that is not a fast-forward fails.
-	PushBranch(ctx context.Context, req PushRequest) error
-	// OpenPR opens a pull request from req.Head into req.Base, or, if that head
-	// already has an open pull request into that base, returns it with
-	// Existing set. It never opens a second one.
-	OpenPR(ctx context.Context, req OpenPRRequest) (PullRequest, error)
 	// ReadPR reads the pull request at prURL, including its CI checks.
 	ReadPR(ctx context.Context, prURL string) (PullRequest, error)
-	// CommentPR adds a comment to the pull request at prURL.
-	CommentPR(ctx context.Context, prURL, body string) error
 }
 
 // ErrUnsupported is what a Forge with no adapter answers to every call.
@@ -95,7 +53,7 @@ const (
 )
 
 // Error is a failed Forge call, classified so the Works knows whether it needs
-// the developer (auth, network) or is only the agent's to report.
+// the developer (auth, network) or is not something they can fix by signing in.
 type Error struct {
 	Kind   string
 	Detail string
@@ -109,24 +67,10 @@ func (e *Error) NeedsDeveloper() bool { return e.Kind == KindAuth || e.Kind == K
 // Unsupported is the no-op Forge: it answers "unsupported" to everything.
 type Unsupported struct{}
 
-// ReadIssue always returns ErrUnsupported.
-func (Unsupported) ReadIssue(context.Context, string) (Issue, error) { return Issue{}, ErrUnsupported }
-
-// PushBranch always returns ErrUnsupported.
-func (Unsupported) PushBranch(context.Context, PushRequest) error { return ErrUnsupported }
-
-// OpenPR always returns ErrUnsupported.
-func (Unsupported) OpenPR(context.Context, OpenPRRequest) (PullRequest, error) {
-	return PullRequest{}, ErrUnsupported
-}
-
 // ReadPR always returns ErrUnsupported.
 func (Unsupported) ReadPR(context.Context, string) (PullRequest, error) {
 	return PullRequest{}, ErrUnsupported
 }
-
-// CommentPR always returns ErrUnsupported.
-func (Unsupported) CommentPR(context.Context, string, string) error { return ErrUnsupported }
 
 // ByHost routes each call to the adapter for the URL's host; a host with no
 // adapter is answered "unsupported".
@@ -139,46 +83,9 @@ func Default() Forge {
 	return ByHost{Adapters: map[string]Forge{"github.com": GH{}}}
 }
 
-// ReadIssue implements Forge.
-func (b ByHost) ReadIssue(ctx context.Context, issueURL string) (Issue, error) {
-	return b.pick(issueURL).ReadIssue(ctx, issueURL)
-}
-
-// PushBranch implements Forge, routing by the host of the Site's remote, which
-// may be an scp-style address such as git@github.com:o/r.
-func (b ByHost) PushBranch(ctx context.Context, req PushRequest) error {
-	key, err := remote.Normalize(req.SiteURL) // host/owner/repo
-	if err != nil {
-		return ErrUnsupported
-	}
-	host, _, _ := strings.Cut(key, "/")
-	if f, ok := b.Adapters[strings.ToLower(host)]; ok {
-		return f.PushBranch(ctx, req)
-	}
-	return ErrUnsupported
-}
-
-// OpenPR implements Forge, routing by the host of the Site's remote.
-func (b ByHost) OpenPR(ctx context.Context, req OpenPRRequest) (PullRequest, error) {
-	key, err := remote.Normalize(req.SiteURL)
-	if err != nil {
-		return PullRequest{}, ErrUnsupported
-	}
-	host, _, _ := strings.Cut(key, "/")
-	if f, ok := b.Adapters[strings.ToLower(host)]; ok {
-		return f.OpenPR(ctx, req)
-	}
-	return PullRequest{}, ErrUnsupported
-}
-
 // ReadPR implements Forge.
 func (b ByHost) ReadPR(ctx context.Context, prURL string) (PullRequest, error) {
 	return b.pick(prURL).ReadPR(ctx, prURL)
-}
-
-// CommentPR implements Forge.
-func (b ByHost) CommentPR(ctx context.Context, prURL, body string) error {
-	return b.pick(prURL).CommentPR(ctx, prURL, body)
 }
 
 // SupportsSite reports whether the Default Forge has an adapter for the host
@@ -202,4 +109,38 @@ func (b ByHost) pick(ref string) Forge {
 		return f
 	}
 	return Unsupported{}
+}
+
+// PRRef is what a pull request URL names: the repository, as the normalised
+// remote identity (`host/owner/repo`), and the pull request's number.
+type PRRef struct {
+	Repo   string
+	Number int
+}
+
+// ParsePRURL reads a pull request URL of the shape
+// `https://host/owner/repo/pull/N` (`http` is accepted too, for a Site served
+// that way), with nothing before or after it: no
+// credentials, query, fragment, trailing path or other scheme. It is the one
+// place a URL an agent reported becomes a repository and a number, so what it
+// refuses never reaches `gh`.
+func ParsePRURL(raw string) (PRRef, error) {
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Hostname() == "" ||
+		u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Opaque != "" || strings.HasSuffix(raw, "?") || strings.HasSuffix(raw, "#") {
+		return PRRef{}, fmt.Errorf("%q is not a pull request URL (want https://HOST/OWNER/REPO/pull/NUMBER, or http)", raw)
+	}
+	parts := strings.Split(strings.Trim(u.EscapedPath(), "/"), "/")
+	if len(parts) != 4 || parts[2] != "pull" || strings.HasSuffix(u.EscapedPath(), "/") || parts[0] == "" || parts[1] == "" {
+		return PRRef{}, fmt.Errorf("%q is not a pull request URL (want https://HOST/OWNER/REPO/pull/NUMBER, or http)", raw)
+	}
+	n, err := strconv.Atoi(parts[3])
+	if err != nil || n < 1 || strconv.Itoa(n) != parts[3] {
+		return PRRef{}, fmt.Errorf("%q is not a pull request URL: %q is not a pull request number", raw, parts[3])
+	}
+	repo, err := remote.Normalize(u.Scheme + "://" + u.Host + "/" + parts[0] + "/" + parts[1])
+	if err != nil {
+		return PRRef{}, fmt.Errorf("%q is not a pull request URL: %v", raw, err)
+	}
+	return PRRef{Repo: repo, Number: n}, nil
 }

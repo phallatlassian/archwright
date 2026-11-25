@@ -143,3 +143,43 @@ func TestPathRegisteredSitesAreUnregisteredByTheMigration(t *testing.T) {
 		t.Fatalf("%+v %v", j, err)
 	}
 }
+
+func TestSiteTrustIsKeptPerRunnerAndGoesWithTheSite(t *testing.T) {
+	s, _ := open(t)
+	addSite(t, s, "r", "https://github.com/o/r")
+	addSite(t, s, "q", "https://github.com/o/q")
+	for _, c := range [][3]string{{"r", "claude", TrustPending}, {"r", "codex", TrustUnavailable}, {"q", "claude", TrustCaptured}, {"r", "claude", TrustCaptured}} {
+		if err := s.SetSiteTrust(c[0], c[1], c[2], "d-"+c[2]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := s.SiteTrusts("r")
+	if err != nil || len(got) != 2 || got[0].Runner != "claude" || got[0].State != TrustCaptured || got[0].Detail != "d-captured" || got[0].CheckedAt.IsZero() || got[1].State != TrustUnavailable {
+		t.Fatalf("r's trust = %+v, %v (a later probe replaces the earlier one)", got, err)
+	}
+	if all, _ := s.SiteTrusts(""); len(all) != 3 {
+		t.Fatalf("all = %+v", all)
+	}
+	if _, err := s.AddNeedsYou(NewNeedsYou{Kind: NeedsTrustProbe, Site: "r", Summary: "accept it", DedupeKey: "trust-probe:r:claude"}); err != nil {
+		t.Fatalf("a Site-level item with no Job: %v", err)
+	}
+	if _, err := s.RemoveSite("r"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.SiteTrusts("r"); len(got) != 0 {
+		t.Errorf("a removed Site kept its trust: %+v", got)
+	}
+	if items, _ := s.NeedsYou(); len(items) != 0 {
+		t.Errorf("a removed Site kept its probe item: %+v", items)
+	}
+	if all, _ := s.SiteTrusts(""); len(all) != 1 {
+		t.Errorf("another Site's trust was lost: %+v", all)
+	}
+	s.AddNeedsYou(NewNeedsYou{Kind: NeedsTrustProbe, Site: "q", Summary: "x", DedupeKey: "trust-probe:q:claude"})
+	if err := s.ResolveNeedsYou("trust-probe:q:claude"); err != nil {
+		t.Fatal(err)
+	}
+	if items, _ := s.NeedsYou(); len(items) != 0 {
+		t.Errorf("a resolved item is still there: %+v", items)
+	}
+}

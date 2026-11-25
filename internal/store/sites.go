@@ -128,6 +128,13 @@ func (s *Store) RemoveSite(name string) (Site, error) {
 	if _, err := tx.Exec("UPDATE sites SET url_key = NULL, clone_path = ?, unregistered_at = ? WHERE name = ?", "unregistered:"+name, at, name); err != nil {
 		return Site{}, err
 	}
+	// What was learned about the Site and what was asked of the developer for it go with it.
+	if _, err := tx.Exec("DELETE FROM site_trust WHERE site = ?", name); err != nil {
+		return Site{}, err
+	}
+	if _, err := tx.Exec("DELETE FROM needs_you WHERE site = ? AND job_id = '' AND kind = ?", name, NeedsTrustProbe); err != nil {
+		return Site{}, err
+	}
 	if err := appendEvent(tx, at, "", "site.removed", map[string]string{"name": name, "url": site.URL}); err != nil {
 		return Site{}, err
 	}

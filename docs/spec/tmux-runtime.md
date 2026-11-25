@@ -1,0 +1,169 @@
+# tmux runtime: mechanics
+
+Mechanics for ADRs 0026 to 0029. The decisions are in the ADRs; this document holds the details an implementer needs. Evidence: `docs/research/tmux-interactive-sessions.md` (branch `research/tmux-interactive-sessions`) and the resolution comments of issues #3 to #7 in `talvor/archwright-tmux`. Tested with tmux 3.8, claude 2.1.285 and codex-cli 0.171.0 on a managed Mac. Anything not verified there is marked UNVERIFIED.
+
+## Launch lines
+
+One Session per run, in a pane of the `factory` tmux session on the dedicated socket (`tmux -L archwright`, owned by the Works). The brief is the first prompt, passed as the positional argument; for a long brief the Works writes it to a file and passes a short pointer to it.
+
+```
+tmux -L archwright -f <works.tmux.conf> new-window -d -t factory: -n <job-slug> -c <worktree> -e K=V ... '<runner command>'
+claude --permission-mode default --settings <hooks.json> [--session-id <uuid>] [--model <m>] "<brief or pointer>"
+CODEX_HOME=<works codex home> codex -C <worktree> --no-alt-screen [-m <m>] -- "<brief or pointer>"   # hooks from a stable file, see Trust
+```
+
+Rules:
+- Default permission mode and approval policy only. The never-list (ADR 0027) is checked before every spawn; the adapter refuses and fails the step visibly.
+- Never `--bare` for Claude (it skips hooks). Codex may use `--no-alt-screen` so `capture-pane` is readable.
+- Environment: an allowlisted snapshot of the developer's shell environment, passed per spawn with `-e`, plus `ARCHWRIGHT_RUN`, `ARCHWRIGHT_SPOOL` and `ARCHWRIGHT_RUN_TOKEN` (ADR 0018). See Environment snapshot below.
+- Resume by id: `claude --resume <session_id>`, `codex resume <session_id>`. That resume keeps context on both CLIs is UNVERIFIED (an item on issue #7's Mac recheck list).
+- Started means the first SessionStart hook. With no hooks: pane alive and a transcript file appears. No start within about 60 seconds, or the pane dies first, fails the step "failed to start" and keeps the dead pane.
+
+## Hook-derived state machine
+
+States: `starting`, `working`, `waiting-on-permission`, `idle`, `ended`. State comes from hooks plus pane liveness (`pane_dead`).
+
+| Event | Effect |
+|---|---|
+| `SessionStart` | `starting` to `idle` (first prompt is already submitted, so `working` on the next `UserPromptSubmit`); record `session_id`, `transcript_path` |
+| `UserPromptSubmit`, `PreToolUse` | `working` |
+| `PermissionRequest` | add to the outstanding set; state `waiting-on-permission` |
+| `PostToolUse` | clears the matching outstanding PermissionRequest; if the set is empty, back to `working` |
+| `Stop` | `idle`, only when the outstanding set is empty |
+| `SessionEnd`, `pane_dead` | `ended` (SessionEnd has a 1.5 s budget; confirm with `pane_dead`) |
+| Claude `Notification` | corroborating only; never changes state alone |
+
+- Codex fires `Stop` while an approval is pending (about 2.6 s after PermissionRequest, same turn id), then PostToolUse and another Stop after the approval. `Stop` alone is therefore never idle: the Session is waiting while any PermissionRequest is outstanding, cleared only by the matching PostToolUse.
+- Events are deduplicated on event kind plus turn id. Codex `-c` hooks produced duplicate SessionStart and UserPromptSubmit deliveries about 2.5 s apart.
+- Claude can deliver a queued prompt's UserPromptSubmit before the first turn's Stop; ordering is not guaranteed.
+- Codex steering a Nudge into a running turn produces no UserPromptSubmit.
+- A UserPromptSubmit the Works did not send is recorded as human-touched.
+- If hooks are unavailable the state is reconstructed from the transcript, `pane_dead` and silence, and the dashboard marks it unreliable (ADR 0027).
+
+## Nudge rules
+
+A Nudge is the Works delivering text to a Session. It is permitted only when state is `idle` with no outstanding PermissionRequest.
+
+- Delivery: `load-buffer` then `paste-buffer`, a short sleep, then `send-keys Enter`; verify through the UserPromptSubmit hook. Do not use `send-keys -l <text>` immediately followed by Enter: text can be left unsent in Codex's composer.
+- The pause between paste and Enter is the Works' to set (default 200 ms), and the state is checked again after it: a Session that has gone to a prompt in between gets no Enter. `paste-buffer -p` brackets the paste where the CLI asked for it, so a line break in the text is not an Enter. A Nudge is pasted as it is only when it is one short line that is not read as a command (no leading `/`, `!`, `#`, `@` or `&`); anything else is written to a file in the run's directory and a one-line pointer is pasted (ADR 0029). A delivery with no UserPromptSubmit within the timeout (default 15 s) is reported unconfirmed and never retried: the text may be in the composer.
+- Rework (ADR 0029): a piece sent back by its Warden is Nudged into its Wright's open Session, in the worktree and on the branch it already has. The Session still holds the environment of its first run, which has ended, so the Nudge's file carries the amended brief and the `export` lines of the new run (`ARCHWRIGHT_RUN`, `ARCHWRIGHT_SPOOL`, `ARCHWRIGHT_RUN_TOKEN`). A Session that is working or at a prompt is waited for (default 2 minutes, nothing typed meanwhile), then the rework fails: no second Session is started beside a live one. If the Session is gone, a fresh Session runs the amended brief in a new worktree from the previous round's branch (or, when the Session ended just as the rework arrived, in the worktree the previous round used).
+- Never send Enter or paste at a prompt. At a permission or approval prompt, pasted text is dropped or ignored and Enter approves option 1 (tested on both CLIs). An interrupt (Esc or Ctrl-C) at a prompt approving it is UNVERIFIED.
+- Mid-turn behaviour differs, so a Nudge never relies on it: Claude queues the pasted text and delivers it as the next turn; Codex steers it into the running turn (same turn id).
+- Busy Codex Session: `codex queue --thread <session_id> --message <text>`, with `session_id` from the hook payload. Mid-turn it is queued, not steered, and delivered as a new turn after `Stop` (new turn id, UserPromptSubmit fires).
+- `capture-pane` is not an input check: Claude's prompt-suggestion ghost text appears in it, so composer text is not necessarily pending input.
+- A Stop with no handback gets one Nudge, then a Needs-you item (ADR 0029).
+
+## Standing Wardens, the Archwright and closing a Job's Sessions
+
+Mechanics for ADR 0029.
+
+- A Warden's Session is kept per Job and Guild, a Wright's per Job and piece, so two Jobs never share one and a Review Warden (the Review Guild's) never lands in a builder's. The first step for a Guild launches the Warden; each later step, and each later review of the same checkout, is a Nudge into it: a file with the new brief and the `export` lines of the new run (as for rework), and a pointer pasted. Runs for one Session are taken one at a time, so steps of a Guild that are started together are carried out in turn in its Warden; a Session that is working or at a prompt is waited for like a Wright's, then the run fails.
+- A review is a read-only Session (the Review Guild is read-only, so plan mode) of that Guild's own Warden, in the review's detached checkout. Its second pass in the same checkout is a Nudge into the same Session; a review in a different checkout launches a fresh Session there (so its directory and delivered skills are that review's) and cancels the superseded one.
+- Closing: the Works looks once a second at the Jobs that hold Sessions. A Job has left active work when its PR is recorded or it is closed (accepted or discarded) or purged. After a retention (default 30 s) each of its Sessions that is idle or already ended is cancelled and its pane removed, so the Job's window goes with the last pane; a Session that is working, at a prompt or starting is left and asked again. Not yet specified: a Job that fails without closing (parked, or cancelled steps) stays in active work, so its Sessions stay.
+- The Archwright: `archwright` asks the Works to spawn it (`POST /archwright`), and attaches to `factory:archwright` with `TMUX` cleared. The Works launches it in the neutral factory home in the `archwright` window, replacing the empty pane the factory session starts with (and the dead pane of a previous Archwright). Its first prompt is its instructions; there is no start context and no hook that delivers the inbox: the Archwright reads it with `read_inbox`. A Works that does not host Sessions answers 501 and the CLI runs the Archwright in its own terminal, as before. The Works cancels the Archwright when it stops (it holds no work a restart could lose: its inbox is in SQLite), so a restarted Works spawns a new one; an Archwright pane left by a Works that died is flagged as an orphan beside it, not adopted.
+- The inbox wake is a Nudge with a fixed one-line text carrying no item content. It is sent when an item is unread that the Archwright has not been Nudged about, it is idle and has finished its first turn; a busy Archwright is asked again each time it goes idle. One Nudge per new item: an Archwright that ends its turn without reading is not Nudged again until something new arrives. A Nudge whose delivery is not confirmed is not repeated and is recorded as a `nudge.failed` event.
+
+## Asks and open Sessions
+
+Mechanics for the Ask amendment in ADR 0029.
+
+- A Wright's blocking Ask is recorded, routed up and held in the Needs-you inbox as before (first answer wins, never expires). The dispatch parks as `blocked`, but its Session is not closed: the Wright ends its turn, the Session goes idle and waits, and nothing is typed at it while the Ask is open.
+- The answer, from the Warden, the Archwright or the dashboard, makes a fresh dispatch of the piece (an answer is not a rework round). When the Wright's Session is still open the dispatch is carried out in it: a Nudge in the worktree and on the branch it already has, as for rework. Its file carries only the Q&A record (the Session holds the brief) and the `export` lines of the new run. A Session that is working or at a prompt is waited for like a rework's (default 2 minutes, nothing typed meanwhile), then the run fails.
+- If the Session is gone, a fresh Session runs the original brief plus the Q&A record, as it did before Sessions stayed open.
+- Not yet specified: a Warden's own blocking Ask. Its step still fails when its run ends; the answer is read with `show_ask` when it is next summoned.
+
+## Cancel, restarting the Works and lost Sessions
+
+Mechanics for ADR 0029's Cancel and Recovery paragraphs.
+
+- Cancel: the developer's cancel of a Wright (or of its Job) interrupts the Session with Ctrl-C and, after a grace (default 3 s), kills its pane. At a permission prompt nothing is typed (ADR 0027): the pane is killed after the grace. The run is recorded `cancelled` and its Session `ended`; the worktree is kept, with what the Wright left in it committed by the Works as for any run that did not report.
+- Stopping the Works leaves Sessions open: a run whose context ends because the Works is stopping (`ErrWorksStopping`, as against a cancel) returns without touching its Session, its dispatch stays `running` and its run record stays as it was, exactly as after a crash. Nothing is recorded about the Sessions after that; a Warden's or review's run record is ended `cancelled` by its own end-of-run bookkeeping, which is not about its Session.
+- Every Session leaves `<runs dir>/<run>/session.json` (its hook token, vendor and directory). The run record keeps its pane id, session id, directory and vendor (`pane_id`, `session_id`, `session_dir`, `runner`).
+- On start, after `InterruptDispatches` and before the queue resumes, the Works takes the newest run recorded against each pane whose Session is not recorded `ended` and, per Piece (Wright) or Guild (Warden, review) of a Job, looks for its Session:
+  - Live pane: adopted by the recorded pane id. The pane's `@run` option must name one of the runs recorded against that pane, so a pane id reused by another tmux server never adopts a stranger. The Session's state, session id and turns are rebuilt silently by replaying its hook spool (`hooks.jsonl`); hooks from then on arrive through the spool (the pane still points at the old Works' socket), so adoption does not depend on the receiver. The Session is then the Job's open Session for that Piece or Guild, followed and recorded like any other.
+  - No pane, session id known, runner able to resume: remembered as resumable. The next run of that Piece or step launches `claude --resume <id>` (or `codex resume <id>`) in the directory the Session worked in, with the Nudge it would have been sent as the first prompt. If the resumed Session does not start (the vendor no longer has it), a fresh Session runs the stored brief.
+  - No pane and nothing to resume: the run record's Session is marked `ended` and the stored brief runs afresh.
+- The dispatch a stopped Works left running becomes `interrupted` and a fresh dispatch is queued from its stored brief, as before. When its Wright's Session was adopted or is resumable, that dispatch runs in it: same worktree, same branch, the brief and the new run's `export` lines Nudged in (or given as the resumed Session's first prompt), with a note that the Works restarted and that nothing had been committed. A Session still working is waited for like a rework's. Wardens' steps and reviews re-run through the same standing-Session path.
+- Orphans: after adoption, every live pane that carries a Session's `@run` and was not adopted gets the pane option `@orphan 1`, a `session.orphan` event and a log line, and is otherwise left alone: never killed, never adopted. Dead panes are left as they are.
+- A Session that ends without `report_result` (its pane dies, or it exits) is recorded failed on the dispatch with its last message kept: the Stop hook's `last_assistant_message`, or the last assistant text of its transcript when the hook carries none, is kept on the run's timeline as a `message` entry and is what the failed result quotes. UNVERIFIED against real CLIs: that Claude and Codex Stop hooks carry `last_assistant_message`, and the transcript line shapes the fallback reads.
+- A prompt the Works did not send is recorded as human-touched: the Session counts the prompts it sent (the brief, each Nudge, each Codex queued message) and a `UserPromptSubmit` beyond them is a `human` entry on the run's timeline. Nothing is blocked: no key is intercepted, and the Works carries on as the state machine says (a typed prompt makes the Session `working`; the Works waits for idle before its next Nudge). A person's prompt typed while a Nudge is in flight is counted as the Nudge's.
+- Differs from ADR 0029's Recovery paragraph, on issue #15's word: a Session whose pane dies with no handback and no cancel fails its dispatch with its last message kept; the "interrupted" step with a Needs-you item (resume, restart fresh or cancel) is not built. Prompts a person typed while no Works was running are not recorded: an adopted Session's earlier prompts are all counted as accounted for. A pane that exists but cannot be adopted (no `session.json`) is left running and logged, neither an orphan nor resumed.
+- UNVERIFIED: that `claude --resume` and `codex resume` keep context in a pane, and that `codex resume` takes the flags the launch passes after the subcommand (they are the item on issue #7's Mac recheck list). Neither was run against a real CLI; the stand-ins record the arguments they receive.
+
+## Hook payload fields
+
+Hooks run outside the tool sandbox as the CLI's own process. Both CLIs send JSON on stdin.
+
+| Field | Claude | Codex | Use |
+|---|---|---|---|
+| `session_id` | yes | yes | Session identity; resume; `codex queue --thread` |
+| `transcript_path` | yes (may lag the current turn) | string or null | raw content path (ADR 0017); with null, find by session id |
+| `cwd` | yes | yes | match to the run's worktree |
+| `hook_event_name` | yes | yes | state machine input |
+| `turn_id` | not relied on | on turn-scoped events | dedupe |
+| `permission_mode` | yes | yes | Posture; check it is the default |
+| tool name and input | on tool and permission events | same | Needs-you item (tool, exact command) |
+
+Claude events used: SessionStart, UserPromptSubmit, PreToolUse, PermissionRequest, PostToolUse, Notification, Stop, SessionEnd. Codex events used: SessionStart, UserPromptSubmit, PreToolUse, PermissionRequest, PostToolUse, Stop, SessionEnd. Hooks never return a decision or modify anything.
+
+Delivery to the Works: the hook script appends the payload to the run's spool file and POSTs it to a loopback TCP listener or a unix socket the Works owns; the spool is the fallback if the POST fails. macOS unix socket paths must be under 104 bytes, so the socket lives under a short path. Hooks are registered through a settings file for Claude (`--settings`, merged with managed hooks) and a stable file-based source for Codex.
+
+## tmux options
+
+- Server on its own socket (`-L archwright`); the developer's own server is never touched.
+- Works-supplied config (`-f`) that first sources the developer's `~/.tmux.conf`, then sets what the factory requires.
+- `remain-on-exit on`, with `pane-died` hooks, so exit status (`pane_dead_status`) and the final screen can be read before cleanup.
+- One `factory` session; window `archwright` for the Archwright; one window per Job named by the Job slug; panes for Wardens and Wrights.
+- Layout: a Job's window is one column per Guild (masonry, chancery, hallmark, survey, then any other in the order it appeared), each with its Warden on top and its Wrights below. Every column has the same rows; a slot with no Session is an "empty" placeholder pane. Re-applied as panes come and go. A window holding a pane with no Guild (a trust probe) is tiled.
+- Pane identity: the pane id is stored per run in SQLite (canonical); pane options `@run`, `@role`, `@guild` and `@state` (updated on each state transition) are set for convenience; pane borders are labelled `guild · role · run · state` from them, with `⚠` while a permission is waited on, and coloured by role (wright blue, Warden orange, Archwright purple, placeholder grey), so they are rebuilt after a restart. The Works' config also sets prefix `C-a`, double border lines, tabs `[0] Name` and an empty right status; tmux-ukiyo's `nord/default` theme is used if its plugin file is installed and run directly, never through tpm.
+- Attention: Needs-you item, `archwright attach`, and status markers on the pane and window; no automatic popups.
+- Not yet specified: pane cap and overflow in a Job window, and how the dashboard links to live Sessions.
+
+## Environment snapshot
+
+A Session behaves like the developer's terminal without inheriting everything the Works started with.
+
+- The snapshot is the allow-listed part of the environment of the `archwright` CLI: the one that started the Works, and then each later CLI call, which sends its own in a request header (`X-Archwright-Env`). The latest wins; a call made from inside a Session (`ARCHWRIGHT_RUN` set) is not taken, so an agent's environment never replaces the developer's. The Works filters what a client sends again with its own list.
+- The allow list (`internal/envsnap`): `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `TERM`, `COLORTERM`, `LANG`, `LANGUAGE`, `LC_*`, `TZ`, `TMPDIR`, `XDG_*`, `EDITOR`, `VISUAL`, `PAGER`; `SSH_AUTH_SOCK`, `GIT_SSH_COMMAND`, `GIT_ASKPASS`; `GH_TOKEN`, `GITHUB_TOKEN`, `GH_HOST`, `GH_ENTERPRISE_TOKEN`, `GH_CONFIG_DIR`; proxies and certificate bundles (`HTTP(S)_PROXY`, `ALL_PROXY`, `NO_PROXY` in both cases, `SSL_CERT_*`, `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`); toolchain homes (`NVM_DIR`, `GOPATH`, `GOROOT`, `GOFLAGS`, `GOPROXY`, `CARGO_HOME`, `RUSTUP_HOME`); the agents' own sign-in and provider settings (`CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_*`, `ANTHROPIC_*` for keys, token, base URL and model and for Vertex, `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `GOOGLE_APPLICATION_*`, `CLOUD_ML_*`, and `AWS_PROFILE`, `AWS_REGION`, `AWS_DEFAULT_REGION`, `AWS_CONFIG_FILE`, `AWS_SHARED_CREDENTIALS_FILE`, never AWS secret keys). Never: `ARCHWRIGHT_*` (the adapter sets the run's), `TMUX`, `TMUX_PANE`, `GIT_DIR` and the other `GIT_*` that redirect git, and anything else.
+- The tmux server is started with exactly the snapshot, not the Works' environment, and each Session is spawned with the current snapshot through `-e`, so a server left by an earlier Works still gives new Sessions the current one. What the caller adds (`ARCHWRIGHT_*` only, by the never-list) and the hook wiring come after it and win.
+- Staleness: a Session keeps the environment it was spawned with. A later change in the developer's shell reaches the next Session the CLI is called before, not a running one. A Works with no CLI call since it started uses what its starting call had.
+- UNVERIFIED: that this list is enough for every developer's setup (a company wrapper that needs a variable not listed will not work until it is added); that a Claude or Codex Session needs nothing from the environment beyond it.
+
+## Trust probe
+
+No hooks fire before a CLI's folder-trust dialog is answered, so a Session spawned into an untrusted directory sits at the dialog with no signal. The Works never writes trust configuration (ADR 0027).
+
+- At Site registration the Works launches a probe Session in the Site's folder under the worktree root (the parent of every Job worktree of the Site) and raises a Needs-you item asking the developer to accept folder trust once. For Codex it also captures hook trust ("Trust all and continue") once. `archwright doctor` re-checks.
+- The probe (`internal/works/trustprobe.go`): the Site's folder under the worktree root (`<root>/<site>`, a plain folder, the parent of the Job worktrees), and one Session per installed runner in turn, in the window `probe-<site>` of the factory session (role `probe`). Its brief asks for nothing but to start. A Session that sends its first SessionStart hook is the evidence: no hook fires before the folder-trust dialog (and Codex's hook-trust dialog) is answered, so folder trust is given and the vendor's hooks reach the Works. The Session is then cancelled. A runner whose CLI is not on PATH is recorded `unavailable` and not probed.
+- No start within 5 seconds files the Needs-you item (kind `trust-probe`, belonging to the Site, not a Job): it names the runner, the window, the command that attaches to it and `archwright site probe <site>`. A folder that is already trusted starts at once and never raises it. The probe waits for the developer for 15 minutes, then gives up with the item left in place; the item goes when a probe captures trust, or with the Site. Sessions of other Sites are not held up.
+- What each probe found is kept per Site and runner (`site_trust`): `captured`, `pending`, `unconfirmed` (waited, no Session started: the dialog is unanswered, or hooks are blocked by policy or not trusted), `failed`, `unavailable`. `archwright site probe <site>` runs it again, after answering a dialog or to re-check. Stopping the Works cancels a probe in flight and leaves nothing recorded beyond `pending`; the Needs-you item stays.
+- Not verified against a real Claude or Codex: the probe was exercised only against the scripted stand-ins and the scripted fake Session. That a dialog actually blocks SessionStart, and that trust given in the Site's folder covers the worktrees of later Jobs, are the UNVERIFIED items below.
+- Claude does not inherit trust from a parent folder into git repositories or worktrees (tested on Linux), so trust given in the probe's folder may not cover a Job worktree on Claude; Codex covers subfolders. Both CLIs inherit trust from a trusted repository to its worktrees. UNVERIFIED: whether trust given in `<root>/<site>` covers Job worktrees for Claude, and whether worktrees of the Works' clone (ADR 0019) inherit trust on the Mac. Until verified, `captured` shows hooks reach the Works from the probe folder, not proof that later Sessions never stall.
+- Codex has no flag for a hooks file elsewhere; it reads `$CODEX_HOME/hooks.json`, `<repo>/.codex/hooks.json`, `config.toml` and plugins. The Works therefore gives every Codex Session one Works-owned `CODEX_HOME` (`<state>/tmux/codex-home`) holding a `hooks.json` that is identical for every run and rewritten only when its content changes (run identity travels in the pane's environment, not the file), with `auth.json`, `config.toml`, `rules` and `AGENTS.md` linked from the developer's own Codex home; the developer's `hooks.json` is never touched. Trust is accepted once against that file. UNVERIFIED against a real Codex: that it follows those links and records trust through them.
+- Codex has no plan or dontAsk mode and the never-list forbids its approval and sandbox flags, so a Codex Session runs at its default and a narrower mode fails the launch.
+- Codex hook trust is keyed by source. `-c` hooks are keyed by position and overwrite each other's trusted hashes, so Codex hooks must come from a stable file (`hooks.json` or `config.toml` at a fixed path). `--dangerously-bypass-hook-trust` is on the never-list. Managed Codex hooks are already trusted.
+
+## Doctor checks for Sessions
+
+`archwright doctor` (internal/doctor) reports, with the fix for each failure:
+
+- `tmux` and `tmux-server` (fail, so runs are refused): tmux is on PATH and is 3.0 or newer (`new-window -e` and pane options), and starts and stops a server on a throwaway socket of its own.
+- `runner:<name>` (fail for the runner chosen for the install, warning for the other): the CLI is on PATH and answers `--version`. Nothing is run through it: that a Session of it starts, and its hooks reach the Works, is what the trust probe shows.
+- `hooks` (warning): this binary's `session-hook`, run as the CLIs run it, delivers a payload to a receiver over its socket and writes its spool fallback. It shows the Works' side of delivery; whether a vendor CLI runs hooks at all is what the trust probe shows.
+- `trust:<site>:<runner>` (warning): what the Site's probe found, with the attach command and `archwright site probe <site>` as the fix; a Site no probe has run for says to run it.
+- `prompt:git-push` and `prompt:gh` (warning when a runner does not prompt): for each installed runner, whether `git push origin HEAD` and `gh pr create` prompt under the developer's policy, read from files and never by running them. Claude Code: `permissions.allow`, `ask`, `deny` and `defaultMode` of `~/.claude/settings.json` (or `$CLAUDE_CONFIG_DIR`) and the managed `managed-settings.json` and `managed-settings.d/*.json`; deny wins over ask over allow, and the default mode decides when no rule matches. Codex: `prefix_rule` calls in `$CODEX_HOME/rules/*.rules` and `/etc/codex/rules/*.rules`, the most restrictive match winning, and `approval_policy` in its config files. A prompt passes: it is the only gate on a push (ADR 0028). A rule that runs it without one, or one that denies it (so no agent can push and a Warden's open-pr step fails), is a warning that names the rule and file and says how to change it in the developer's own policy, which the factory never edits. A policy file that cannot be read is reported (`prompt:policy`). Not read: a Site's own project settings, Codex's `requirements.toml`, rules written for another command shape than the two above.
+
+## Review before push
+
+Review before push is Plan ordering only: the `open-pr` step is blocked by Review. Nothing enforces it on the push itself. Agents of any role may run `gh` and `git push` as the developer, and the pane approval is the only gate on a push (ADR 0028).
+
+## Forge access, `record_pr` and the PR reader
+
+Mechanics for ADR 0028's Forge paragraph. The Forge tools (`read_issue`, `push_branch`, `open_pr`, `read_pr`, `comment_pr`) and `merge_base` are gone, with the `unsupported` and `forge_error` tool error codes, the `forge-fault` and `forge-unsupported` Needs-you kinds and the `PrepareBaseMerge` and fast-forward checks behind them. A tool call that names one answers `unknown_tool`.
+
+- Agents run `gh` and `git push` as the developer. The Warden of the `open-pr` step is told the integration branch, the Site's base branch and the integration worktree to push from (`git -C <worktree> push origin <branch>`), and reads the Job's source issue with `gh issue view`, from the URL its step brief names. A Wright's or review Warden's rules say the same and add that only the Warden of `open-pr` pushes or opens a PR; that is guidance, not enforcement.
+- `archwright tool record_pr` (Warden role) takes `{"url","number"}` and records the Job's PR. It reaches no network. It accepts only a run bound to a Job, not a review, whose Job is not closed. The URL must be exactly `https://HOST/OWNER/REPO/pull/N` (`internal/forge.ParsePRURL`: no credentials, query, fragment, trailing path or other scheme; `http` is accepted), `number` must equal `N`, and `HOST/OWNER/REPO` must equal the Site's normalised remote URL (`internal/remote`), compared without regard to case. Anything else is `invalid_input` and records nothing.
+- One PR per Job: the recorded URL again answers `exists` (from any Warden of the Job, whatever step is running), a different one is a `conflict`. A new PR is recorded only while the Job's `open-pr` step is running and only by that step's Warden; a Warden of another step gets a `conflict`, a Wright or the Archwright is `forbidden`. Recording is a `job.pr_recorded` event, and with it the Job has left active work for Session closing (ADR 0029).
+- The Works reads the recorded PR itself (`internal/works/prstatus.go`): at once after `record_pr`, then every 30 seconds for each Job that has a PR and is not closed or purged (a pass every 5 seconds picks them up again after a restart, nothing is persisted). `gh pr view` through the Works' own `gh`, bound by its 30 second timeout. The reading is state (`OPEN`, `CLOSED`, `MERGED`), draft, mergeable, the checks and a one-word CI summary (`passing`, `failing`, `pending`, `none`); a PR that has merged or closed is read no more. It carries no title or body. A failed read keeps the last good reading and adds the error; nothing is filed in Needs-you for it.
+- The dashboard gets it as `pr_status` on `/board` entries and on `/jobs/{id}`, and shows it beside the PR link.
+- NOT exercised against a real Forge or a real agent CLI: every test uses a stand-in `gh` and a fake Forge, and no test pushes, opens a PR or reaches the GitHub API. UNVERIFIED: that a Warden, left to the forked `pr` skill, pushes from the integration worktree, opens the PR with `gh pr create` and calls `record_pr`; that the Works' own `gh` can read the PR at all on a real install (ADR 0024 found the Works process may lack the developer's `gh` credentials and PATH; the dashboard then shows the PR as unread, with the error, and nothing else breaks) and returns the fields the reader expects; that `git push` from a worktree of the Works' clone authenticates as the developer does in their own clone.

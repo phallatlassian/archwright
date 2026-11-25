@@ -82,7 +82,7 @@ func Build(in Input) (Command, error) {
 	if in.Site != "" {
 		env[EnvSite] = in.Site
 	}
-	if err := runner.CheckRequest(runner.StartRequest{Env: env}); err != nil {
+	if err := runner.CheckRequest(env, runner.Spawn{}); err != nil {
 		return Command{}, err
 	}
 	cmd := Command{Dir: in.Home}
@@ -161,10 +161,17 @@ var instructionsTmpl = template.Must(template.New("archwright.md").Parse(instruc
 // embedded archwright.md, a Go text/template (like the Guilds' shipped
 // markdown, it ships in the binary and needs nothing on disk) whose only
 // variation is the current Site and whether hooks deliver the inbox.
-func Instructions(site string, hooks bool) string {
+func Instructions(site string, hooks bool) string { return instructions(site, hooks, false) }
+
+// SessionInstructions is Instructions for an Archwright the Works hosts as a
+// Session in its own tmux session (ADR 0026, 0029): nothing delivers the inbox
+// through hooks, and the Works nudges the Session when an item arrives.
+func SessionInstructions(site string) string { return instructions(site, false, true) }
+
+func instructions(site string, hooks, session bool) string {
 	var b strings.Builder
 	err := instructionsTmpl.Execute(&b, map[string]any{
-		"Site": site, "Hooks": hooks, "HooksMarker": HooksMarker, "InboxMarker": InboxMarker, "NudgeMarker": NudgeMarker,
+		"Site": site, "Hooks": hooks, "Session": session, "HooksMarker": HooksMarker, "InboxMarker": InboxMarker, "NudgeMarker": NudgeMarker,
 	})
 	if err != nil {
 		panic(err) // the template is embedded and covered by tests

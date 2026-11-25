@@ -216,6 +216,11 @@ func newHandler(st *store.Store, runs *Runs, sm *sites.Manager, token string, pi
 			fail(w, err)
 			return
 		}
+		for i := range b {
+			if s, ok := runs.PRStatus(b[i].ID); ok {
+				b[i].PRStatus = &s
+			}
+		}
 		reply(w, 200, b)
 	})
 	mux.HandleFunc("GET /usage", func(w http.ResponseWriter, r *http.Request) {
@@ -278,7 +283,11 @@ func newHandler(st *store.Store, runs *Runs, sm *sites.Manager, token string, pi
 		resp := struct {
 			JobWithPlan
 			StepStates map[string]string `json:"step_states"`
+			PRStatus   *PRStatus         `json:"pr_status,omitempty"`
 		}{JobWithPlan: out, StepStates: map[string]string{}}
+		if s, ok := runs.PRStatus(out.ID); ok {
+			resp.PRStatus = &s
+		}
 		if out.Plan != nil {
 			ds, err := st.Dispatches(out.ID)
 			if err != nil {
@@ -554,7 +563,23 @@ func newHandler(st *store.Store, runs *Runs, sm *sites.Manager, token string, pi
 			fail(w, err)
 			return
 		}
+		runs.ProbeSite(site.Name) // trust is captured once, here, so no later Session stalls at a dialog
 		reply(w, 201, site)
+	})
+	// A Site's trust probe runs again on request: after the developer answers a
+	// dialog it left open, or to re-check a Site (`archwright doctor` points here).
+	mux.HandleFunc("POST /sites/{name}/probe", func(w http.ResponseWriter, r *http.Request) {
+		site, err := st.GetSite(r.PathValue("name"))
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		started, hosted := runs.ProbeSite(site.Name)
+		if !hosted {
+			reply(w, http.StatusNotImplemented, map[string]string{"error": MsgProbeNotHosted})
+			return
+		}
+		reply(w, http.StatusAccepted, map[string]bool{"started": started})
 	})
 	mux.HandleFunc("GET /sites", func(w http.ResponseWriter, r *http.Request) {
 		list, err := st.ListSites()
@@ -703,6 +728,24 @@ func newHandler(st *store.Store, runs *Runs, sm *sites.Manager, token string, pi
 		}
 		reply(w, 201, env)
 	})
+	// The Works spawns and owns the Archwright as a Session in its tmux session; 501 says it does not host it.
+	mux.HandleFunc("POST /archwright", func(w http.ResponseWriter, r *http.Request) {
+		var in struct{ Site string }
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			fail(w, err)
+			return
+		}
+		if !runs.ArchwrightHosted() {
+			reply(w, http.StatusNotImplemented, map[string]string{"error": MsgArchwrightNotHosted})
+			return
+		}
+		info, err := runs.StartArchwright(in.Site)
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		reply(w, 200, info)
+	})
 	mux.HandleFunc("DELETE /runs/{id}", func(w http.ResponseWriter, r *http.Request) {
 		if err := runs.End(r.PathValue("id")); err != nil {
 			fail(w, err)
@@ -711,7 +754,7 @@ func newHandler(st *store.Store, runs *Runs, sm *sites.Manager, token string, pi
 		reply(w, 200, map[string]bool{"ok": true})
 	})
 
-	return withUI(guard(token, mux))
+	return withUI(guard(token, withEnv(runs, mux)))
 }
 
 // maxBody caps a request body; commands are small.

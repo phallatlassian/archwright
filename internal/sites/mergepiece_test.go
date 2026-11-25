@@ -28,9 +28,8 @@ func commitFile(t *testing.T, e env, j store.Job, dir, rel, content string) {
 	if err := os.WriteFile(filepath.Join(dir, rel), []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if sha, err := e.m.CommitWorktree(j.ID, dir, "edit "+rel); err != nil || sha == "" {
-		t.Fatalf("commit: %q %v", sha, err)
-	}
+	run(t, dir, "add", "--", rel)
+	run(t, dir, "commit", "--quiet", "-m", "edit "+rel)
 }
 
 func TestMergePieceFastForwardsAndMerges(t *testing.T) {

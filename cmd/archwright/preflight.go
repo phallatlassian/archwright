@@ -10,8 +10,8 @@ import (
 )
 
 // preflight is what must pass before the Works starts any run: `archwright
-// doctor` (ADR 0014). It runs doctor against the real machine, so it probes the
-// installed runners.
+// doctor` (ADR 0014). It runs doctor against the real machine: its runners, tmux,
+// hooks and policy files.
 func preflight(dirs paths.Dirs) func(context.Context) error {
 	gate := doctor.NewGate(func(ctx context.Context) doctor.Report { return doctor.Run(ctx, doctor.DefaultDeps(dirs)) })
 	return gate.Check

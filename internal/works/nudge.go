@@ -16,6 +16,10 @@ import (
 // a turn in an idle Claude Code session and reaches a running one between tool
 // calls. The nudge never carries item content; the inbox stays the source of
 // truth. It also keeps the unread marker the PostToolUse hook checks.
+//
+// This is the wake of an Archwright run in the developer's own terminal. An
+// Archwright the Works hosts as a Session is Nudged instead
+// (archwrightsession.go), and inboxChanged only asks its wake loop to look.
 
 // nudgeTimeout bounds one post to a session's socket.
 const nudgeTimeout = 5 * time.Second
@@ -38,6 +42,9 @@ func (ru *run) session() *session {
 // inboxChanged is the store's notifier: an item was filed. It refreshes the
 // unread marker, then nudges every Archwright session, without waiting for it.
 func (r *Runs) inboxChanged() {
+	if a := r.archwrightSession(); a != nil {
+		a.wake() // a hosted Archwright is Nudged, not sent to a socket
+	}
 	for _, ru := range r.archwrightRuns() {
 		r.syncUnread(ru)
 		if s := ru.session(); s != nil && r.startNudge() {

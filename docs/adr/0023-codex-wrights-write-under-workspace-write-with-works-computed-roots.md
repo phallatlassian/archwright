@@ -7,3 +7,5 @@ For a Codex step whose role writes (a Wright step), the adapter passes `-s works
 This is a bounded exception to ADR 0011's rule that a mode never be more permissive than the runner's default, and it supersedes the "broker a `commit` tool" fallback in ADR 0022. There is no brokered `commit` tool for Codex (issue #105 is obsolete). If managed policy disallows `workspace-write`, the bind fails with a clear error and `archwright doctor` prints the remedy; there is no fallback to a looser or brokered path.
 
 Accepted consequences: the shared `objects`, `refs` and `logs` are writable by every Codex Wright on a Site, so one Wright could alter another's branch (Claude Wrights already share the clone's git directory the same way); isolating per run would need a clone per run and break ADR 0019. Git prints a non-fatal `packed-refs.lock` error on commit (exit 0); it is tolerated and noted in the Codex notes rather than fixed with another writable root.
+
+Superseded by ADR 0027: Codex starts at its default mode, so the workspace-write exception is obsolete.

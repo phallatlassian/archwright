@@ -137,6 +137,12 @@ const ago = (iso) => {
 };
 const tag = (s) => h('span', { class: 'tag ' + s }, s);
 const prLink = (url) => !/^https?:\/\//i.test(url) ? h('span', {}, 'PR ' + url) : h('a', { href: url, target: '_blank', rel: 'noopener', onclick: (e) => e.stopPropagation() }, 'PR ' + url.replace(/^https?:\/\/(www\.)?/, ''));
+// What the Works itself read of a Job's PR (ADR 0028): its state and CI, or why it could not.
+const prStatus = (s) => !s ? null : h('span', { title: s.error ? 'Could not read the pull request: ' + s.error : 'Read ' + ago(s.checked_at) },
+  s.state ? h('span', { class: 'tag ' + s.state.toLowerCase() }, (s.draft ? 'draft ' : '') + s.state.toLowerCase()) : null,
+  s.ci && s.ci !== 'none' ? h('span', { class: 'tag ' + s.ci }, 'ci ' + s.ci) : null,
+  s.mergeable === 'CONFLICTING' ? h('span', { class: 'tag failing' }, 'conflicts') : null,
+  s.error ? h('span', { class: 'tag failed' }, 'PR unread') : null);
 const jobLink = (id, text) => h('a', { href: '#/job/' + id }, text || id);
 
 
@@ -161,7 +167,7 @@ const views = {
           h('div', { class: 't' }, j.title),
           h('div', {}, tag(j.state), plan && plan.approval === 'pending' ? tag('plan pending') : null),
           h('div', { class: 'm' }, [j.site || 'no site', j.id].join(' · ')),
-          j.pr ? h('div', { class: 'm' }, prLink(j.pr)) : null,
+          j.pr ? h('div', { class: 'm' }, prLink(j.pr), ' ', prStatus(j.pr_status)) : null,
           h('div', { class: 'm' },
             j.live_runs ? j.live_runs + ' running · ' : '',
             j.open_asks ? j.open_asks + ' ask(s) · ' : '',
@@ -265,7 +271,7 @@ const views = {
       h('h1', {}, full.title, ' ', tag(state)),
       h('p', { class: 'muted' }, [full.site || 'no site', id, 'created ' + ago(full.created_at), full.writ ? 'writ ' + full.writ : '', money(cost)].filter(Boolean).join(' · ')),
       full.source_issue ? h('p', { class: 'muted' }, 'Source issue: ', h('a', { href: full.source_issue, target: '_blank', rel: 'noopener' }, full.source_issue)) : null,
-      full.pr ? h('p', {}, 'Pull request: ', prLink(full.pr)) : null,
+      full.pr ? h('p', {}, 'Pull request: ', prLink(full.pr), ' ', prStatus(full.pr_status)) : null,
       full.description ? h('p', {}, full.description) : null,
       h('div', { class: 'row' }, controls),
     ];
@@ -362,7 +368,6 @@ const views = {
     const cap = Object.fromEntries(sites.map((x) => [x.name, x.concurrency_cap]));
     const out = [crumbs('Runner'), h('h1', {}, 'Runner'),
       h('p', { class: 'muted' }, 'The scheduler that starts Wrights. Work waits in a queue, oldest first, when a cap is reached.')];
-    if (queue.paused) out.push(h('div', { class: 'panel attn' }, h('strong', {}, 'Paused after rate limits '), `until ${queue.paused.until} (${queue.paused.failures} in a row). Nothing new starts until then.`));
     out.push(h('h2', {}, 'Capacity'), table(['Cap', 'In use', 'Limit'], [
       ['Total', queue.running.length, queue.limits.total],
       ...[...perSite].map(([k, n]) => ['Site ' + (k || '(none)'), n, cap[k] || queue.limits.per_site]),

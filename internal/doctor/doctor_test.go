@@ -12,15 +12,8 @@ import (
 	"time"
 
 	"github.com/phallatlassian/archwright/internal/paths"
-	"github.com/phallatlassian/archwright/internal/runner"
 	"github.com/phallatlassian/archwright/internal/store"
 )
-
-type fakeProber map[string]ProbeResult
-
-func (f fakeProber) Probe(_ context.Context, name, _ string) ProbeResult { return f[name] }
-
-var healthy = ProbeResult{RequestSeen: true, ResponseRead: true}
 
 // newDeps is a machine where everything passes: both runners installed and
 // answering, a private config and state directory, no Works running.
@@ -31,23 +24,27 @@ func newDeps(t *testing.T) Deps {
 	if err := dirs.Ensure(); err != nil {
 		t.Fatal(err)
 	}
-	found := map[string]string{"archwright": "/usr/bin/archwright", "claude": "/bin/claude", "codex": "/bin/codex", "lavish-axi": "/bin/lavish-axi", "gh": "/bin/gh"}
+	found := map[string]string{"archwright": "/usr/bin/archwright", "claude": "/bin/claude", "codex": "/bin/codex", "lavish-axi": "/bin/lavish-axi", "gh": "/bin/gh", "tmux": "/bin/tmux"}
 	return Deps{
 		Dirs:     dirs,
 		Getenv:   func(string) string { return "" },
 		LookPath: func(n string) (string, error) { return lookup(found, n) },
 		Output: func(_ context.Context, name string, args ...string) (string, error) {
+			if filepath.Base(name) == "tmux" {
+				return "tmux 3.8", nil
+			}
 			if len(args) > 0 && args[0] == "--version" {
 				return "1.2.3 (" + filepath.Base(name) + ")", nil
 			}
 			if filepath.Base(name) == "gh" {
 				return "Logged in to github.com", nil
 			}
-			return "--no-session-persistence --ephemeral", nil
+			return "", nil
 		},
-		Probe:        fakeProber{"claude": healthy, "codex": healthy},
+		Hooks:        fakeHooks{Socket: true, Spool: true},
+		PolicyFiles:  func(string) []string { return nil },
 		WorksRunning: func() (int, int, bool) { return 0, 0, false },
-		UID:          501, TempDir: "/tmp",
+		TempDir:      "/tmp",
 	}
 }
 
@@ -72,7 +69,7 @@ func TestEverythingPassing(t *testing.T) {
 	if !rep.OK {
 		t.Fatalf("failures: %+v", rep.Failures())
 	}
-	for _, name := range []string{"runner:claude", "runner:codex", "ephemeral:claude", "tool:codex", "transport:claude", "managed-policy:codex", "directory:config", "schema", "works", "skills", "lavish-axi"} {
+	for _, name := range []string{"runner:claude", "runner:codex", "directory:config", "schema", "works", "skills", "lavish-axi"} {
 		if c := byName(rep, name); c.Status != Pass {
 			t.Errorf("%s: %+v", name, c)
 		}
@@ -100,47 +97,6 @@ func TestMissingLavishWarnsWithFixAndDoesNotBlock(t *testing.T) {
 	}
 }
 
-func TestToolNeedingAPromptFailsWithTheAllowRuleForThatRunner(t *testing.T) {
-	d := newDeps(t)
-	denial := []runner.Denial{{Tool: "Bash", Command: "archwright tool doctor_ping"}}
-	d.Probe = fakeProber{"claude": {Denied: denial}, "codex": {Denied: denial}}
-	rep := Run(context.Background(), d)
-	if rep.OK {
-		t.Fatal("a denied tool call passed")
-	}
-	if c := byName(rep, "tool:claude"); c.Status != Fail || !strings.Contains(c.Fix, `Bash(archwright tool:*)`) || !strings.Contains(c.Fix, "settings.json") {
-		t.Errorf("claude: %+v", c)
-	}
-	if c := byName(rep, "tool:codex"); c.Status != Fail || !strings.Contains(c.Fix, `prefix_rule(pattern=["archwright", "tool"], decision="allow")`) {
-		t.Errorf("codex: %+v", c)
-	}
-}
-
-func TestTransportFailuresNameTheSpoolRoot(t *testing.T) {
-	d := newDeps(t)
-	d.Probe = fakeProber{"claude": {}, "codex": {RequestSeen: true}}
-	rep := Run(context.Background(), d)
-	if c := byName(rep, "transport:claude"); c.Status != Fail || !strings.Contains(c.Fix, "/tmp/claude-501/archwright") {
-		t.Errorf("claude: %+v", c)
-	}
-	if c := byName(rep, "transport:codex"); c.Status != Fail || !strings.Contains(c.Detail, "response was not read back") {
-		t.Errorf("codex: %+v", c)
-	}
-}
-
-func TestManagedPolicyNoticesAreWarnings(t *testing.T) {
-	d := newDeps(t)
-	d.Probe = fakeProber{"claude": healthy, "codex": {RequestSeen: true, ResponseRead: true, Notices: []string{"approval_policy falls back to OnRequest"}}}
-	rep := Run(context.Background(), d)
-	c := byName(rep, "managed-policy:codex")
-	if c.Status != Warn || !strings.Contains(c.Detail, "OnRequest") || c.Fix == "" {
-		t.Fatalf("%+v", c)
-	}
-	if !rep.OK {
-		t.Fatal("a notice blocked runs")
-	}
-}
-
 func TestRunnerPresence(t *testing.T) {
 	d := newDeps(t)
 	d.LookPath = func(n string) (string, error) {
@@ -155,21 +111,6 @@ func TestRunnerPresence(t *testing.T) {
 	}
 	if c := byName(rep, "runner:codex"); c.Status != Warn {
 		t.Errorf("other runner: %+v", c)
-	}
-}
-
-func TestRunnerWithoutEphemeralFails(t *testing.T) {
-	d := newDeps(t)
-	out := d.Output
-	d.Output = func(ctx context.Context, name string, args ...string) (string, error) {
-		if len(args) > 0 && args[0] != "--version" {
-			return "usage: nothing useful", nil
-		}
-		return out(ctx, name, args...)
-	}
-	rep := Run(context.Background(), d)
-	if c := byName(rep, "ephemeral:claude"); c.Status != Fail || !strings.Contains(c.Fix, "--no-session-persistence") {
-		t.Fatalf("%+v", c)
 	}
 }
 
@@ -253,10 +194,10 @@ func TestGateRefusesWithTheFixesAndRemembersBriefly(t *testing.T) {
 	g := NewGate(func(context.Context) Report { calls++; return rep })
 	g.Now = func() time.Time { return now }
 
-	rep = Report{Checks: []Check{{Name: "tool:claude", Status: Fail, Detail: "denied", Fix: "add the allow rule"}}}
+	rep = Report{Checks: []Check{{Name: "runner:claude", Status: Fail, Detail: "not installed", Fix: "install it"}}}
 	err := g.Check(context.Background())
 	var fe *FailedError
-	if !errors.As(err, &fe) || !strings.Contains(err.Error(), "add the allow rule") || !strings.Contains(err.Error(), "runs do not start") {
+	if !errors.As(err, &fe) || !strings.Contains(err.Error(), "install it") || !strings.Contains(err.Error(), "runs do not start") {
 		t.Fatalf("got %v", err)
 	}
 	g.Check(context.Background())
@@ -271,28 +212,5 @@ func TestGateRefusesWithTheFixesAndRemembersBriefly(t *testing.T) {
 	g.Check(context.Background())
 	if calls != 2 {
 		t.Fatalf("pass not remembered: %d runs", calls)
-	}
-}
-
-func TestWorkspaceWriteDisallowedByManagedPolicyIsAFailureWithARemedy(t *testing.T) {
-	d := newDeps(t)
-	d.Probe = fakeProber{"claude": healthy, "codex": {WriteDisallowed: true, Notices: []string{"sandbox_mode falls back to ReadOnly"}}}
-	rep := Run(context.Background(), d)
-	c := byName(rep, "sandbox:codex")
-	if c.Status != Fail || !strings.Contains(c.Detail, "ReadOnly") || !strings.Contains(c.Fix, "allowed_sandbox_modes") || !strings.Contains(c.Fix, "never falls back") {
-		t.Fatalf("%+v", c)
-	}
-	if rep.OK {
-		t.Fatal("doctor passed with workspace-write disallowed")
-	}
-}
-
-func TestWorkspaceWriteAllowedPasses(t *testing.T) {
-	rep := Run(context.Background(), newDeps(t))
-	if c := byName(rep, "sandbox:codex"); c.Status != Pass {
-		t.Fatalf("%+v", c)
-	}
-	if c := byName(rep, "sandbox:claude"); c.Status != "absent" {
-		t.Errorf("claude has a sandbox check: %+v", c)
 	}
 }

@@ -64,6 +64,8 @@ var commands = []command{
 		"approve a proposed change (confirms at a terminal and asks for your approval credential)"},
 	{"Sites", "site gate-reject", "ID", "reject a proposed gate change", ""},
 	{"Sites", "site list", "", "list Sites", ""},
+	{"Sites", "site probe", "NAME", "run a Site's trust probe again",
+		"start a Session of each installed runner in the Site's worktree folder,\nto capture folder trust (and Codex's hook trust) once; registering a Site does\nthis. A dialog it waits at raises a Needs-you item: answer it in the probe's\nwindow, then run this again to re-check"},
 	{"Sites", "site remove", "NAME", "unregister a Site and delete its clone",
 		"unregister a Site and delete its clone (Job history is kept)"},
 	{"Sites", "site resolve", "DIR", "show the Site whose remote is DIR's git origin",
@@ -112,7 +114,7 @@ var commands = []command{
 	{"Works", "works stop", "", "stop the Works", ""},
 	{"Works", "works upgrade", "", "restart the Works on this binary",
 		"restart the Works on this binary (migrating the database, keeping the three\nmost recent pre-migration copies); refuses while runs are active unless you confirm"},
-	{"Works", "queue show", "", "show running and queued Wrights, the caps and any runner pause", ""},
+	{"Works", "queue show", "", "show running and queued Wrights and the caps", ""},
 	{"Works", "catalogue show", "", "show the loaded Guilds and Jigs and any that failed to load", ""},
 	{"Works", "catalogue reload", "", "re-read definitions from the config directory",
 		"re-read definitions from the config directory; an invalid one keeps its\nprevious good version and is reported"},
@@ -121,6 +123,7 @@ var commands = []command{
 // internalCommands are agent-only: hidden from the top-level listing, shown by `help internal`.
 var internalCommands = []command{
 	{"Internal", "hook", "session-start|prompt|post-tool|stop", "the Archwright's runner hooks (rehydrate, inbox)", ""},
+	{"Internal", "session-hook", "", "a Session's hooks: report its state to the Works (observe-only)", ""},
 	{"Internal", "tool", "NAME [--id ID] [--wait D]", "call a Works tool inside a run",
 		"call a Works tool inside a run: JSON on stdin, JSON on stdout\n(exit 75 if the Works does not answer within D, default 60s)"},
 	{"Internal", "ask record", "ID", "record a page's submitted answer, inside a run",

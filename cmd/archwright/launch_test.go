@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"os"
@@ -286,5 +287,34 @@ func TestHookOutsideARunFailsPlainly(t *testing.T) {
 	s := newSandbox(t)
 	if out, err := s.cmd("", "hook", "prompt"); err == nil || !strings.Contains(out, "not inside a run") {
 		t.Fatalf("%v\n%s", err, out)
+	}
+}
+
+// The Archwright the Works hosts is attached to, not run here: the terminal
+// is joined to its window in the Works' own tmux server, whose own TMUX
+// variable is not the developer's.
+func TestAttachArchwrightJoinsTheArchwrightWindowOfTheWorksTmux(t *testing.T) {
+	out := t.TempDir()
+	fakeTmux := filepath.Join(t.TempDir(), "tmux")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"" + out + "/args\"\nprintf '%s' \"${TMUX-unset}\" > \"" + out + "/tmuxenv\"\nexit ${FAKE_TMUX_EXIT:-0}\n"
+	if err := os.WriteFile(fakeTmux, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMUX", "/private/dev-tmux,1,0")
+	if err := attachArchwright(func(k string) string { return map[string]string{works.EnvTmuxBinary: fakeTmux}[k] }); err != nil {
+		t.Fatal(err)
+	}
+	args, _ := os.ReadFile(filepath.Join(out, "args"))
+	if string(args) != "-L\narchwright\nattach-session\n-t\n=factory:archwright\n" {
+		t.Errorf("tmux was run with %q", args)
+	}
+	if env, _ := os.ReadFile(filepath.Join(out, "tmuxenv")); string(env) != "" {
+		t.Errorf("TMUX = %q, want it cleared so tmux attaches rather than refusing to nest", env)
+	}
+	t.Setenv("FAKE_TMUX_EXIT", "3")
+	err := attachArchwright(func(k string) string { return map[string]string{works.EnvTmuxBinary: fakeTmux}[k] })
+	var ee *exitError
+	if !errors.As(err, &ee) || ee.code != 3 {
+		t.Errorf("err = %v, want tmux's exit status carried", err)
 	}
 }

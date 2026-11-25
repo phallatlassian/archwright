@@ -40,7 +40,7 @@ func TestDeliverSkillsForAShippedGuild(t *testing.T) {
 		}
 	}
 
-	// the forked pr skill is what arrives, not upstream's
+	// the forked pr skill, which opens the PR with plain gh, is what arrives, not upstream's
 	pr, err := os.ReadFile(filepath.Join(wt, ".agents/skills/pr/SKILL.md"))
 	if err != nil {
 		t.Fatalf("pr is not delivered to Masonry: %v", err)
@@ -49,8 +49,18 @@ func TestDeliverSkillsForAShippedGuild(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(pr) == string(up) || strings.Contains(string(pr), "gh pr create") {
-		t.Errorf("the delivered pr skill is not the Forge fork:\n%s", pr)
+	if string(pr) == string(up) {
+		t.Errorf("the delivered pr skill is upstream's, not the fork:\n%s", pr)
+	}
+	for _, want := range []string{"`gh pr create", "`git -C <worktree> push origin <branch>`", "archwright tool record_pr", "`gh issue view <URL>`"} {
+		if !strings.Contains(string(pr), want) {
+			t.Errorf("the delivered pr skill lacks %q", want)
+		}
+	}
+	for _, gone := range removedForgeTools {
+		if strings.Contains(string(pr), gone) {
+			t.Errorf("the delivered pr skill still names the removed tool %s", gone)
+		}
 	}
 
 	// A Site tracking a same-named skill fails the run with the collision in the message.

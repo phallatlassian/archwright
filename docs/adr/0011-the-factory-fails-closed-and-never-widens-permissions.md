@@ -7,3 +7,7 @@ A never-list is hard-coded in the adapters and not configurable: never pass `byp
 Amended by ADR 0023: a Codex Wright step that writes gets `-s workspace-write` with Works-computed writable roots, a bounded exception to the rule above.
 
 Amended by ADR 0025: the Works also runs a Wright's gates and makes its commits, so a Wright's checks need no allow rule.
+
+Superseded by ADR 0027: permissions are spawn rules; a human answers prompts in the pane and hooks only observe.
+
+Superseded in part by ADR 0028: a Wright runs its own checks and makes its own commits again; the Works no longer runs gates or commits for it.

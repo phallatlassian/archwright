@@ -25,27 +25,19 @@ const DefaultTimeout = 30 * time.Minute
 // test), and runs every one even when an earlier gate fails, so the record is
 // complete. A gate with no command is skipped.
 func Run(ctx context.Context, dir string, g store.Gates, timeout time.Duration) []store.GateResult {
-	return RunNamed(ctx, dir, g, timeout, "")
-}
-
-// Names are the gate names, in the order they run.
-var Names = []string{store.GateTypecheck, store.GateLint, store.GateTest}
-
-// RunNamed is Run limited to the one gate called only; an empty only runs all.
-func RunNamed(ctx context.Context, dir string, g store.Gates, timeout time.Duration, only string) []store.GateResult {
 	if timeout <= 0 {
 		timeout = DefaultTimeout
 	}
 	var out []store.GateResult
 	commands := map[string]string{store.GateTypecheck: g.Typecheck, store.GateLint: g.Lint, store.GateTest: g.Test}
 	for _, name := range Names {
-		if only != "" && only != name {
-			continue
-		}
 		out = append(out, runOne(ctx, dir, name, commands[name], timeout))
 	}
 	return out
 }
+
+// Names are the gate names, in the order they run.
+var Names = []string{store.GateTypecheck, store.GateLint, store.GateTest}
 
 func runOne(ctx context.Context, dir, name, command string, timeout time.Duration) store.GateResult {
 	r := store.GateResult{Gate: name, Command: command, Status: store.GateSkipped}

@@ -29,6 +29,9 @@ type BoardJob struct {
 	CostUSD       float64 `json:"cost_usd"`
 	InputTokens   int     `json:"input_tokens"`
 	OutputTokens  int     `json:"output_tokens"`
+	// PRStatus is the Works' own latest reading of the Job's PR and its CI
+	// (ADR 0028); nil until it has read one.
+	PRStatus *PRStatus `json:"pr_status,omitempty"`
 }
 
 // Board lists every Job across Sites with the state it sits in.

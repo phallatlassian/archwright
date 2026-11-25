@@ -14,20 +14,20 @@ const (
 	signInGH  = "sign in yourself with `gh auth login` (the factory never signs in for you or stores a credential); then re-run `archwright doctor`"
 )
 
-// checkForge checks the developer's gh, which the Works runs every GitHub
-// Forge action through (ADR 0022): installed, then signed in. It reads only
-// (`gh auth status`) and prints the remedy; it never installs or signs in.
-// The tool transport the Forge tools travel over is checked per runner
-// (checkProbe), under the same spool root real runs use.
+// checkForge checks the developer's gh, which agents open PRs with and the
+// Works reads their state through (ADR 0028): installed, then signed in. It
+// reads only (`gh auth status`) and prints the remedy; it never installs or
+// signs in. Whether an agent's `gh` and `git push` prompt is checked by
+// checkPrompts.
 //
 // gh blocks runs only while a registered Site is on a host the Works has a
-// GitHub adapter for. A Site on an unsupported host still works locally
-// (ADR 0022), and with no such Site a gh problem is only a warning.
+// GitHub adapter for. A Site on another host still works locally, and with no
+// such Site a gh problem is only a warning.
 func checkForge(ctx context.Context, r *collector, d Deps, snap *store.Snapshot) {
 	needers := forgeSites(snap)
 	problem := func(name, detail, fix string) {
 		if len(needers) > 0 {
-			r.fail(name, fmt.Sprintf("%s; Site(s) %s open PRs through it", detail, strings.Join(needers, ", ")), fix)
+			r.fail(name, fmt.Sprintf("%s; Site(s) %s open PRs and read their state through it", detail, strings.Join(needers, ", ")), fix)
 			return
 		}
 		r.warn(name, detail+" (no registered Site is on GitHub, so runs are not blocked)", fix)
@@ -35,7 +35,7 @@ func checkForge(ctx context.Context, r *collector, d Deps, snap *store.Snapshot)
 
 	bin, err := d.LookPath("gh")
 	if err != nil {
-		problem("forge:gh", "`gh` is not installed or not on PATH, so the Works cannot read issues, push or open PRs on GitHub", installGH)
+		problem("forge:gh", "`gh` is not installed or not on PATH, so agents cannot open PRs on GitHub and the Works cannot read their state", installGH)
 		return
 	}
 	r.pass("forge:gh", "%s", bin)
@@ -56,8 +56,8 @@ func checkForge(ctx context.Context, r *collector, d Deps, snap *store.Snapshot)
 	}
 }
 
-// forgeSites names the registered Sites whose remote the Works can open PRs
-// on; none when the registry is unreadable or empty.
+// forgeSites names the registered Sites whose remote the Works can read PRs
+// of; none when the registry is unreadable or empty.
 func forgeSites(snap *store.Snapshot) []string {
 	if snap == nil {
 		return nil

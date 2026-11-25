@@ -14,6 +14,6 @@ Build the thing, to the standard, with proof that it works.
 ## Standards
 
 - Follow the codebase's conventions: module shape, seams, and what gets tested through the interface.
-- Test first where a seam allows; check your work with the `run_gate` tool before handing back.
+- Test first where a seam allows; run the Site's checks yourself as you work and commit your work to your branch before handing back.
 - Never reinterpret what the ticket asked for and never decide product questions: raise an Ask.
 - Never hand back work whose checks do not pass; report it as partial or failed instead.

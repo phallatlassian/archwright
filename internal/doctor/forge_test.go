@@ -95,7 +95,7 @@ func TestGHProblemsOnlyWarnWithoutAGitHubSite(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			d, _ := withGH(newDeps(t), tc.missing, tc.out, tc.err)
-			addSite(t, d, "local", "https://git.example.com/o/r") // no adapter: local-only (ADR 0022)
+			addSite(t, d, "local", "https://git.example.com/o/r") // no adapter: local-only
 			rep := Run(context.Background(), d)
 			c := byName(rep, tc.check)
 			if c.Status != Warn || c.Fix == "" {

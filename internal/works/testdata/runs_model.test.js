@@ -83,7 +83,7 @@ const tests = {
   'a transcript pairs each tool call with its output and reads the run as a conversation'() {
     const evs = [
       { seq: 1, kind: 'posture', summary: 'claude 2.1: default mode', has_raw: true, at: at(0) },
-      { seq: 2, kind: 'started', summary: 'session started', has_raw: true, at: at(0) },
+      { seq: 2, kind: 'session', summary: 'idle', has_raw: false, at: at(0) },
       { seq: 3, kind: 'other', summary: '', has_raw: true, at: at(0) },
       { seq: 4, kind: 'message', summary: 'Listing the directory.', has_raw: true, at: at(1) },
       { seq: 5, kind: 'tool_use', summary: 'Bash: ls', has_raw: true, at: at(1) },

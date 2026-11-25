@@ -565,8 +565,6 @@ func seed(w *mockWorld) {
 		{DispatchID: "d-1202", Job: j12.Job.ID, Piece: "bump-runtime", Guild: "masonry", Site: "billing-api"}}
 	w.Queue.Queued = []works.QueueEntry{{DispatchID: "d-902", Job: j9.Job.ID, Piece: "implement", Guild: "masonry", Site: "billing-api", Position: 1, Waiting: "Warden cap (2 of 2 masonry Wrights running)"}}
 	w.NeedsYou = append(w.NeedsYou,
-		store.NeedsYouItem{ID: 2, Kind: store.NeedsPermissionWanted, JobID: j1.Job.ID, Site: "billing-api",
-			Summary: "A runner denied `npm install left-pad`, which would have prompted.", Detail: json.RawMessage(`{"tool":"Bash","command":"npm install left-pad","runner":"codex"}`), CreatedAt: ago(4 * time.Minute)},
 		store.NeedsYouItem{ID: 3, Kind: store.NeedsScopeOverlap, JobID: j9.Job.ID, Site: "billing-api",
 			Summary: "Piece implement overlaps files with j-7f3a21 (src/webhooks/sender.ts).", Detail: json.RawMessage(`{}`), CreatedAt: ago(1 * time.Minute)},
 		store.NeedsYouItem{ID: 4, Kind: store.NeedsAsk, JobID: j3.Job.ID, Site: "archwright", Summary: "Ask ask-1 reached the Archwright.", Detail: json.RawMessage(`{}`), CreatedAt: ago(25 * time.Minute)},

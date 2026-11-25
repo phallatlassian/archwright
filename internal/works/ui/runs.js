@@ -120,7 +120,7 @@ function transcriptItems(evs, raws) {
     if (wantsText && !got) fromSummary++;
     if (!e.summary && !wantsText) continue; // an empty vendor event says nothing
     switch (e.kind) {
-      case 'other': case 'posture': case 'started':
+      case 'other': case 'posture':
         items.push({ type: 'note', text: e.summary });
         break;
       case 'message':
@@ -144,9 +144,6 @@ function transcriptItems(evs, raws) {
         else items.push({ type: 'tool', at: e.at, name: 'output', command: firstLine(text), output: text, failed, outputAt: e.at });
         break;
       }
-      case 'permission_denied':
-        items.push({ type: 'note', text: e.summary, failed: true });
-        break;
       default:
         items.push({ type: 'note', text: e.kind + ': ' + e.summary });
     }

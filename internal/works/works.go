@@ -18,7 +18,9 @@ import (
 
 	"github.com/phallatlassian/archwright/internal/config"
 	"github.com/phallatlassian/archwright/internal/defs"
+	"github.com/phallatlassian/archwright/internal/envsnap"
 	"github.com/phallatlassian/archwright/internal/forge"
+	"github.com/phallatlassian/archwright/internal/launch"
 	"github.com/phallatlassian/archwright/internal/paths"
 	"github.com/phallatlassian/archwright/internal/sites"
 	"github.com/phallatlassian/archwright/internal/skills"
@@ -121,8 +123,27 @@ func ServeWith(ctx context.Context, d paths.Dirs, ready chan<- struct{}, opts Op
 	ReloadDefinitions(reg)
 	runs.UseDefinitions(reg)
 	guilds := GuildsFromRegistry(reg, DefaultProfiles(), skills.Vendored())
-	runs.Configure(guilds, WrightRunnerFrom(os.Getenv, guilds, st))
-	warden, reviewer := WardenRunnersFrom(os.Getenv, guilds, st)
+	wrights, err := WrightRunnerFrom(os.Getenv, guilds, st)
+	if err != nil {
+		return err
+	}
+	runs.Configure(guilds, wrights)
+	warden, reviewer := WardenRunnersFrom(wrights)
+	// The shell environment Sessions are spawned with: what the CLI that
+	// started this Works had, allow-listed, and then what each CLI call reports.
+	env := envsnap.NewHolder(os.Environ())
+	runs.UseEnv(env)
+	if sr, ok := wrights.(*SessionRunner); ok { // Sessions in tmux: the Works owns the Archwright too
+		sr.UseBaseEnv(env.Get)
+		runs.UseTrustProbe(&TrustProber{St: st, Sites: sm, Runners: sr.Runners, Installed: cliInstalled(os.Getenv)})
+		runs.UseSessions(sr, 0)
+		runs.UseArchwright(&ArchwrightHost{
+			Runners:   sr.Runners,
+			Choice:    func() (string, error) { return config.Runner(d) },
+			Home:      launch.Home(d),
+			SpoolRoot: func(runner string) string { return launch.SpoolRoot(runner, os.Getuid(), os.TempDir()) },
+		})
+	}
 	runs.ConfigureWarden(warden)
 	if reviewer != nil {
 		runs.ConfigureReview(reviewer)
@@ -130,6 +151,11 @@ func ServeWith(ctx context.Context, d paths.Dirs, ready chan<- struct{}, opts Op
 	runs.UseSkills(SkillsDelivery{Catalogue: skills.Vendored(), RunDir: d.RunDir})
 	runs.SetLimits(LimitsFromEnv(os.Getenv))
 	runs.SetRetention(func() (time.Duration, error) { return config.Retention(d) })
+	if rec, err := runs.RecoverSessions(); err != nil {
+		log.Printf("recovering Sessions: %v", err)
+	} else if rec.Adopted+rec.Resumable+rec.Lost+len(rec.Orphans) > 0 {
+		log.Printf("Sessions of the last Works: %d adopted, %d to resume, %d lost, %d orphaned", rec.Adopted, rec.Resumable, rec.Lost, len(rec.Orphans))
+	}
 	if err := runs.Resume(); err != nil {
 		return err
 	}

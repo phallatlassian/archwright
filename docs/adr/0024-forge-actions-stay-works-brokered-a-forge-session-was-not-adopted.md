@@ -10,3 +10,5 @@ Not adopted, kept as a primary source: the prototype on branch `prototype/forge-
 
 - The Works cannot run `gh` on a real install (no Keychain access for the daemon, no `gh` on its PATH): the Forge seam of ADR 0022 would then get a session-backed adapter, built from the prototype, with the ADR 0011 exception written at that point.
 - The scope widens to `pnpm`, `go test`, installs: a session that runs arbitrary build commands is a different decision.
+
+Superseded by ADR 0028, with ADR 0022 (a note only).

@@ -1,0 +1,13 @@
+# Permissions are spawn rules: a human answers prompts in the pane, and hooks only observe
+
+Agents run under exactly the permissions of the developer running `claude` or `codex` from a terminal, under the company managed policy. In a Session that means the runner's default mode, so a prompt appears in the pane of the agent that raised it and the developer approves or denies it themselves. This supersedes ADR 0011, whose fail-closed model (deny the prompt, return `blocked`, relay a "permission wanted" item) existed because a headless run had nobody to ask, and supersedes ADR 0023, whose Codex `workspace-write` exception is unnecessary now that Codex also starts at its default.
+
+The never-list stays, as spawn rules the adapters enforce and the developer cannot configure away: never pass `bypassPermissions`, `--dangerously-*`, `--yolo`, `danger-full-access`, a permission mode or approval policy more permissive than the runner's default, or `--approve-for-me`; never write a settings file or add an allow rule; never disable the sandbox; never pass `--settings` or `--mcp-config` that overrides managed keys. Adapters refuse to spawn when asked to. Retired: `permission_denied` events, denial-to-`blocked`, and the "permission wanted" inbox path.
+
+The Works never approves a prompt for an agent and never types an answer: not through a hook, not through a keystroke, and not through the Archwright. Hooks are observe-only: they report state and permission requests to the Works and never return allow or deny or change settings or rules (ADR 0014 stands). A pending prompt raises a Needs-you item (role, tool, exact command, pane) with pane and window markers; the developer attaches and answers. Prompts never time out and are never auto-answered.
+
+Confinement is developer-level: a Wright's working directory is its worktree (ADR 0008) and the runner's own prompts guard the rest; the Works builds no confinement of its own. A Guild can still only narrow, never widen (ADR 0009), so read-only Guilds keep narrowing flags and detached worktrees.
+
+If hooks are unavailable (managed policy blocks them, or Codex hook trust was not granted) the factory degrades visibly rather than refusing: `archwright doctor` reports it, state falls back to the pane, the transcript and silence, the dashboard marks state as unreliable, and handback still travels by `archwright tool`. Sessions spawn only into directories the developer has trusted, captured once at Site registration by a probe Session (`docs/spec/tmux-runtime.md`); the Works never writes trust configuration.
+
+Supersedes ADR 0011 and ADR 0023.

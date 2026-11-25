@@ -194,3 +194,60 @@ func TestRunBriefIsTheRecordedPromptWithFallbacks(t *testing.T) {
 		t.Fatalf("purge dropped the brief: %+v", got)
 	}
 }
+
+func TestRunRecordsKeepWhereASessionLivesAndItsState(t *testing.T) {
+	s, _ := open(t)
+	j, _ := s.CreateJob("job", "")
+	if err := s.StartRunRecord("r-1", j.ID, "dsp-1", "masonry", "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ := s.GetRunRecord("r-1")
+	if rec.PaneID != "" || rec.SessionState != "" {
+		t.Fatalf("a run with no Session reports one: %+v", rec)
+	}
+	b, _ := json.Marshal(rec)
+	if strings.Contains(string(b), "pane_id") || strings.Contains(string(b), "session_state") {
+		t.Fatalf("a run with no Session reports one: %s", b)
+	}
+	if err := s.SetRunSession("r-1", SessionRecord{PaneID: "%7", State: "starting"}); err != nil {
+		t.Fatal(err)
+	}
+	// The vendor's ids arrive later; a later update that has not learned them must not blank the pane.
+	if err := s.SetRunSession("r-1", SessionRecord{SessionID: "sess-1", TranscriptPath: "/t/sess-1.jsonl", State: "idle"}); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ = s.GetRunRecord("r-1")
+	if rec.PaneID != "%7" || rec.SessionID != "sess-1" || rec.TranscriptPath != "/t/sess-1.jsonl" || rec.SessionState != "idle" {
+		t.Fatalf("run = %+v", rec)
+	}
+	if err := s.SetRunSession("nope", SessionRecord{PaneID: "%1", State: "idle"}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestLiveSessionRunsListsTheNewestRunOfEachPaneWhoseSessionWasNotEnded(t *testing.T) {
+	s, _ := open(t)
+	j, _ := s.CreateJob("job", "")
+	for _, id := range []string{"r-1", "r-2", "r-3", "r-4", "r-5", "r-6"} {
+		if err := s.StartRunRecord(id, j.ID, "", "masonry", "", "", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.SetRunSession("r-1", SessionRecord{PaneID: "%1", SessionID: "s1", State: "idle", Dir: "/wt/1", Runner: "claude"})
+	s.SetRunSession("r-2", SessionRecord{PaneID: "%2", State: "idle"})
+	s.SetRunSession("r-3", SessionRecord{PaneID: "%3", State: "working"})
+	// A Session that carried r-2 and then r-4, and has since ended: no live Session, whatever r-2 last said.
+	s.SetRunSession("r-4", SessionRecord{PaneID: "%2", State: "ended"})
+	// r-5 never had a Session; r-6 is a later run of r-1's.
+	s.SetRunSession("r-6", SessionRecord{PaneID: "%1", SessionID: "s1", State: "working", Dir: "/wt/1", Runner: "claude"})
+	live, err := s.LiveSessionRuns()
+	if err != nil || len(live) != 2 || live[0].RunID != "r-6" || live[1].RunID != "r-3" {
+		t.Fatalf("live = %+v, %v", live, err)
+	}
+	if got := live[0]; got.SessionDir != "/wt/1" || got.Runner != "claude" || got.SessionID != "s1" {
+		t.Fatalf("record = %+v", got)
+	}
+	if runs, err := s.PaneRuns("%1"); err != nil || len(runs) != 2 || runs[0] != "r-1" || runs[1] != "r-6" {
+		t.Fatalf("pane runs = %v, %v", runs, err)
+	}
+}

@@ -32,7 +32,7 @@ type ReviewRequest struct {
 	Trace    Trace             // where a runner reports its timeline and usage for the dashboard
 }
 
-// ReviewRunner carries out one review run (ADR 0003). An error, or returning
+// ReviewRunner carries out one review run (ADR 0026). An error, or returning
 // without a report, errors the review: it says nothing about the work.
 type ReviewRunner interface {
 	RunReview(ctx context.Context, req ReviewRequest) error
@@ -103,6 +103,9 @@ func specMaterial(st *store.Store, job store.Job) (basis, material string, err e
 	fmt.Fprintf(&w, "Original request: %s\n", job.Title)
 	if !blank(job.Description) {
 		w.WriteString("\n" + strings.TrimSpace(job.Description) + "\n")
+	}
+	if !blank(job.SourceIssue) {
+		w.WriteString("\nSource issue: " + strings.TrimSpace(job.SourceIssue) + "\n")
 	}
 	if len(briefs) > 0 {
 		w.WriteString("\nPlan step briefs:\n\n" + strings.Join(briefs, "\n") + "\n")

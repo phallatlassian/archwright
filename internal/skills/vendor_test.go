@@ -153,7 +153,7 @@ func TestImplementForkLacksTheInstructionsAWrightCannotFollow(t *testing.T) {
 			t.Errorf("implement still says %q", banned)
 		}
 	}
-	for _, want := range []string{"read_issue", "run_gate", "archwright tool ask", "Never run `git add` or `git commit`"} {
+	for _, want := range []string{"gh issue view", "archwright tool ask", "Commit your work"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("implement does not say %q", want)
 		}
@@ -164,12 +164,12 @@ func TestImplementForkLacksTheInstructionsAWrightCannotFollow(t *testing.T) {
 }
 
 // Every fork a Wright or Warden of Masonry, Survey or Hallmark follows reads
-// the Job's issue with read_issue and asks with archwright tool ask (#160).
+// the Job's issue with gh issue view and asks with archwright tool ask (#160).
 func TestForksOfTheSkillUsingGuildsUseTheWorksTools(t *testing.T) {
 	for _, guild := range skillUsingGuilds {
 		for _, s := range shippedGuildSkills(t, guild) {
 			b, _ := readFile(s, "SKILL.md")
-			for _, want := range []string{"read_issue", "archwright tool ask"} {
+			for _, want := range []string{"gh issue view", "archwright tool ask"} {
 				if !strings.Contains(string(b), want) {
 					t.Errorf("%s (%s) does not mention %s", s.Name, guild, want)
 				}

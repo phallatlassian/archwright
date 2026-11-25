@@ -69,7 +69,7 @@ func errFor(r *Registry, kind, name string) *LoadError {
 }
 
 // The fix and build Jigs end with the open-pr step, blocked by review (ADR 0021):
-// open_pr and push_branch work only for the Warden of a running open-pr step.
+// record_pr works only for the Warden of a running open-pr step.
 func TestShippedJigsEndWithOpenPR(t *testing.T) {
 	r := New(Shipped(), "")
 	if errs := r.Reload(); len(errs) != 0 {

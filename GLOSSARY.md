@@ -5,7 +5,7 @@ An agent-driven software factory: one developer-facing agent routes work through
 ## Language
 
 **Archwright**:
-The single agent the developer talks to: one for the whole factory, an interactive claude or codex session. Holds the plan, routes work to Guilds, reports back in one voice.
+The single agent the developer talks to: one for the whole factory, an interactive claude or codex Session that the Works spawns and owns. Holds the plan, routes work to Guilds, reports back in one voice.
 _Avoid_: orchestrator, main agent, overseer, the daemon, the CLI
 
 **The Works**:
@@ -17,11 +17,11 @@ A git repository, registered with the Works by remote URL, whose project-level c
 _Avoid_: Project, repo, workspace
 
 **Forge**:
-The service that hosts a Site's repository, issues and pull requests (GitHub, today). Agents never talk to it directly: the Works does, on their behalf, within what their role permits.
+The service that hosts a Site's repository, issues and pull requests (GitHub, today). Agents may reach it directly, as the developer, under the developer's own permissions; the Works reads its state itself.
 _Avoid_: remote, host, provider
 
 **Runner**:
-A vendor agent CLI (claude or codex) the Works can run an agent on, reached through an adapter.
+A vendor agent CLI (claude or codex) the Works can run an agent on, as an interactive Session, reached through an adapter.
 _Avoid_: backend, provider, engine
 
 **Guild**:
@@ -29,12 +29,24 @@ A standing body responsible for one kind of work, owning that craft's standards,
 _Avoid_: department, team, agent type
 
 **Warden**:
-A Guild's lead. Accepts a task from the Archwright, splits it, dispatches Wrights, and inspects what returns before it leaves the Guild.
+A Guild's lead, standing for the Job: one per Guild, carrying out that Guild's steps in turn. Accepts a task from the Archwright, splits it, dispatches Wrights, and inspects what returns before it leaves the Guild.
 _Avoid_: manager, supervisor, lead agent
 
 **Wright**:
 A worker that does one scoped piece of work from a brief and returns the result, knowing nothing of the wider plan.
 _Avoid_: worker, subagent, sub-agent
+
+**Session**:
+A live interactive claude or codex process that carries out a run.
+_Avoid_: process, terminal, pane
+
+**Nudge**:
+The Works delivering text to an idle Session.
+_Avoid_: ping, poke, interrupt
+
+**Trust probe**:
+A Session the Works launches at Site registration, in the Site's folder under the worktree root (the parent of its Job worktrees), so the developer accepts each runner's folder trust (and Codex's hook trust) once. A Session that starts is the evidence both were given and the hooks reach the Works.
+_Avoid_: trust check, warm-up
 
 **Job**:
 One developer request, followed end to end through the factory.
@@ -45,7 +57,7 @@ The task graph the Archwright holds for one Job: steps for Guilds, with blocking
 _Avoid_: workflow, pipeline
 
 **Step**:
-One unit of a Plan: work for a named Guild that the Archwright starts and a fresh Warden carries out, with blockers, an optional human checkpoint, and a status. A Job has no stage that is not a step. A step sent back for rework is run again as another attempt, and the Plan stays as approved (ADR 0021).
+One unit of a Plan: work for a named Guild that the Archwright starts and the Guild's Warden carries out, with blockers, an optional human checkpoint, and a status. A Job has no stage that is not a step. A step sent back for rework is run again as another attempt, and the Plan stays as approved (ADR 0021).
 _Avoid_: stage, phase, task
 
 **Jig**:
@@ -73,7 +85,7 @@ The one inspected result a Warden returns to the Archwright: done, partial or fa
 _Avoid_: report, response
 
 **Gate run**:
-The Works running a Site's registered gate commands (type-check, lint, test) on a snapshot of work in a throwaway checkout, outside any agent sandbox. A Wright may ask for one mid-piece; the one on handback is the authoritative check.
+The Works running a Site's registered gate commands (type-check, lint, test) on a snapshot of work in a throwaway checkout, outside any agent. The one on handback is the authoritative check; agents run the Site's checks themselves as they work.
 _Avoid_: CI, test run, check
 
 **Snapshot**:
@@ -81,9 +93,9 @@ A throwaway copy of a Wright's worktree, tracked and untracked files, that the W
 _Avoid_: checkout, backup
 
 **Review**:
-A Plan step, started by the Archwright after Masonry's handback and run by a fresh read-only Warden that shares no context with the builder. It reports Standards and Spec independently as pass, fail or not evaluated, with findings tied to file and line. One fail sends the Job back to Masonry once, automatically; a second parks it. The PR go-ahead needs an overall pass (ADR 0012).
+A Plan step, started by the Archwright after Masonry's handback and run by a read-only Warden that shares no context with the builder. It reports Standards and Spec independently as pass, fail or not evaluated, with findings tied to file and line. One fail sends the Job back to Masonry once, automatically; a second parks it. The PR go-ahead needs an overall pass (ADR 0012).
 _Avoid_: code review, QA, approval
 
 **Ask**:
-A structured request for a human, raised by a Warden or Wright: questions with options and a recommended default, a kind (decision, manual step or clarification), and whether it blocks. The Works routes it up (Wright to Warden to Archwright to developer), parks the asking task, and re-dispatches it with the Q&A record once answered. The first answer wins; an Ask never expires.
+A structured request for a human, raised by a Warden or Wright: questions with options and a recommended default, a kind (decision, manual step or clarification), and whether it blocks. The Works routes it up (Wright to Warden to Archwright to developer); the asker's Session stays open and the answer is Nudged in, with a fresh run from the Q&A record only if the Session is gone. The first answer wins; an Ask never expires.
 _Avoid_: question, prompt, notification

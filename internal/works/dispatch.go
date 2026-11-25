@@ -74,6 +74,9 @@ type RunRequest struct {
 	Piece      string
 	DispatchID string
 	Worktree   string            // the Wright's own worktree; empty when the Works has no Sites
+	Rework     bool              // a piece sent back, or an answered Ask, in the worktree of its Wright's open Session: the Session is Nudged, not relaunched
+	Answered   bool              // the Nudge carries the answer to the Ask that parked the piece, not an amended brief
+	Restarted  bool              // the run takes over from one a stopped Works left running: the Session it continues was adopted or is resumed
 	Brief      string            // the rendered brief, Guild standards included
 	ExtraEnv   map[string]string // further variables for the runner process, such as GIT_CONFIG_GLOBAL for delivered skills
 	Trace      Trace             // where a runner reports its timeline and usage for the dashboard
@@ -101,9 +104,17 @@ func (t Trace) Consumed(runner string, inputTokens, outputTokens int, costUSD fl
 	}
 }
 
-// Runner carries out one Wright run (ADR 0003). Real adapters spawn a vendor
-// CLI; the fake runner plays a script. An error, or returning without a
-// report, fails the dispatch.
+// SessionReuser is a Runner that keeps the Sessions of its Wrights open after
+// they report, so a rework can be Nudged into one (ADR 0029).
+type SessionReuser interface {
+	// Reusable is the worktree of the open Session that carried out the piece
+	// of the job, or "" when it has none: never had one, or it has ended.
+	Reusable(job, piece string) string
+}
+
+// Runner carries out one Wright run (ADR 0026). The SessionRunner hosts it as
+// an interactive Session of a vendor CLI; the fake runner plays a script. An
+// error, or returning without a report, fails the dispatch.
 type Runner interface {
 	Run(ctx context.Context, req RunRequest) error
 }
@@ -245,7 +256,7 @@ func dispatchWright(c *callCtx, in json.RawMessage) (any, error) {
 		return nil, err
 	}
 	if isMergeWright(a.Piece) {
-		return nil, fmt.Errorf("%w: the %q and %q piece prefixes are reserved for merge Wrights", errInvalidInput, mergeBasePiece+"-", mergePiecePiece+"-")
+		return nil, fmt.Errorf("%w: the %q piece prefix is reserved for merge Wrights", errInvalidInput, mergePiecePiece+"-")
 	}
 	g, err := c.warden()
 	if err != nil {
@@ -283,7 +294,7 @@ func reworkWright(c *callCtx, in json.RawMessage) (any, error) {
 		return nil, err
 	}
 	if isMergeWright(a.Piece) {
-		return nil, fmt.Errorf("%w: merge Wright pieces cannot be reworked; call merge_base or accept_piece again", errInvalidInput)
+		return nil, fmt.Errorf("%w: merge Wright pieces cannot be reworked; accept the piece again", errInvalidInput)
 	}
 	g, err := c.warden()
 	if err != nil {
@@ -474,14 +485,6 @@ func reportResult(c *callCtx, in json.RawMessage) (any, error) {
 	if err := a.Validate(); err != nil {
 		return nil, err
 	}
-	d, err := c.st.GetDispatch(c.run.ctx.DispatchID)
-	if err != nil {
-		return nil, err
-	}
-	c.runs.mu.Lock()
-	wt := c.runs.wrightWts[d.ID]
-	c.runs.mu.Unlock()
-	c.runs.commitWright(d, wt, a, c.runs.traceFor(c.run.id)) // before the dispatch reads as reported, so the Warden never acts on uncommitted work
 	raw, _ := json.Marshal(a)
 	if err := c.st.RecordResult(c.run.ctx.DispatchID, raw); err != nil {
 		return nil, err
@@ -578,7 +581,7 @@ func (r *Runs) failDispatch(id, msg string) {
 
 // start launches the Wright run for a dispatch the scheduler has released.
 // The run ends when the Runner returns: a dispatch that never reported then
-// fails, unless the Runner was rate-limited, which requeues it.
+// fails.
 func (r *Runs) start(d store.Dispatch) error {
 	r.mu.Lock()
 	runner, closed := r.runner, r.bg.Err() != nil
@@ -624,35 +627,48 @@ func (r *Runs) start(d store.Dispatch) error {
 	go func() {
 		defer r.wg.Done()
 		defer cancel()
-		wt, from, runErr := r.wrightWorktree(d)
+		wt, from, reused, runErr := r.wrightWorktree(d)
+		answered := reused && r.followsAnswer(d)
+		restarted := reused && r.followsRestart(d)
 		brief := d.Rendered
 		if runErr == nil && d.Round > 0 && !isMergeWright(d.Piece) && wt != "" {
-			brief += startingPoint(from)
+			switch {
+			case restarted:
+				brief += restartStartingPoint(from)
+			case reused && !answered: // an answer's Session carries on where it stopped and already holds the brief
+				brief += sessionStartingPoint(from)
+			case !reused:
+				brief += startingPoint(from)
+			}
 		}
 		if runErr == nil {
 			r.recordBrief(env.Run, brief) // a run that never starts was not given it
 		}
 		var extra map[string]string
-		if runErr == nil {
+		if runErr == nil { // a reused Session may have ended: a fresh one then needs them
 			extra, runErr = r.deliverSkillsFor(d, env.Run, wt)
 		}
 		if runErr == nil {
-			runErr = runner.Run(ctx, RunRequest{Env: env, Job: d.JobID, Guild: d.Guild, Piece: d.Piece, DispatchID: d.ID, Worktree: wt, Brief: brief, ExtraEnv: extra, Trace: trace})
+			runErr = runner.Run(ctx, RunRequest{Env: env, Job: d.JobID, Guild: d.Guild, Piece: d.Piece, DispatchID: d.ID, Worktree: wt, Rework: reused, Answered: answered, Restarted: restarted, Brief: brief, ExtraEnv: extra, Trace: trace})
+		}
+		if errors.Is(runErr, ErrWorksStopping) {
+			// The Works is stopping and its runner left the Wright's Session open in
+			// its pane. The dispatch stays running, as it does when the Works dies:
+			// the next start finds the Session and takes the work up again.
+			r.End(env.Run)
+			r.mu.Lock()
+			delete(r.cancels, d.ID)
+			r.mu.Unlock()
+			return
 		}
 		unreported := false
 		cur, curErr := r.st.GetDispatch(d.ID)
 		if curErr == nil && cur.Status == store.DispatchRunning {
 			unreported = true
 		}
-		if _, limited := asRateLimit(runErr); unreported && !limited {
-			r.commitWright(d, wt, WrightResult{Status: ResultFailed}, trace) // a run that never reported has failed; a requeued run carries on in the same worktree
-		}
 		r.End(env.Run)
 		r.mu.Lock()
 		wasCancelled := r.cancelled[d.ID]
-		if _, limited := asRateLimit(runErr); !limited || !unreported {
-			delete(r.wrightWts, d.ID) // only a requeued dispatch runs in it again
-		}
 		delete(r.cancels, d.ID)
 		delete(r.cancelled, d.ID)
 		r.mu.Unlock()
@@ -668,23 +684,20 @@ func (r *Runs) start(d store.Dispatch) error {
 		}
 		if wasCancelled && unreported {
 			r.failDispatch(d.ID, cancelledByDeveloper)
-			r.sched.finished(d.ID, false)
-			return
-		}
-		if rl, ok := asRateLimit(runErr); ok && unreported {
-			r.sched.rateLimited(d.ID, rl)
+			r.sched.finished(d.ID)
 			return
 		}
 		if unreported {
 			msg := "the run ended without reporting a result"
 			if runErr != nil {
 				msg = "the run failed: " + runErr.Error()
-			} else if t := last.text(); t != "" {
+			}
+			if t := last.text(); t != "" {
 				msg += "; its last message was:\n" + clipRunes(t, lastWordsMax) // a Wright that wrote its findings but never reported them
 			}
 			r.failDispatch(d.ID, msg)
 		}
-		r.sched.finished(d.ID, runErr == nil)
+		r.sched.finished(d.ID)
 	}()
 	return nil
 }
@@ -785,68 +798,36 @@ func (r *Runs) traceFor(run string) Trace {
 	}
 }
 
-// commitWright commits what a Wright left in its worktree to its piece branch
-// when it reports, or when its run ends without reporting (ADR 0025).
-// The Wright never runs git add or commit. A failure is recorded on the run
-// and does not fail the dispatch: the handback gates run on what was committed.
-func (r *Runs) commitWright(d store.Dispatch, wt string, res WrightResult, trace Trace) {
+// wrightWorktree gives a dispatch's Wright its own worktree on its own branch
+// (ADR 0008). Without Sites there is none. A later round of a piece continues
+// from the branch of its previous round, whose work that round's Wright
+// committed itself (ADR 0028); from names that branch, or is empty when the
+// worktree starts from the Job's integration branch. A rework of a piece whose
+// Wright Session is still open takes that Session's worktree and branch
+// instead, so the Session it is Nudged into keeps working where it was
+// (reused is true, from is the branch).
+func (r *Runs) wrightWorktree(d store.Dispatch) (path, from string, reused bool, err error) {
 	r.mu.Lock()
 	sm := r.sites
 	r.mu.Unlock()
-	if sm == nil || wt == "" || isMergeWright(d.Piece) { // a merge Wright commits for itself
-		return
-	}
-	status := res.Status
-	msg := fmt.Sprintf("%s (round %d)", d.Piece, d.Round)
-	if status == ResultDone {
-		msg = "piece " + msg
-	} else {
-		msg = "wip: piece " + msg + ", " + status
-	}
-	if res.Result != "" {
-		msg += "\n\nResult: " + res.Result
-	}
-	sha, err := sm.CommitWorktree(d.JobID, wt, msg)
-	switch {
-	case err != nil:
-		log.Printf("dispatch %s: committing the worktree: %v", d.ID, err)
-		trace.Emit("commit", "committing the worktree failed: "+err.Error(), commitRaw("failed", ""))
-	case sha == "":
-		trace.Emit("commit", "no changes to commit", commitRaw("unchanged", ""))
-	default:
-		trace.Emit("commit", "committed "+sha, commitRaw("committed", sha))
-	}
-}
-
-func commitRaw(outcome, sha string) json.RawMessage {
-	b, _ := json.Marshal(map[string]string{"type": "commit", "outcome": outcome, "sha": sha})
-	return b
-}
-
-// wrightWorktree gives a dispatch's Wright its own worktree on its own branch
-// (ADR 0008). Without Sites there is none. A later round of a piece continues
-// from the branch of its previous round, whose work the Works committed when
-// that round reported (ADR 0025); from names that branch, or is empty when the
-// worktree starts from the Job's integration branch.
-func (r *Runs) wrightWorktree(d store.Dispatch) (path, from string, err error) {
-	r.mu.Lock()
-	sm, kept := r.sites, r.wrightWts[d.ID]
-	r.mu.Unlock()
 	if sm == nil {
-		return "", "", nil
+		return "", "", false, nil
 	}
-	if _, err := os.Stat(kept); kept != "" && err == nil {
-		return kept, "", nil // requeued after a rate limit: the same worktree, not another
+	if path, branch := r.sessionWorktree(d); path != "" {
+		if err := r.st.SetDispatchBranch(d.ID, branch); err != nil { // accept_piece merges this branch
+			return "", "", false, fmt.Errorf("recording the Wright's branch: %w", err)
+		}
+		return path, branch, true, nil
 	}
-	if isMergeWright(d.Piece) { // a merge Wright commits on the integration branch itself, so the push is a fast-forward (ADR 0022)
+	if isMergeWright(d.Piece) { // a merge Wright commits on the integration branch itself, so the merge stays a fast-forward
 		path, err := sm.IntegrationWorktree(d.JobID)
 		if err != nil {
-			return "", "", fmt.Errorf("finding the integration worktree: %w", err)
+			return "", "", false, fmt.Errorf("finding the integration worktree: %w", err)
 		}
-		return path, "", nil
+		return path, "", false, nil
 	}
 	if err := sm.EnsureIntegration(d.JobID); err != nil {
-		return "", "", fmt.Errorf("creating the integration worktree: %w", err)
+		return "", "", false, fmt.Errorf("creating the integration worktree: %w", err)
 	}
 	from = r.previousBranch(d)
 	wt, err := sm.CreateWorktree(d.JobID, store.KindWright, from)
@@ -856,15 +837,67 @@ func (r *Runs) wrightWorktree(d store.Dispatch) (path, from string, err error) {
 		wt, err = sm.CreateWorktree(d.JobID, store.KindWright, "")
 	}
 	if err != nil {
-		return "", "", fmt.Errorf("creating the Wright's worktree: %w", err)
+		return "", "", false, fmt.Errorf("creating the Wright's worktree: %w", err)
 	}
-	r.mu.Lock()
-	r.wrightWts[d.ID] = wt.Path
-	r.mu.Unlock()
 	if err := r.st.SetDispatchBranch(d.ID, wt.Branch); err != nil { // accept_piece merges this branch
-		return "", "", fmt.Errorf("recording the Wright's branch: %w", err)
+		return "", "", false, fmt.Errorf("recording the Wright's branch: %w", err)
 	}
-	return wt.Path, from, nil
+	return wt.Path, from, false, nil
+}
+
+// sessionWorktree is the worktree and branch of the Wright Session d would be
+// Nudged into, or resumed in: d must be a piece sent back by its Warden, one
+// parked on an Ask that is now answered, or one a stopped Works left running
+// (interrupted), and the Runner must still hold that piece's Session, open in
+// its pane or resumable by id. Both are "" when there is none, and a fresh
+// Session runs the brief (ADR 0029).
+func (r *Runs) sessionWorktree(d store.Dispatch) (path, branch string) {
+	r.mu.Lock()
+	reuser, _ := r.runner.(SessionReuser)
+	r.mu.Unlock()
+	if reuser == nil || d.Round == 0 || isMergeWright(d.Piece) {
+		return "", ""
+	}
+	prev, ok := r.previousDispatch(d)
+	if !ok || (prev.Status != store.DispatchRejected && prev.Status != store.DispatchAnswered && prev.Status != store.DispatchInterrupted) || prev.Branch == "" {
+		return "", ""
+	}
+	path = reuser.Reusable(d.JobID, d.Piece)
+	if _, err := os.Stat(path); path == "" || err != nil {
+		return "", ""
+	}
+	return path, prev.Branch
+}
+
+// followsRestart says whether d is the run that takes over from a dispatch a
+// stopped Works left running.
+func (r *Runs) followsRestart(d store.Dispatch) bool {
+	prev, ok := r.previousDispatch(d)
+	return ok && prev.Status == store.DispatchInterrupted
+}
+
+// followsAnswer says whether d is the run that follows an answered Ask, not a
+// rework: the dispatch before it parked on the Ask.
+func (r *Runs) followsAnswer(d store.Dispatch) bool {
+	prev, ok := r.previousDispatch(d)
+	return ok && prev.Status == store.DispatchAnswered
+}
+
+// previousDispatch is the piece's latest dispatch before d.
+func (r *Runs) previousDispatch(d store.Dispatch) (store.Dispatch, bool) {
+	ds, err := r.st.Dispatches(d.JobID)
+	if err != nil {
+		log.Printf("dispatch %s: finding the previous round: %v", d.ID, err)
+		return store.Dispatch{}, false
+	}
+	var prev store.Dispatch
+	found := false
+	for _, p := range ds {
+		if p.Piece == d.Piece && p.Round < d.Round && (!found || p.Round > prev.Round) {
+			prev, found = p, true
+		}
+	}
+	return prev, found
 }
 
 // previousBranch is the branch of the piece's latest earlier round that had a
@@ -887,12 +920,30 @@ func (r *Runs) previousBranch(d store.Dispatch) string {
 	return branch
 }
 
+// sessionStartingPoint tells a reworked Wright where its work is: the
+// worktree and branch the previous round used, with what that round committed.
+// It holds for a Session that was Nudged and for the fresh one that stands in
+// when that Session ended on the way, so it does not say which this is.
+func sessionStartingPoint(branch string) string {
+	return "\n## Starting point\n\nYour worktree is the one the previous round worked in, on the same branch `" + branch + "`, with what that round committed. " +
+		"Look at what is there (`git log`, `git show`, `git status`) and build on it instead of redoing it.\n"
+}
+
+// restartStartingPoint tells a Wright whose Works restarted under it where its
+// work is: the worktree it was in, on the same branch, with whatever it had
+// committed and the rest left as it was.
+func restartStartingPoint(branch string) string {
+	return "\n## Starting point\n\nThe Works restarted while you were working. Your worktree is the one you were in, on the same branch `" + branch + "`, exactly as you left it, committed or not: " +
+		"nothing you reported to the Works before it stopped was kept unless the Works answered it. " +
+		"Look at what is there (`git status`, `git log`) and finish the brief from it instead of starting again.\n"
+}
+
 // startingPoint tells a later round's Wright what its worktree holds: the
 // previous round's committed work, or a fresh tree when none could be used.
 func startingPoint(from string) string {
 	if from == "" {
 		return "\n## Starting point\n\nYour worktree is fresh from the Job's integration branch. The previous round's work is not in it.\n"
 	}
-	return "\n## Starting point\n\nYour worktree continues from the previous round's work, not a fresh tree: the Works committed whatever that round left, finished or not, to branch `" + from + "`, and your branch starts there. " +
+	return "\n## Starting point\n\nYour worktree continues from the previous round's work, not a fresh tree: that round's Wright committed its work to branch `" + from + "`, and your branch starts there. Anything it left uncommitted is not in your tree. " +
 		"Look at what is there (`git log`, `git show`) and build on it instead of redoing it.\n"
 }
