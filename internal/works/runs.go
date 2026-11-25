@@ -67,8 +67,6 @@ type Runs struct {
 	// Gates (ADR 0010): where a handback branch is checked out, and each command's limit.
 	sites       *sites.Manager
 	gateTimeout time.Duration
-	gateBusy    map[string]bool // Job id -> a run_gate is running for it (ADR 0025)
-	gateCalls   map[string]int  // dispatch id -> run_gate calls it has made
 
 	sched *scheduler // when dispatched Wrights may start (ADR 0008)
 

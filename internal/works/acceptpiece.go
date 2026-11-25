@@ -39,7 +39,7 @@ type AcceptInfo struct {
 
 // acceptPiece accepts a Wright's finished piece and lands its branch on the
 // Job's integration branch, the branch the gates, the push and the PR use
-// (ADR 0025): a fast-forward or merge commit made by the Works, with no agent
+// (ADR 0028): a fast-forward or merge commit made by the Works, with no agent
 // run. A piece with no commits is accepted and changes nothing. A conflict is
 // never left half-merged: the integration branch stays as it was, the piece
 // stays open and a merge Wright is dispatched to merge it; the Warden accepts

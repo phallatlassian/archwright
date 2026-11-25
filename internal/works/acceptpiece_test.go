@@ -16,7 +16,7 @@ func accept(g *gateRig, piece string) AcceptInfo {
 
 func TestAcceptPieceLandsTheBranchOnTheIntegrationBranchWithoutAnAgentRun(t *testing.T) {
 	g := newGateRig(t, store.Gates{Test: "test -f work.txt"}) // the gate passes only on a tree holding the piece's work
-	g.runner.WriteFiles(map[string]string{"work.txt": "w", ".claude/settings.json": "{}"})
+	g.runner.WriteFiles(map[string]string{"work.txt": "w"})
 	g.dispatch("p")
 	before := git(t, g.worktree.Path, "rev-parse", "HEAD")
 
@@ -41,6 +41,25 @@ func TestAcceptPieceLandsTheBranchOnTheIntegrationBranchWithoutAnAgentRun(t *tes
 	g.ok(g.warden, "handback", handbackJSON("done", `"integration"`, ""), nil)
 	if run := g.shownGates(); run.Status != store.GateRunPassed {
 		t.Fatalf("gates on the integration branch: %+v", run)
+	}
+}
+
+// The Works makes no commit for a Wright (ADR 0028): what a Wright leaves
+// uncommitted stays in its worktree, and accepting its piece lands nothing.
+func TestTheWorksCommitsNothingForAWrightAndAcceptingLandsOnlyWhatItCommitted(t *testing.T) {
+	g := newGateRig(t, store.Gates{})
+	g.runner.WriteFiles(map[string]string{"work.txt": "w"}).LeaveUncommitted()
+	g.dispatch("p")
+	d := g.waitReported("p")
+	if tip, base := git(t, g.repo, "rev-parse", d.Branch), git(t, g.repo, "rev-parse", g.worktree.Branch); tip != base {
+		t.Errorf("the piece branch holds a commit the Wright did not make: %s, integration %s", tip, base)
+	}
+	before := git(t, g.worktree.Path, "rev-parse", "HEAD")
+	if got := accept(g, "p"); got.Merge != "unchanged" {
+		t.Errorf("accepting uncommitted work: %+v", got)
+	}
+	if after := git(t, g.worktree.Path, "rev-parse", "HEAD"); after != before {
+		t.Errorf("the integration branch moved: %s -> %s", before, after)
 	}
 }
 

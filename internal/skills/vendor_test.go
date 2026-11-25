@@ -153,7 +153,7 @@ func TestImplementForkLacksTheInstructionsAWrightCannotFollow(t *testing.T) {
 			t.Errorf("implement still says %q", banned)
 		}
 	}
-	for _, want := range []string{"read_issue", "run_gate", "archwright tool ask", "Never run `git add` or `git commit`"} {
+	for _, want := range []string{"read_issue", "archwright tool ask", "Commit your work"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("implement does not say %q", want)
 		}

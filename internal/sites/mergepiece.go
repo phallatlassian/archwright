@@ -25,7 +25,7 @@ type PieceMerge struct {
 }
 
 // MergePiece merges a Wright's piece branch into the Job's integration branch
-// when the Warden accepts the piece (ADR 0025): a fast-forward when the
+// when the Warden accepts the piece (ADR 0028): a fast-forward when the
 // integration branch has not moved, a merge commit otherwise. A conflict is
 // aborted, never left half-merged, so the integration branch and its worktree
 // are exactly as they were and the caller can dispatch a merge Wright. The

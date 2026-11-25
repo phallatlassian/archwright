@@ -24,6 +24,7 @@ type FakeRunner struct {
 	briefs []RunRequest
 	delay  time.Duration
 	files  map[string]string // path -> content the fake Wright leaves in its worktree
+	leave  bool              // leave files uncommitted, as a Wright that never ran git commit
 }
 
 // WithDelay makes each run wait before it reports, so a Wright can be in
@@ -33,10 +34,18 @@ func (f *FakeRunner) WithDelay(d time.Duration) *FakeRunner {
 	return f
 }
 
-// WriteFiles makes each run leave these files, by worktree-relative path, in
-// its worktree before it reports, as a Wright leaves its work uncommitted.
+// WriteFiles makes each run write these files, by worktree-relative path, in
+// its worktree and commit them to its branch before it reports, as a Wright
+// does its own work (ADR 0028).
 func (f *FakeRunner) WriteFiles(files map[string]string) *FakeRunner {
 	f.files = files
+	return f
+}
+
+// LeaveUncommitted makes each run leave its files in the worktree without
+// committing them.
+func (f *FakeRunner) LeaveUncommitted() *FakeRunner {
+	f.leave = true
 	return f
 }
 
@@ -100,16 +109,27 @@ func (f *FakeRunner) Run(ctx context.Context, req RunRequest) error {
 			return err
 		}
 	}
-	for rel, content := range f.files {
-		if isMergeWright(req.Piece) { // a merge Wright's work is the merge; the files are for Wrights that write
-			break
+	if !isMergeWright(req.Piece) && len(f.files) > 0 { // a merge Wright's work is the merge; the files are for Wrights that write
+		args := []string{"add", "--"}
+		for rel, content := range f.files {
+			p := filepath.Join(req.Worktree, rel)
+			if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+				return err
+			}
+			if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+				return err
+			}
+			args = append(args, rel)
 		}
-		p := filepath.Join(req.Worktree, rel)
-		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-			return err
-		}
-		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
-			return err
+		if !f.leave {
+			if out, err := fakeGit(req.Worktree, args...); err != nil {
+				return fmt.Errorf("fake Wright: %v: %s", err, out)
+			}
+			if _, err := fakeGit(req.Worktree, "diff", "--cached", "--quiet"); err != nil { // staged changes: a repeat round may write what is already committed
+				if out, err := fakeGit(req.Worktree, "commit", "--no-verify", "--quiet", "-m", "piece "+req.Piece); err != nil {
+					return fmt.Errorf("fake Wright: %v: %s", err, out)
+				}
+			}
 		}
 	}
 	req.Trace.Emit("tool_use", "report_result: "+string(res.Status), json.RawMessage(`{"type":"tool_use","name":"archwright tool report_result"}`))
@@ -126,6 +146,12 @@ func (f *FakeRunner) Run(ctx context.Context, req RunRequest) error {
 		return fmt.Errorf("report_result: %s", resp.Error)
 	}
 	return nil
+}
+
+// fakeGit runs git in dir as the fake Wright.
+func fakeGit(dir string, args ...string) ([]byte, error) {
+	cmd := exec.Command("git", append([]string{"-C", dir, "-c", "user.name=fake Wright", "-c", "user.email=fake@archwright.invalid", "-c", "commit.gpgsign=false"}, args...)...)
+	return cmd.CombinedOutput()
 }
 
 // fakeMerge plays a merge Wright: it merges the base ref named in the brief

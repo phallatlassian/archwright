@@ -134,12 +134,12 @@ func TestCancelInterruptsTheSessionKillsItRecordsTheRunCancelledAndKeepsTheWorkt
 	if !strings.Contains(string(cur.Result), `"failed"`) || !strings.Contains(string(cur.Result), cancelledByDeveloper) {
 		t.Fatalf("dispatch = %s %s", cur.Status, cur.Result)
 	}
-	// The worktree is kept, with what the Wright left in it committed, never removed.
+	// The worktree is kept as the Wright left it, never removed, and the Works commits nothing in it.
 	if b, err := os.ReadFile(wright.Path + "/unfinished.txt"); err != nil || string(b) != "half done" {
 		t.Fatalf("the worktree lost the Wright's work: %q %v", b, err)
 	}
-	if got := git(t, wright.Path, "log", "-1", "--format=%s", "--", "unfinished.txt"); got == "" {
-		t.Errorf("what the Wright left was not committed")
+	if got := git(t, wright.Path, "status", "--porcelain", "--", "unfinished.txt"); !strings.Contains(got, "unfinished.txt") {
+		t.Errorf("the Works committed what the Wright left: status %q", got)
 	}
 }
 

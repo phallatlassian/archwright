@@ -485,14 +485,6 @@ func reportResult(c *callCtx, in json.RawMessage) (any, error) {
 	if err := a.Validate(); err != nil {
 		return nil, err
 	}
-	d, err := c.st.GetDispatch(c.run.ctx.DispatchID)
-	if err != nil {
-		return nil, err
-	}
-	c.runs.mu.Lock()
-	wt := c.runs.wrightWts[d.ID]
-	c.runs.mu.Unlock()
-	c.runs.commitWright(d, wt, a, c.runs.traceFor(c.run.id)) // before the dispatch reads as reported, so the Warden never acts on uncommitted work
 	raw, _ := json.Marshal(a)
 	if err := c.st.RecordResult(c.run.ctx.DispatchID, raw); err != nil {
 		return nil, err
@@ -674,9 +666,6 @@ func (r *Runs) start(d store.Dispatch) error {
 		if curErr == nil && cur.Status == store.DispatchRunning {
 			unreported = true
 		}
-		if _, limited := asRateLimit(runErr); unreported && !limited {
-			r.commitWright(d, wt, WrightResult{Status: ResultFailed}, trace) // a run that never reported has failed; a requeued run carries on in the same worktree
-		}
 		r.End(env.Run)
 		r.mu.Lock()
 		wasCancelled := r.cancelled[d.ID]
@@ -816,48 +805,10 @@ func (r *Runs) traceFor(run string) Trace {
 	}
 }
 
-// commitWright commits what a Wright left in its worktree to its piece branch
-// when it reports, or when its run ends without reporting (ADR 0025).
-// The Wright never runs git add or commit. A failure is recorded on the run
-// and does not fail the dispatch: the handback gates run on what was committed.
-func (r *Runs) commitWright(d store.Dispatch, wt string, res WrightResult, trace Trace) {
-	r.mu.Lock()
-	sm := r.sites
-	r.mu.Unlock()
-	if sm == nil || wt == "" || isMergeWright(d.Piece) { // a merge Wright commits for itself
-		return
-	}
-	status := res.Status
-	msg := fmt.Sprintf("%s (round %d)", d.Piece, d.Round)
-	if status == ResultDone {
-		msg = "piece " + msg
-	} else {
-		msg = "wip: piece " + msg + ", " + status
-	}
-	if res.Result != "" {
-		msg += "\n\nResult: " + res.Result
-	}
-	sha, err := sm.CommitWorktree(d.JobID, wt, msg)
-	switch {
-	case err != nil:
-		log.Printf("dispatch %s: committing the worktree: %v", d.ID, err)
-		trace.Emit("commit", "committing the worktree failed: "+err.Error(), commitRaw("failed", ""))
-	case sha == "":
-		trace.Emit("commit", "no changes to commit", commitRaw("unchanged", ""))
-	default:
-		trace.Emit("commit", "committed "+sha, commitRaw("committed", sha))
-	}
-}
-
-func commitRaw(outcome, sha string) json.RawMessage {
-	b, _ := json.Marshal(map[string]string{"type": "commit", "outcome": outcome, "sha": sha})
-	return b
-}
-
 // wrightWorktree gives a dispatch's Wright its own worktree on its own branch
 // (ADR 0008). Without Sites there is none. A later round of a piece continues
-// from the branch of its previous round, whose work the Works committed when
-// that round reported (ADR 0025); from names that branch, or is empty when the
+// from the branch of its previous round, whose work that round's Wright
+// committed itself (ADR 0028); from names that branch, or is empty when the
 // worktree starts from the Job's integration branch. A rework of a piece whose
 // Wright Session is still open takes that Session's worktree and branch
 // instead, so the Session it is Nudged into keeps working where it was
@@ -986,20 +937,20 @@ func (r *Runs) previousBranch(d store.Dispatch) string {
 }
 
 // sessionStartingPoint tells a reworked Wright where its work is: the
-// worktree and branch the previous round used, with the Works' commit of it.
+// worktree and branch the previous round used, with what that round committed.
 // It holds for a Session that was Nudged and for the fresh one that stands in
 // when that Session ended on the way, so it does not say which this is.
 func sessionStartingPoint(branch string) string {
-	return "\n## Starting point\n\nYour worktree is the one the previous round worked in, on the same branch `" + branch + "`: the Works committed whatever that round left, finished or not. " +
-		"Look at what is there (`git log`, `git show`) and build on it instead of redoing it.\n"
+	return "\n## Starting point\n\nYour worktree is the one the previous round worked in, on the same branch `" + branch + "`, with what that round committed. " +
+		"Look at what is there (`git log`, `git show`, `git status`) and build on it instead of redoing it.\n"
 }
 
 // restartStartingPoint tells a Wright whose Works restarted under it where its
-// work is: the worktree it was in, on the same branch. Nothing of what it had
-// done was committed, because the Works commits a run's work when the run ends.
+// work is: the worktree it was in, on the same branch, with whatever it had
+// committed and the rest left as it was.
 func restartStartingPoint(branch string) string {
-	return "\n## Starting point\n\nThe Works restarted while you were working. Your worktree is the one you were in, on the same branch `" + branch + "`, exactly as you left it: " +
-		"nothing was committed, and nothing you reported to the Works before it stopped was kept unless the Works answered it. " +
+	return "\n## Starting point\n\nThe Works restarted while you were working. Your worktree is the one you were in, on the same branch `" + branch + "`, exactly as you left it, committed or not: " +
+		"nothing you reported to the Works before it stopped was kept unless the Works answered it. " +
 		"Look at what is there (`git status`, `git log`) and finish the brief from it instead of starting again.\n"
 }
 
@@ -1009,6 +960,6 @@ func startingPoint(from string) string {
 	if from == "" {
 		return "\n## Starting point\n\nYour worktree is fresh from the Job's integration branch. The previous round's work is not in it.\n"
 	}
-	return "\n## Starting point\n\nYour worktree continues from the previous round's work, not a fresh tree: the Works committed whatever that round left, finished or not, to branch `" + from + "`, and your branch starts there. " +
+	return "\n## Starting point\n\nYour worktree continues from the previous round's work, not a fresh tree: that round's Wright committed its work to branch `" + from + "`, and your branch starts there. Anything it left uncommitted is not in your tree. " +
 		"Look at what is there (`git log`, `git show`) and build on it instead of redoing it.\n"
 }

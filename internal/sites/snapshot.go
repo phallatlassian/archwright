@@ -11,13 +11,13 @@ import (
 )
 
 // scaffoldDirs are the run scaffolding a Wright's worktree carries; a
-// snapshot leaves them out (ADR 0025).
+// snapshot leaves them out (ADR 0028).
 var scaffoldDirs = []string{".agents", ".claude"}
 
 // SnapshotCheckout copies the working tree at worktree, tracked and untracked
 // files as they are now, into a throwaway detached checkout outside the Site,
 // so a gate run there can never write into the Wright's tree or its git
-// directory (ADR 0025). The worktree must be one the Job owns. Release
+// directory (ADR 0028). The worktree must be one the Job owns. Release
 // removes the checkout.
 func (m *Manager) SnapshotCheckout(jobID, worktree string) (*GateCheckout, error) {
 	m.mu.Lock()

@@ -88,18 +88,22 @@ func TestWrightBriefCarriesTheAgentRules(t *testing.T) {
 	if !strings.Contains(reqs[0].Brief, "archwright tool read_issue") {
 		t.Error("Wright brief does not name read_issue")
 	}
-	if _, ok := catalogue["run_gate"]; !ok || !strings.Contains(reqs[0].Brief, "archwright tool run_gate") {
-		t.Error("Wright brief does not name run_gate")
+	if _, ok := catalogue["run_gate"]; ok {
+		t.Error("run_gate is still in the Works tool catalogue")
 	}
-	if !strings.Contains(reqs[0].Brief, "Never run `git add` or `git commit`") {
-		t.Error("Wright brief does not tell the Wright to leave committing to the Works")
+	for _, want := range []string{"Run the Site's checks", "in your own shell", "Commit your work to your branch"} {
+		if !strings.Contains(reqs[0].Brief, want) {
+			t.Errorf("Wright brief lacks %q", want)
+		}
+	}
+	for _, banned := range []string{"run_gate", "Never run `git add`", "Never run `go`"} {
+		if strings.Contains(reqs[0].Brief, banned) {
+			t.Errorf("Wright brief still says %q", banned)
+		}
 	}
 }
 
 func TestReviewBriefCarriesTheAgentRules(t *testing.T) {
 	brief := renderReviewBrief(Guild{Name: "hallmark"}, store.Review{Seq: 1, SHA: "abc", Branch: "b"}, "/wt", "spec")
 	assertAgentRules(t, "review Warden", brief)
-	if strings.Contains(brief, "run_gate") {
-		t.Error("a review Warden cannot call run_gate, yet its brief names it")
-	}
 }

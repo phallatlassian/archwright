@@ -22,7 +22,7 @@
     {
       "name": "codebase-design",
       "upstream": "upstream/codebase-design",
-      "edited": "for a Wright in the factory (#160): SKILL.md and DESIGN-IT-TWICE.md have the run design the alternatives itself, one after another, and put the comparison in its result, instead of showing a user and spawning parallel sub-agents; SKILL.md also reads the source issue with read_issue, checks with run_gate, leaves changes in the worktree and asks with ask; DEEPENING.md is unchanged",
+      "edited": "for a Wright in the factory (#160): SKILL.md and DESIGN-IT-TWICE.md have the run design the alternatives itself, one after another, and put the comparison in its result, instead of showing a user and spawning parallel sub-agents; SKILL.md also reads the source issue with read_issue, checks with the Site's own commands, commits its own changes to its branch and asks with ask; DEEPENING.md is unchanged",
       "upstream_files": {
         "codebase-design/agents/openai.yaml": "edebc9e4fcfe102114012575eaa9600b9b5fd08c311664f389c36e7bc717740f",
         "codebase-design/DEEPENING.md": "f3dd099ce99289bd213914d8ee3e2429b78309c3957ca4583f7659551b1d53c1",
@@ -33,7 +33,7 @@
     {
       "name": "implement",
       "upstream": "upstream/implement",
-      "edited": "for a Wright in the factory (#160): drops disable-model-invocation and allows implicit invocation in agents/openai.yaml; reads the source issue with read_issue instead of the issue tracker; checks work with run_gate instead of typecheck and test runs it cannot make, never go or make; leaves changes in the worktree instead of committing (the Works commits); asks with ask; drops the call to code-review, which is not in Masonry's set, since review is a separate step; points a Warden to implement-spec",
+      "edited": "for a Wright in the factory (#160): drops disable-model-invocation and allows implicit invocation in agents/openai.yaml; reads the source issue with read_issue instead of the issue tracker; checks work with the Site's own commands in its own shell and says the Works' handback gate run is authoritative; commits its work to its own branch, never run scaffolding; asks with ask; drops the call to code-review, which is not in Masonry's set, since review is a separate step; points a Warden to implement-spec",
       "upstream_files": {
         "implement/agents/openai.yaml": "8970a8596ade0c28ab427f41a4ea242d6bdf6186c59ebf55e1238dbecaab79dc",
         "implement/SKILL.md": "483bdc4ccf4ac31d86ac7beeaa0d0db80313e71e120bb8c59b3196ae5decd53d"
@@ -42,7 +42,7 @@
     {
       "name": "implement-spec",
       "upstream": "upstream/implement-spec",
-      "edited": "dispatches through the Works (dispatch_wright, inspect_wright, rework_wright, report_review, ask) and fills the gaps upstream leaves; drops disable-model-invocation and allows implicit invocation in agents/openai.yaml; reads the Job's issue with read_issue; says Wrights check with run_gate and the Works commits; step 6 dispatches a read-only review piece instead of naming the code-review skill, which is not in Masonry's set (#160)",
+      "edited": "dispatches through the Works (dispatch_wright, inspect_wright, rework_wright, report_review, ask) and fills the gaps upstream leaves; drops disable-model-invocation and allows implicit invocation in agents/openai.yaml; reads the Job's issue with read_issue; says Wrights run the Site's checks and commit their own work, and the Works runs the gates again on handback; step 6 dispatches a read-only review piece instead of naming the code-review skill, which is not in Masonry's set (#160)",
       "upstream_files": {
         "implement-spec/agents/openai.yaml": "fd41efb42c60c96320d6531be7e4bf15cbf5518cd652d57dff27ccffa46988e9",
         "implement-spec/SKILL.md": "1993a473cec40ac85d081c112cdffdc63ec3267c2e412055ad09e013a2f623d1"
@@ -70,7 +70,7 @@
     {
       "name": "tdd",
       "upstream": "upstream/tdd",
-      "edited": "for a Wright in the factory (#160): seams come from the brief instead of being confirmed with the user (ask only if a wrong choice changes what gets built); tests run through run_gate, never go or make; changes stay in the worktree for the Works to commit; reads the source issue with read_issue and asks with ask; the refactoring bullet no longer sends the agent to the code-review skill, which is not in Masonry's set",
+      "edited": "for a Wright in the factory (#160): seams come from the brief instead of being confirmed with the user (ask only if a wrong choice changes what gets built); tests run with the Site's own command in the Wright's shell; the Wright commits its own work; reads the source issue with read_issue and asks with ask; the refactoring bullet no longer sends the agent to the code-review skill, which is not in Masonry's set",
       "upstream_files": {
         "tdd/agents/openai.yaml": "ea6f01cf1b8c06a4b0f5b649d74b1b8ce8685e72af1b38d70d877693e092af0b",
         "tdd/mocking.md": "3ceb807fdf4a47d6a93d4d9a891e5ba6d362a6247bd08adc451feebfc17361ef",
