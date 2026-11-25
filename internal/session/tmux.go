@@ -105,9 +105,9 @@ type Tmux struct {
 // Name implements Runner.
 func (t *Tmux) Name() string { return "claude" }
 
-// Capabilities implements Runner. Resume by id is a later slice.
+// Capabilities implements Runner.
 func (t *Tmux) Capabilities() Capabilities {
-	return Capabilities{Hooks: true, PermissionRequests: true}
+	return Capabilities{Hooks: true, PermissionRequests: true, Resume: true}
 }
 
 // Close stops the hook receiver. Sessions are left running in their panes: the
@@ -190,6 +190,9 @@ func (t *Tmux) launch(ctx context.Context, req LaunchRequest, v vendor) (Session
 	if err := os.WriteFile(hookFile, nil, 0o600); err != nil {
 		return nil, err
 	}
+	if err := writeMeta(runDir, sessionMeta{Run: req.Run, Token: token, Vendor: v.name, Job: req.Job, Role: req.Role, Dir: req.Dir}); err != nil {
+		return nil, err
+	}
 	prompt, err := t.promptFor(runDir, req.Brief)
 	if err != nil {
 		return nil, err
@@ -201,12 +204,8 @@ func (t *Tmux) launch(ctx context.Context, req LaunchRequest, v vendor) (Session
 
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.recv == nil {
-		r, err := NewReceiver(t.or(t.SocketDir, filepath.Join(os.TempDir(), fmt.Sprintf("aw-%d", os.Getuid()))))
-		if err != nil {
-			return nil, fmt.Errorf("hook receiver: %w", err)
-		}
-		t.recv = r
+	if err := t.ensureReceiverLocked(); err != nil {
+		return nil, err
 	}
 	env := map[string]string{}
 	for k, v := range req.Env {
@@ -223,6 +222,7 @@ func (t *Tmux) launch(ctx context.Context, req LaunchRequest, v vendor) (Session
 	}
 	s := &tmuxSession{t: t, v: v, core: newCore(token), pane: pane, runDir: runDir, hookFile: hookFile, cancelCh: make(chan struct{}), started: time.Now()}
 	s.core.setPane(pane, window)
+	s.core.setPlace(req.Dir, v.name)
 	s.core.add(Event{Kind: KindPosture, Posture: &runner.Posture{
 		Runner: v.name, Version: t.cliVersion(plan.bin), Mode: req.Spawn.EffectiveMode(), Sandbox: runner.SandboxInherited,
 		Flags: plan.flags, Notices: append([]string{}, plan.notices...),
@@ -240,6 +240,20 @@ func (t *Tmux) launch(ctx context.Context, req LaunchRequest, v vendor) (Session
 		s.run()
 	}()
 	return v.wrap(s), nil
+}
+
+// ensureReceiverLocked starts the hook receiver if it is not running. The
+// caller holds t.mu.
+func (t *Tmux) ensureReceiverLocked() error {
+	if t.recv != nil {
+		return nil
+	}
+	r, err := NewReceiver(t.or(t.SocketDir, filepath.Join(os.TempDir(), fmt.Sprintf("aw-%d", os.Getuid()))))
+	if err != nil {
+		return fmt.Errorf("hook receiver: %w", err)
+	}
+	t.recv = r
+	return nil
 }
 
 // checkLaunch refuses what the never-list forbids (ADR 0027) and what a pane
@@ -502,7 +516,9 @@ func (s *tmuxSession) Nudge(text string) error {
 		// Not ErrNotIdle: the text is in the composer now, so trying again would paste it twice.
 		return fmt.Errorf("%w: the Session stopped being idle after the paste (%v); Enter was not sent", ErrNudgeUnconfirmed, err)
 	}
+	s.core.expectPrompt() // the prompt this Enter submits is the Works', not a human's
 	if _, err := s.t.tmux("send-keys", "-t", s.pane, "Enter"); err != nil {
+		s.core.retractPrompt()
 		return err
 	}
 	return s.core.awaitPrompt(before, s.t.dur(s.t.NudgeTimeout, DefaultNudgeTimeout))

@@ -79,6 +79,8 @@ var standinScripts = map[scenario]string{
 	scenNudge:       "hook SessionStart;hook UserPromptSubmit;hook Stop;readprompt;hook UserPromptSubmit;hook Stop;hold",
 	scenDeaf:        "hook SessionStart;hook UserPromptSubmit;hook Stop;readprompt;hold",
 	scenBusy:        "hook SessionStart;hook UserPromptSubmit;hold",
+	scenLastWords:   "hook SessionStart;hook UserPromptSubmit;hook Stop;hold",
+	scenTwoPrompts:  "hook SessionStart;hook UserPromptSubmit;hook Stop;readprompt;hook UserPromptSubmit;hook Stop;readprompt;hook UserPromptSubmit;hook Stop;hold",
 }
 
 // runner is the Runner under test: the Tmux adapter for Claude, its Codex view for Codex.
@@ -99,6 +101,16 @@ func (r *tmuxRig) request(t *testing.T, s scenario) LaunchRequest {
 
 func (r *tmuxRig) harness() harness {
 	h := harness{name: "tmux " + r.vendor, vendor: r.vendor, modes: vendorModes[r.vendor], queue: r.vendor == "codex", runner: r.runner(), request: r.request, pane: &paneInspector{tmux: r.tm.tmux, outDir: r.out}}
+	h.human = func(t *testing.T, s Session, text string) {
+		t.Helper()
+		// As a person does: the keys go to the pane, then Enter.
+		if _, err := r.tm.tmux("send-keys", "-t", s.Info().Pane, "-l", text); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := r.tm.tmux("send-keys", "-t", s.Info().Pane, "Enter"); err != nil {
+			t.Fatal(err)
+		}
+	}
 	h.nudged = func(t *testing.T, _ Session, want string) {
 		t.Helper()
 		if got := h.pane.typed(); got != want {

@@ -19,6 +19,15 @@ import (
 	"github.com/phallatlassian/archwright/internal/store"
 )
 
+// ErrWorksStopping is the cause of the context every run holds when the Works
+// stops, as against a developer cancelling a run. A runner that hosts a
+// Session leaves it open in its pane on this cause and returns an error
+// wrapping it, so the next Works adopts the Session (ADR 0029).
+var ErrWorksStopping = errors.New("the Works is stopping")
+
+// SessionDetacher is a set of Sessions that can be told the Works has stopped.
+type SessionDetacher interface{ Detach() }
+
 // RunEnv is what a started run receives through its environment (ADR 0018).
 type RunEnv struct {
 	Run   string `json:"run"`
@@ -50,7 +59,7 @@ type Runs struct {
 	spoolRoot string            // when set, every run's spool lives here; otherwise each run's runner picks (ADR 0018)
 	wrightWts map[string]string // dispatch id -> its Wright's worktree, kept across a rate-limit requeue
 	bg        context.Context
-	cancelBg  context.CancelFunc
+	cancelBg  context.CancelCauseFunc
 	wg        sync.WaitGroup
 	nudges    sync.WaitGroup // posts of the inbox nudge still in flight
 
@@ -109,7 +118,7 @@ type run struct {
 
 // NewRuns returns an empty registry over st.
 func NewRuns(st *store.Store) *Runs {
-	bg, cancel := context.WithCancel(context.Background())
+	bg, cancel := context.WithCancelCause(context.Background())
 	r := &Runs{st: st, poll: 25 * time.Millisecond, runs: map[string]*run{}, cancels: map[string]context.CancelFunc{}, cancelled: map[string]bool{}, wrightWts: map[string]string{}, bg: bg, cancelBg: cancel}
 	r.sched = newScheduler(r)
 	st.SetInboxNotifier(r.inboxChanged)
@@ -252,12 +261,16 @@ func (r *Runs) End(id string) error {
 // Close ends every run.
 func (r *Runs) Close() {
 	r.mu.Lock()
-	r.cancelBg()
+	r.cancelBg(ErrWorksStopping)
+	sessions := r.sessions
 	r.mu.Unlock()
 	r.closeArchwright()
 	r.sched.stop()
 	r.wg.Wait() // dispatched Wrights end their own runs
 	r.nudges.Wait()
+	if d, ok := sessions.(SessionDetacher); ok {
+		d.Detach() // the Sessions left in their panes are no longer followed or recorded
+	}
 	r.mu.Lock()
 	all := r.runs
 	r.runs = map[string]*run{}

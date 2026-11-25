@@ -19,7 +19,7 @@ last=""
 hook() { # event [tool [command...]]
   local event="$1" tool="${2:-}" cmd="${*:3}"
   [ "$event" = UserPromptSubmit ] && turn=$((turn + 1))
-  last=$(printf '{"hook_event_name":"%s","session_id":"%s","transcript_path":"/tmp/stand-in-%s.jsonl","cwd":"%s","permission_mode":"default","turn_id":"turn-%s","tool_name":"%s","tool_input":{"command":"%s"},"tool_use_id":"tu-%s"}' \
+  last=$(printf '{"hook_event_name":"%s","session_id":"%s","transcript_path":"/tmp/stand-in-%s.jsonl","cwd":"%s","permission_mode":"default","turn_id":"turn-%s","tool_name":"%s","tool_input":{"command":"%s"},"tool_use_id":"tu-%s","last_assistant_message":"I got stuck on the build"}' \
     "$event" "$sid" "$sid" "$(pwd -P)" "$turn" "$tool" "$cmd" "$tool")
   printf '%s' "$last" | eval "$hookcmd"
 }

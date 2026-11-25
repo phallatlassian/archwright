@@ -41,7 +41,7 @@ func newSessionRig(t *testing.T, script hosted.Script) *sessionRig {
 		Guilds:   guilds,
 		Fallback: NewFakeRunner(nil),
 		Record: func(run string, info hosted.Info, state hosted.State) {
-			g.st.SetRunSession(run, info.Pane, info.SessionID, info.TranscriptPath, string(state))
+			g.st.SetRunSession(run, sessionRecord(info, state))
 		},
 	}
 	g.r.Configure(guilds, sr)

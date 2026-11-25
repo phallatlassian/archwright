@@ -76,6 +76,7 @@ type RunRequest struct {
 	Worktree   string            // the Wright's own worktree; empty when the Works has no Sites
 	Rework     bool              // a piece sent back, or an answered Ask, in the worktree of its Wright's open Session: the Session is Nudged, not relaunched
 	Answered   bool              // the Nudge carries the answer to the Ask that parked the piece, not an amended brief
+	Restarted  bool              // the run takes over from one a stopped Works left running: the Session it continues was adopted or is resumed
 	Brief      string            // the rendered brief, Guild standards included
 	ExtraEnv   map[string]string // further variables for the runner process, such as GIT_CONFIG_GLOBAL for delivered skills
 	Trace      Trace             // where a runner reports its timeline and usage for the dashboard
@@ -636,9 +637,12 @@ func (r *Runs) start(d store.Dispatch) error {
 		defer cancel()
 		wt, from, reused, runErr := r.wrightWorktree(d)
 		answered := reused && r.followsAnswer(d)
+		restarted := reused && r.followsRestart(d)
 		brief := d.Rendered
 		if runErr == nil && d.Round > 0 && !isMergeWright(d.Piece) && wt != "" {
 			switch {
+			case restarted:
+				brief += restartStartingPoint(from)
 			case reused && !answered: // an answer's Session carries on where it stopped and already holds the brief
 				brief += sessionStartingPoint(from)
 			case !reused:
@@ -653,7 +657,17 @@ func (r *Runs) start(d store.Dispatch) error {
 			extra, runErr = r.deliverSkillsFor(d, env.Run, wt)
 		}
 		if runErr == nil {
-			runErr = runner.Run(ctx, RunRequest{Env: env, Job: d.JobID, Guild: d.Guild, Piece: d.Piece, DispatchID: d.ID, Worktree: wt, Rework: reused, Answered: answered, Brief: brief, ExtraEnv: extra, Trace: trace})
+			runErr = runner.Run(ctx, RunRequest{Env: env, Job: d.JobID, Guild: d.Guild, Piece: d.Piece, DispatchID: d.ID, Worktree: wt, Rework: reused, Answered: answered, Restarted: restarted, Brief: brief, ExtraEnv: extra, Trace: trace})
+		}
+		if errors.Is(runErr, ErrWorksStopping) {
+			// The Works is stopping and its runner left the Wright's Session open in
+			// its pane. The dispatch stays running, as it does when the Works dies:
+			// the next start finds the Session and takes the work up again.
+			r.End(env.Run)
+			r.mu.Lock()
+			delete(r.cancels, d.ID)
+			r.mu.Unlock()
+			return
 		}
 		unreported := false
 		cur, curErr := r.st.GetDispatch(d.ID)
@@ -695,7 +709,8 @@ func (r *Runs) start(d store.Dispatch) error {
 			msg := "the run ended without reporting a result"
 			if runErr != nil {
 				msg = "the run failed: " + runErr.Error()
-			} else if t := last.text(); t != "" {
+			}
+			if t := last.text(); t != "" {
 				msg += "; its last message was:\n" + clipRunes(t, lastWordsMax) // a Wright that wrote its findings but never reported them
 			}
 			r.failDispatch(d.ID, msg)
@@ -895,11 +910,12 @@ func (r *Runs) wrightWorktree(d store.Dispatch) (path, from string, reused bool,
 	return wt.Path, from, false, nil
 }
 
-// sessionWorktree is the worktree and branch of the open Wright Session d
-// would be Nudged into: d must be a piece sent back by its Warden, or one
-// parked on an Ask that is now answered (a restart after an interruption is
-// neither), and the Runner must still hold that piece's Session. Both are ""
-// when there is none, and a fresh Session runs the brief (ADR 0029).
+// sessionWorktree is the worktree and branch of the Wright Session d would be
+// Nudged into, or resumed in: d must be a piece sent back by its Warden, one
+// parked on an Ask that is now answered, or one a stopped Works left running
+// (interrupted), and the Runner must still hold that piece's Session, open in
+// its pane or resumable by id. Both are "" when there is none, and a fresh
+// Session runs the brief (ADR 0029).
 func (r *Runs) sessionWorktree(d store.Dispatch) (path, branch string) {
 	r.mu.Lock()
 	reuser, _ := r.runner.(SessionReuser)
@@ -908,7 +924,7 @@ func (r *Runs) sessionWorktree(d store.Dispatch) (path, branch string) {
 		return "", ""
 	}
 	prev, ok := r.previousDispatch(d)
-	if !ok || (prev.Status != store.DispatchRejected && prev.Status != store.DispatchAnswered) || prev.Branch == "" {
+	if !ok || (prev.Status != store.DispatchRejected && prev.Status != store.DispatchAnswered && prev.Status != store.DispatchInterrupted) || prev.Branch == "" {
 		return "", ""
 	}
 	path = reuser.Reusable(d.JobID, d.Piece)
@@ -916,6 +932,13 @@ func (r *Runs) sessionWorktree(d store.Dispatch) (path, branch string) {
 		return "", ""
 	}
 	return path, prev.Branch
+}
+
+// followsRestart says whether d is the run that takes over from a dispatch a
+// stopped Works left running.
+func (r *Runs) followsRestart(d store.Dispatch) bool {
+	prev, ok := r.previousDispatch(d)
+	return ok && prev.Status == store.DispatchInterrupted
 }
 
 // followsAnswer says whether d is the run that follows an answered Ask, not a
@@ -969,6 +992,15 @@ func (r *Runs) previousBranch(d store.Dispatch) string {
 func sessionStartingPoint(branch string) string {
 	return "\n## Starting point\n\nYour worktree is the one the previous round worked in, on the same branch `" + branch + "`: the Works committed whatever that round left, finished or not. " +
 		"Look at what is there (`git log`, `git show`) and build on it instead of redoing it.\n"
+}
+
+// restartStartingPoint tells a Wright whose Works restarted under it where its
+// work is: the worktree it was in, on the same branch. Nothing of what it had
+// done was committed, because the Works commits a run's work when the run ends.
+func restartStartingPoint(branch string) string {
+	return "\n## Starting point\n\nThe Works restarted while you were working. Your worktree is the one you were in, on the same branch `" + branch + "`, exactly as you left it: " +
+		"nothing was committed, and nothing you reported to the Works before it stopped was kept unless the Works answered it. " +
+		"Look at what is there (`git status`, `git log`) and finish the brief from it instead of starting again.\n"
 }
 
 // startingPoint tells a later round's Wright what its worktree holds: the

@@ -41,13 +41,22 @@ func claudePlan(t *Tmux, req LaunchRequest, runDir, prompt string) (launchPlan, 
 		return launchPlan{}, err
 	}
 	bin := t.or(t.Claude, "claude")
-	flags := []string{"--permission-mode", req.Spawn.EffectiveMode(), "--settings", settings, "--session-id", newUUID()}
+	flags := []string{"--permission-mode", req.Spawn.EffectiveMode(), "--settings", settings}
+	if req.Resume != "" {
+		flags = append(flags, "--resume", req.Resume) // the session id stays the one resumed
+	} else {
+		flags = append(flags, "--session-id", newUUID())
+	}
 	if m := req.Limits.Model; m != "" {
 		flags = append(flags, "--model", m)
 	}
 	flags = append(flags, req.Spawn.ExtraArgs...)
 	return launchPlan{bin: bin, argv: append(append([]string{bin}, flags...), "--", prompt), flags: flags}, nil // "--": the brief is never read as a flag
 }
+
+// vendors are the vendor CLIs the adapter can host, by the name a Session's
+// record gives.
+var vendors = map[string]vendor{"claude": vendorClaude, "codex": vendorCodex}
 
 // Codex returns the Runner for Codex Sessions on the same tmux server,
 // factory session and hook receiver as t's Claude Sessions.
@@ -58,9 +67,20 @@ type codexRunner struct{ t *Tmux }
 // Name implements Runner.
 func (c codexRunner) Name() string { return "codex" }
 
-// Capabilities implements Runner. Resume by id is a later slice.
+// Capabilities implements Runner.
 func (c codexRunner) Capabilities() Capabilities {
-	return Capabilities{Hooks: true, PermissionRequests: true, Queue: true}
+	return Capabilities{Hooks: true, PermissionRequests: true, Queue: true, Resume: true}
+}
+
+// Adopt implements Adopter: Codex Sessions share the factory, so a pane is
+// adopted as whatever vendor it was launched as.
+func (c codexRunner) Adopt(pane string, runs ...string) (Session, error) {
+	return c.t.Adopt(pane, runs...)
+}
+
+// FlagOrphans implements Orphaner.
+func (c codexRunner) FlagOrphans(known map[string]bool) ([]Orphan, error) {
+	return c.t.FlagOrphans(known)
 }
 
 // Launch implements Runner.

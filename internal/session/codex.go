@@ -82,8 +82,14 @@ func codexPlan(t *Tmux, req LaunchRequest, _, prompt string) (launchPlan, error)
 		flags = append(flags, "-m", m)
 	}
 	flags = append(flags, req.Spawn.ExtraArgs...)
+	var argv []string
+	if req.Resume != "" { // `codex resume <id> <prompt>`: UNVERIFIED against a real Codex that it takes these flags after the subcommand
+		argv = append(append([]string{bin, "resume"}, flags...), req.Resume, "--", prompt)
+	} else {
+		argv = append(append([]string{bin}, flags...), "--", prompt)
+	}
 	return launchPlan{
-		bin: bin, argv: append(append([]string{bin}, flags...), "--", prompt), flags: flags,
+		bin: bin, argv: argv, flags: flags,
 		env:     map[string]string{"CODEX_HOME": home},
 		notices: []string{fmt.Sprintf("hooks come from %s; Codex asks the developer to trust them once, by that file", hooksFile)},
 	}, nil
@@ -161,7 +167,9 @@ func (c codexSession) Queue(text string) error {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, c.t.codexBin(), "queue", "--thread", id, "--message", text)
 	cmd.Env = append(os.Environ(), "CODEX_HOME="+c.t.codexHome())
+	c.core.expectPrompt() // the turn this message becomes is the Works', not a human's
 	if out, err := cmd.CombinedOutput(); err != nil {
+		c.core.retractPrompt()
 		return fmt.Errorf("codex queue: %w: %s", err, oneLine(string(out)))
 	}
 	return nil

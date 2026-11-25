@@ -141,6 +141,11 @@ func ServeWith(ctx context.Context, d paths.Dirs, ready chan<- struct{}, opts Op
 	runs.UseSkills(SkillsDelivery{Catalogue: skills.Vendored(), RunDir: d.RunDir})
 	runs.SetLimits(LimitsFromEnv(os.Getenv))
 	runs.SetRetention(func() (time.Duration, error) { return config.Retention(d) })
+	if rec, err := runs.RecoverSessions(); err != nil {
+		log.Printf("recovering Sessions: %v", err)
+	} else if rec.Adopted+rec.Resumable+rec.Lost+len(rec.Orphans) > 0 {
+		log.Printf("Sessions of the last Works: %d adopted, %d to resume, %d lost, %d orphaned", rec.Adopted, rec.Resumable, rec.Lost, len(rec.Orphans))
+	}
 	if err := runs.Resume(); err != nil {
 		return err
 	}

@@ -30,7 +30,12 @@ const (
 	scenNudge       scenario = "nudge"        // finishes its turn, then takes what is typed at it as a new turn
 	scenDeaf        scenario = "deaf"         // finishes its turn, then reads what is typed at it without ever reporting a prompt
 	scenBusy        scenario = "busy"         // takes the brief and works on it for good
+	scenLastWords   scenario = "last-words"   // finishes its turn having said "I got stuck on the build"
+	scenTwoPrompts  scenario = "two-prompts"  // finishes its turn, then takes two more prompts as turns, whoever types them
 )
+
+// lastWords is what every scripted agent says at the end of a turn.
+const lastWords = "I got stuck on the build"
 
 // harness runs the contract against one Runner.
 type harness struct {
@@ -45,6 +50,8 @@ type harness struct {
 	pane *paneInspector
 	// queued checks what the vendor CLI was asked to deliver; nil when it cannot be.
 	queued func(t *testing.T, s Session, text string)
+	// human types text into the Session's pane as a person would; nil when it cannot be.
+	human func(t *testing.T, s Session, text string)
 	// nudged checks what reached the agent as input after its first turn: the
 	// text, or for a long one a pointer to the file holding it.
 	nudged func(t *testing.T, s Session, want string)
@@ -58,6 +65,10 @@ func fakeHarness(vendor string) harness {
 	f := NewFakeFor(vendor, Script{})
 	f.NudgeTimeout = 500 * time.Millisecond
 	return harness{name: "fake " + vendor, vendor: vendor, modes: vendorModes[vendor], queue: vendor == "codex", runner: f,
+		human: func(t *testing.T, s Session, text string) {
+			t.Helper()
+			s.(interface{ Human(string) }).Human(text)
+		},
 		nudged: func(t *testing.T, _ Session, want string) {
 			t.Helper()
 			if got := f.Nudges(); len(got) == 0 || got[len(got)-1] != want {
@@ -67,7 +78,7 @@ func fakeHarness(vendor string) harness {
 		request: func(t *testing.T, s scenario) LaunchRequest {
 			start := Step{Hook: &Hook{Event: HookSessionStart, SessionID: "fake-session", TranscriptPath: "/fake/transcript.jsonl"}}
 			prompt := Step{Hook: &Hook{Event: HookUserPromptSubmit, TurnID: "turn-1"}}
-			stop := Step{Hook: &Hook{Event: HookStop, TurnID: "turn-1"}}
+			stop := Step{Hook: &Hook{Event: HookStop, TurnID: "turn-1", LastAssistantMessage: lastWords}}
 			bash := func(ev, cmd string) Step {
 				return Step{Hook: &Hook{Event: ev, TurnID: "turn-1", ToolName: "Bash", ToolInput: []byte(`{"command":"` + cmd + `"}`), ToolUseID: "tu-Bash"}}
 			}
@@ -90,6 +101,11 @@ func fakeHarness(vendor string) harness {
 				f.SetScript(Script{Steps: []Step{start, prompt, stop}, Nudged: []Step{{Hook: &Hook{Event: HookUserPromptSubmit, TurnID: "turn-2"}}, {Hook: &Hook{Event: HookStop, TurnID: "turn-2"}}}})
 			case scenDeaf:
 				f.SetScript(Script{Steps: []Step{start, prompt, stop}})
+			case scenLastWords:
+				f.SetScript(Script{Steps: []Step{start, prompt, stop}})
+			case scenTwoPrompts:
+				// no turn ids, as Claude's: each prompt is its own delivery
+				f.SetScript(Script{Steps: []Step{start, prompt, stop}, Nudged: []Step{{Hook: &Hook{Event: HookUserPromptSubmit}}, {Hook: &Hook{Event: HookStop, LastAssistantMessage: lastWords}}}})
 			case scenBusy:
 				f.SetScript(Script{Steps: []Step{start, prompt}})
 			case scenQueue:
@@ -362,6 +378,55 @@ func runContract(t *testing.T, h harness) {
 		}
 		if h.nudged != nil {
 			h.nudged(t, sess, "now run the linter")
+		}
+	})
+
+	t.Run("the last message of a turn is kept on the Session and on its idle event", func(t *testing.T) {
+		sess := launch(t, scenLastWords)
+		waitFor(t, "the turn to finish", func() bool { return sess.Info().Turns == 1 })
+		if got := sess.Info().LastMessage; got != lastWords {
+			t.Fatalf("last message = %q", got)
+		}
+		sess.Cancel()
+		var idle []string
+		for _, e := range collect(t, sess) {
+			if e.Kind == KindState && e.Hook == HookStop {
+				idle = append(idle, e.Text)
+			}
+		}
+		if len(idle) != 1 || idle[0] != lastWords {
+			t.Fatalf("idle events carry %q", idle)
+		}
+	})
+
+	t.Run("a prompt a person types is recorded as human and never blocked, a Nudge is not", func(t *testing.T) {
+		if h.human == nil {
+			t.Skip("this Runner has no pane to type in")
+		}
+		sess := launchNudged(t, scenTwoPrompts)
+		waitFor(t, "the turn to finish", func() bool { return sess.Info().Turns == 1 })
+		if n := sess.Info().Humans; n != 0 {
+			t.Fatalf("humans = %d before anyone typed: the brief was counted", n)
+		}
+		h.human(t, sess, "while you are at it, run the linter")
+		waitFor(t, "the typed turn to finish", func() bool { return sess.Info().Turns == 2 })
+		if err := sess.Nudge("the Works speaking"); err != nil {
+			t.Fatalf("nudge after a person typed: %v", err)
+		}
+		waitFor(t, "the nudged turn to finish", func() bool { return sess.Info().Turns == 3 })
+		info := sess.Info()
+		if info.Humans != 1 || info.Prompts != 3 {
+			t.Fatalf("humans = %d, prompts = %d, want 1 and 3", info.Humans, info.Prompts)
+		}
+		sess.Cancel()
+		humans := 0
+		for _, e := range collect(t, sess) {
+			if e.Kind == KindHuman {
+				humans++
+			}
+		}
+		if humans != 1 {
+			t.Fatalf("%d human events", humans)
 		}
 	})
 

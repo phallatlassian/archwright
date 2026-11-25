@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/phallatlassian/archwright/internal/runner"
 	hosted "github.com/phallatlassian/archwright/internal/session"
 )
 
@@ -25,6 +27,11 @@ import (
 // Job's later steps for a Guild, and its later reviews, are Nudged into the
 // Job's standing Warden Session for that Guild; if the Session is gone, a
 // fresh one runs the brief (ADR 0029).
+//
+// A Works that stops leaves the Sessions open in their panes (Detach), and the
+// next one takes them over (Restore): a live pane is adopted, one whose pane is
+// gone is resumed by its session id when its piece or step is next run, and
+// failing that a fresh Session runs the stored brief.
 type SessionRunner struct {
 	Runners map[string]hosted.Runner // by the runner name a Guild binding gives
 	Guilds  GuildSource
@@ -37,9 +44,11 @@ type SessionRunner struct {
 	// giving up on it; zero means DefaultNudgeWait.
 	NudgeWait time.Duration
 
-	mu    sync.Mutex
-	live  map[string]*liveSession  // the open Session of each piece of each Job, and each Guild's Warden of each Job
-	locks map[string]chan struct{} // one run at a time for each Session key
+	mu        sync.Mutex
+	live      map[string]*liveSession  // the open Session of each piece of each Job, and each Guild's Warden of each Job
+	locks     map[string]chan struct{} // one run at a time for each Session key
+	resumable map[string]*resumable    // Sessions of an earlier Works whose pane is gone, by the key of the Session they were
+	detached  atomic.Bool              // the Works has stopped: Sessions are left alone and nothing more is recorded
 }
 
 // DefaultNudgeWait is how long a rework waits for a Wright Session that is
@@ -61,8 +70,9 @@ type liveSession struct {
 	key      string // where the Runner keeps it
 	worktree string
 
-	mu  sync.Mutex
-	cur *carry
+	mu    sync.Mutex
+	cur   *carry
+	turns int // turns the Session had finished at the latest event followed
 }
 
 // carry is one run's hold on a Session: the run is done when the Session has
@@ -97,13 +107,24 @@ type runSpec struct {
 	nudge func(req RunRequest) string // what the open Session is told
 }
 
-// Reusable implements SessionReuser.
+// Reusable implements SessionReuser: the worktree of the piece's open Session,
+// or of the Session of an earlier Works that can be resumed there.
 func (a *SessionRunner) Reusable(job, piece string) string {
-	if ls := a.open(wrightKey(job, piece)); ls != nil {
+	key := wrightKey(job, piece)
+	if ls := a.open(key); ls != nil {
 		return ls.worktree
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if rs := a.resumable[key]; rs != nil {
+		return rs.dir
 	}
 	return ""
 }
+
+// Detach makes the Runner leave every Session alone: it is called as the Works
+// stops, with the Sessions still open in their panes for the next Works.
+func (a *SessionRunner) Detach() { a.detached.Store(true) }
 
 // open is the Session kept under key, if it has not ended.
 func (a *SessionRunner) open(key string) *liveSession {
@@ -121,7 +142,10 @@ func (a *SessionRunner) open(key string) *liveSession {
 // checks, and how the Session ended.
 func (a *SessionRunner) Run(ctx context.Context, req RunRequest) error {
 	spec := runSpec{reuse: func(ls *liveSession) bool { return req.Rework && ls.worktree == req.Worktree }, nudge: reworkNudge}
-	if req.Answered {
+	switch {
+	case req.Restarted:
+		spec.nudge = restartNudge
+	case req.Answered:
 		spec.nudge = answerNudge
 	}
 	if req.Piece != "" && req.Env.Role == RoleWright {
@@ -172,12 +196,14 @@ func (a *SessionRunner) run(ctx context.Context, req RunRequest, spec runSpec) e
 	if err != nil {
 		return err
 	}
+	var rs *resumable
 	if spec.key != "" {
 		// A Session carries out one run at a time: a Job's steps for a Guild are
 		// serialised in its Warden (ADR 0029), and two runs never both find no
 		// Session and launch two.
 		unlock, err := a.lockKey(ctx, spec.key)
 		if err != nil {
+			a.cancelOpen(req, a.open(spec.key), err)
 			return err
 		}
 		defer unlock()
@@ -185,6 +211,7 @@ func (a *SessionRunner) run(ctx context.Context, req RunRequest, spec runSpec) e
 			c, err := a.nudge(ctx, req, ls, spec.nudge(req))
 			if !errors.Is(err, errSessionGone) {
 				if err != nil {
+					a.cancelOpen(req, ls, err)
 					return err
 				}
 				return a.await(ctx, req, ls, c)
@@ -192,6 +219,7 @@ func (a *SessionRunner) run(ctx context.Context, req RunRequest, spec runSpec) e
 			// The Session ended between the check and the Nudge: a fresh one runs the
 			// amended brief, in the worktree and on the branch the round before left.
 		}
+		rs = a.takeResumable(spec.key, r, spec)
 	}
 	env := map[string]string{}
 	for _, kv := range req.Env.Environ() {
@@ -201,14 +229,45 @@ func (a *SessionRunner) run(ctx context.Context, req RunRequest, spec runSpec) e
 	for k, v := range req.ExtraEnv {
 		env[k] = v
 	}
-	live, err := r.Launch(ctx, hosted.LaunchRequest{
-		Run: req.Env.Run, Job: req.Job, Role: req.Env.Role, Brief: req.Brief, Dir: req.Worktree, Env: env, Spawn: spawn,
-	})
-	if err != nil {
-		return fmt.Errorf("%s was not started: %w", r.Name(), err) // a never-list refusal fails the dispatch closed
+	lreq := hosted.LaunchRequest{Run: req.Env.Run, Job: req.Job, Role: req.Env.Role, Brief: req.Brief, Dir: req.Worktree, Env: env, Spawn: spawn}
+	var live hosted.Session
+	if rs != nil {
+		// The Session of an earlier Works lost its pane: resume it by id, in the
+		// directory it worked in, told what the Nudge of a live one would be. If the
+		// vendor cannot resume it, a fresh Session runs the stored brief instead.
+		rreq := lreq
+		rreq.Resume, rreq.Dir, rreq.Brief = rs.id, rs.dir, spec.nudge(req)
+		s, err := r.Launch(ctx, rreq)
+		switch {
+		case errors.Is(err, runner.ErrForbidden):
+			return fmt.Errorf("%s was not started: %w", r.Name(), err)
+		case err == nil && awaitStarted(ctx, s):
+			live = s
+			req.Trace.Emit("note", "resumed the Session "+rs.id+" its pane was lost from", nil)
+		case ctx.Err() != nil:
+			if s != nil {
+				s.Cancel()
+			}
+			return stopped(ctx)
+		default:
+			if s != nil {
+				s.Cancel() // clears the dead pane it left
+			}
+			req.Trace.Emit("note", "the Session "+rs.id+" could not be resumed; a fresh Session runs the brief", nil)
+		}
+	}
+	if live == nil {
+		var err error
+		if live, err = r.Launch(ctx, lreq); err != nil {
+			return fmt.Errorf("%s was not started: %w", r.Name(), err) // a never-list refusal fails the dispatch closed
+		}
 	}
 	a.record(req, live.Info(), hosted.StateStarting)
-	ls := &liveSession{job: req.Job, s: live, r: r, key: spec.key, worktree: req.Worktree}
+	dir := live.Info().Dir
+	if dir == "" {
+		dir = req.Worktree
+	}
+	ls := &liveSession{job: req.Job, s: live, r: r, key: spec.key, worktree: dir}
 	c := &carry{req: req, armed: true, done: make(chan error, 1)} // the brief was its first prompt
 	ls.cur = c
 	if spec.key != "" {
@@ -227,18 +286,63 @@ func (a *SessionRunner) run(ctx context.Context, req RunRequest, spec runSpec) e
 	return a.await(ctx, req, ls, c)
 }
 
+// stopped is why a run's context ended: the Works is stopping, which leaves
+// the Session open, or the run was cancelled.
+func stopped(ctx context.Context) error {
+	if errors.Is(context.Cause(ctx), ErrWorksStopping) {
+		return fmt.Errorf("%w: its Session was left open in its pane", ErrWorksStopping)
+	}
+	return context.Canceled
+}
+
+// awaitStarted waits for a launched Session to report its start, and says
+// whether it did: a Session that ends first never started.
+func awaitStarted(ctx context.Context, s hosted.Session) bool {
+	for {
+		switch s.State() {
+		case hosted.StateEnded:
+			return false
+		case hosted.StateStarting:
+		default:
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(nudgePoll):
+		}
+	}
+}
+
 // await returns when the run's turn is finished, or when the context cancels
-// the Session.
+// the Session: a developer's cancel interrupts it and kills its pane after a
+// grace (ADR 0029), while a stopping Works leaves it open for the next one.
 func (a *SessionRunner) await(ctx context.Context, req RunRequest, ls *liveSession, c *carry) error {
 	select {
 	case err := <-c.done:
 		return err
 	case <-ctx.Done():
+		if err := stopped(ctx); errors.Is(err, ErrWorksStopping) {
+			return err
+		}
 		ls.s.Cancel()
 		ls.s.Result()
 		a.record(req, ls.s.Info(), hosted.StateEnded)
 		return context.Canceled
 	}
+}
+
+// cancelOpen ends the Session of a run that was cancelled before it took hold
+// of it, while it waited for the Session to be idle or free: the Session is
+// still working, or at a prompt, and the developer's cancel interrupts it and
+// kills its pane (ADR 0029). A Works that is stopping leaves it open.
+func (a *SessionRunner) cancelOpen(req RunRequest, ls *liveSession, err error) {
+	if ls == nil || !errors.Is(err, context.Canceled) || errors.Is(err, ErrWorksStopping) {
+		return
+	}
+	ls.s.Cancel()
+	ls.s.Result()
+	a.record(req, ls.s.Info(), hosted.StateEnded)
 }
 
 // lockKey waits for the run holding the Session key, or for ctx.
@@ -257,7 +361,7 @@ func (a *SessionRunner) lockKey(ctx context.Context, key string) (unlock func(),
 	case l <- struct{}{}:
 		return func() { <-l }, nil
 	case <-ctx.Done():
-		return nil, context.Canceled
+		return nil, stopped(ctx)
 	}
 }
 
@@ -350,7 +454,7 @@ func (a *SessionRunner) nudge(ctx context.Context, req RunRequest, ls *liveSessi
 		}
 		select {
 		case <-ctx.Done():
-			return fail(context.Canceled)
+			return fail(stopped(ctx))
 		case <-time.After(nudgePoll):
 		}
 	}
@@ -369,6 +473,13 @@ func reworkNudge(req RunRequest) string {
 func answerNudge(req RunRequest) string {
 	req.Brief = qaRecord(req.Brief)
 	return nudgeText("The question you asked was answered, and you are no longer parked. Carry on with the brief you were given, taking the answers below into account; do not ask them again.", "this round", req)
+}
+
+// restartNudge is what a Wright Session is told when the Works restarted under
+// it: the brief it was running, and the run its tool calls belong to from now
+// on, since the run it started under ended with the Works.
+func restartNudge(req RunRequest) string {
+	return nudgeText("The Works restarted while you were working on this piece, and the run you reported to has ended. Your Session is still here: carry on in it. The brief below is the one you were given, with where your work stands.", "from now on", req)
 }
 
 // stepNudge is what a Job's standing Warden is told for its next step.
@@ -405,7 +516,7 @@ func (ls *liveSession) arm(c *carry) {
 // settleLocked finishes c when its turn is over: the Session is idle and has
 // finished a turn since c took it over.
 func (ls *liveSession) settleLocked(c *carry, state hosted.State) {
-	if c.armed && state == hosted.StateIdle && ls.s.Info().Turns > c.base {
+	if c.armed && state == hosted.StateIdle && ls.turns > c.base {
 		c.finish(nil)
 	}
 }
@@ -413,6 +524,9 @@ func (ls *liveSession) settleLocked(c *carry, state hosted.State) {
 // follow carries a Session's events to the run that holds it, until it ends.
 func (a *SessionRunner) follow(ls *liveSession) {
 	for e := range ls.s.Events() {
+		if a.detached.Load() {
+			continue // the Works has stopped: the Session is the next one's
+		}
 		ls.mu.Lock()
 		c := ls.cur
 		emit := c != nil && !c.finished // a finished run only has its state kept up to date
@@ -422,15 +536,25 @@ func (a *SessionRunner) follow(ls *liveSession) {
 		}
 		if emit {
 			c.req.Trace.Emit(timelineKind(e), summarizeSession(e), rawOfSession(e))
+			if e.Kind == hosted.KindState && e.Hook == hosted.HookStop && strings.TrimSpace(e.Text) != "" {
+				// What the agent said ending its turn, kept as the run's last message: a
+				// Session that ends without reporting still has its last words.
+				raw, _ := json.Marshal(map[string]string{"result": e.Text})
+				c.req.Trace.Emit("message", clipLine(e.Text), raw)
+			}
 		}
 		if e.Kind == hosted.KindState {
 			a.record(c.req, ls.s.Info(), e.State) // the state this entry reports, so the record never runs ahead of the timeline
 			ls.mu.Lock()
+			ls.turns = e.Turns // as the events report it, not read off the Session, which can be turns ahead of the follower
 			if ls.cur == c {
 				ls.settleLocked(c, e.State)
 			}
 			ls.mu.Unlock()
 		}
+	}
+	if a.detached.Load() {
+		return
 	}
 	ls.mu.Lock()
 	c := ls.cur
@@ -445,7 +569,7 @@ func (a *SessionRunner) follow(ls *liveSession) {
 }
 
 func (a *SessionRunner) record(req RunRequest, info hosted.Info, state hosted.State) {
-	if a.Record != nil {
+	if a.Record != nil && !a.detached.Load() {
 		a.Record(req.Env.Run, info, state)
 	}
 }
@@ -481,7 +605,7 @@ func summarizeSession(e hosted.Event) string {
 			s = "waiting on permission: " + strings.TrimSpace(e.Tool+": "+e.Command)
 		}
 		return clipLine(s)
-	case hosted.KindNote:
+	case hosted.KindNote, hosted.KindHuman:
 		return clipLine(e.Text)
 	}
 	return string(e.Kind)

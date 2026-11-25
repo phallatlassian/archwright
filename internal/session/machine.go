@@ -31,6 +31,8 @@ type Hook struct {
 	ToolName       string          `json:"tool_name"`
 	ToolInput      json.RawMessage `json:"tool_input"`
 	ToolUseID      string          `json:"tool_use_id"`
+	// LastAssistantMessage is what the agent said at the end of its turn, on a Stop hook.
+	LastAssistantMessage string `json:"last_assistant_message"`
 }
 
 // command is the exact command or input of the hook's tool: a shell command
@@ -133,7 +135,13 @@ func (m *Machine) Apply(h Hook) (Change, bool) {
 			return m.move(StateWorking, h), true
 		}
 	case HookStop:
-		if len(m.outstanding) == 0 && m.state != StateIdle {
+		if len(m.outstanding) > 0 {
+			break
+		}
+		if h.LastAssistantMessage != "" {
+			m.info.LastMessage = h.LastAssistantMessage
+		}
+		if m.state != StateIdle {
 			m.info.Turns++
 			return m.move(StateIdle, h), true
 		}

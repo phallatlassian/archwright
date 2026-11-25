@@ -23,6 +23,8 @@ type Fake struct {
 	launches []LaunchRequest
 	sessions []Session
 	nudges   []string
+	orphans  []Orphan
+	known    map[string]bool
 	// NudgeTimeout is how long a Nudge waits for the agent to report a prompt; default 5 s.
 	NudgeTimeout time.Duration
 }
@@ -36,6 +38,9 @@ type Script struct {
 	End bool
 	// NoStart never plays SessionStart, as a Session stuck at a trust dialog.
 	NoStart bool
+	// NoResume fails a launch that asks to resume a session, as the vendor
+	// does when it no longer has it.
+	NoResume bool
 	// Nudged is what the agent does each time it takes a Nudge: normally a
 	// UserPromptSubmit, its work and a Stop. A Session with none takes the text
 	// and never reports a prompt, as one that ignores it. An Act sees the
@@ -107,12 +112,63 @@ func (f *Fake) nudged(text string) {
 	f.mu.Unlock()
 }
 
+// Adopt implements Adopter: a Session of this Fake that has not ended is still
+// in its pane, whichever Works launched it.
+func (f *Fake) Adopt(pane string, _ ...string) (Session, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, s := range f.sessions {
+		if s.Info().Pane == pane && !isEnded(s) {
+			if fs, ok := s.(*fakeSession); ok && f.vendor == "codex" {
+				return queueingSession{fs}, nil
+			}
+			return s, nil
+		}
+	}
+	return nil, fmt.Errorf("%w: %s", ErrNoPane, pane)
+}
+
+func isEnded(s Session) bool {
+	if c, ok := s.(interface{ isFinished() bool }); ok {
+		return c.isFinished()
+	}
+	return s.State() == StateEnded
+}
+
+// AddOrphan makes a pane appear that no run accounts for.
+func (f *Fake) AddOrphan(o Orphan) {
+	f.mu.Lock()
+	f.orphans = append(f.orphans, o)
+	f.mu.Unlock()
+}
+
+// Known is the panes the last FlagOrphans was told the Works accounts for.
+func (f *Fake) Known() map[string]bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.known
+}
+
+// FlagOrphans implements Orphaner.
+func (f *Fake) FlagOrphans(known map[string]bool) ([]Orphan, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.known = known
+	var out []Orphan
+	for _, o := range f.orphans {
+		if !known[o.Pane] {
+			out = append(out, o)
+		}
+	}
+	return out, nil
+}
+
 // Name implements Runner.
 func (f *Fake) Name() string { return f.vendor }
 
 // Capabilities implements Runner.
 func (f *Fake) Capabilities() Capabilities {
-	return Capabilities{Hooks: true, PermissionRequests: true, Queue: f.vendor == "codex"}
+	return Capabilities{Hooks: true, PermissionRequests: true, Resume: true, Queue: f.vendor == "codex"}
 }
 
 // Launch implements Runner.
@@ -132,6 +188,7 @@ func (f *Fake) Launch(ctx context.Context, req LaunchRequest) (Session, error) {
 	}
 	s := &fakeSession{core: newCore(""), cancelAct: cancel, cancelCh: make(chan struct{}), queueCh: make(chan string, 8), nudgeCh: make(chan string, 1), nudgeTimeout: timeout, onNudge: f.nudged}
 	s.core.setPane("%fake"+strconv.Itoa(n), "@fake")
+	s.core.setPlace(req.Dir, f.vendor)
 	s.core.add(Event{Kind: KindPosture, Posture: &runner.Posture{
 		Runner: f.vendor, Version: "fake", Mode: req.Spawn.EffectiveMode(), Sandbox: runner.SandboxInherited,
 		Flags: append([]string{}, req.Spawn.ExtraArgs...), Notices: []string{},
@@ -167,10 +224,12 @@ func (s queueingSession) Queue(text string) error {
 	if st := s.State(); st != StateWorking {
 		return fmt.Errorf("%w: the Session is %s", ErrNotQueueable, st)
 	}
+	s.expectPrompt() // the turn this message becomes is the Works', not a human's
 	select {
 	case s.queueCh <- text:
 		return nil
 	default:
+		s.retractPrompt()
 		return fmt.Errorf("%w: the queue is full", ErrNotQueueable)
 	}
 }
@@ -185,13 +244,24 @@ func (s *fakeSession) Nudge(text string) error {
 		return err
 	}
 	before := s.prompts()
+	s.expectPrompt()
 	select {
 	case s.nudgeCh <- text:
 	default:
+		s.retractPrompt()
 		return fmt.Errorf("%w: a Nudge is already being taken", ErrNotIdle)
 	}
 	s.onNudge(text)
 	return s.awaitPrompt(before, s.nudgeTimeout)
+}
+
+// Human plays a person typing a prompt into the pane: the Session takes the
+// text as it does a Nudge, but the Works did not send it.
+func (s *fakeSession) Human(text string) {
+	select {
+	case s.nudgeCh <- text:
+	default:
+	}
 }
 
 // Cancel implements Session.
@@ -203,7 +273,7 @@ func (s *fakeSession) Cancel() {
 }
 
 func (s *fakeSession) play(ctx context.Context, req LaunchRequest, sc Script) {
-	if sc.NoStart {
+	if sc.NoStart || (req.Resume != "" && sc.NoResume) {
 		s.finish(Result{Status: runner.StatusFailed, ExitStatus: -1, Error: "failed to start: no SessionStart hook"})
 		return
 	}

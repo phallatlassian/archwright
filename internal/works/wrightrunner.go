@@ -118,9 +118,14 @@ func sessionRunnerFrom(getenv func(string) string, guilds GuildSource, st *store
 		Guilds:   guilds,
 		Fallback: agentRunnerFrom(getenv, guilds, st),
 		Record: func(run string, info hosted.Info, state hosted.State) {
-			if err := st.SetRunSession(run, info.Pane, info.SessionID, info.TranscriptPath, string(state)); err != nil {
+			if err := st.SetRunSession(run, sessionRecord(info, state)); err != nil {
 				log.Printf("run %s: recording its Session: %v", run, err)
 			}
 		},
 	}, nil
+}
+
+// sessionRecord is what the run's record keeps of its Session.
+func sessionRecord(info hosted.Info, state hosted.State) store.SessionRecord {
+	return store.SessionRecord{PaneID: info.Pane, SessionID: info.SessionID, TranscriptPath: info.TranscriptPath, State: string(state), Dir: info.Dir, Runner: info.Runner}
 }

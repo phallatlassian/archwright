@@ -13,18 +13,26 @@ import (
 type core struct {
 	token string
 
-	mu       sync.Mutex
-	m        *Machine
-	log      *log
-	pane     Info // the adapter's part of Info: where the Session lives
-	ids      map[string]bool
-	done     chan struct{}
+	mu   sync.Mutex
+	m    *Machine
+	log  *log
+	pane Info // the adapter's part of Info: where the Session lives
+	ids  map[string]bool
+	done chan struct{}
+	// sent is how many prompts the Works has sent (the brief, then each Nudge
+	// and queued message), and humans how many more were typed by a person: a
+	// UserPromptSubmit beyond the ones sent is a human's (docs/spec/tmux-runtime.md).
+	sent, humans int
+	// quiet applies hooks without logging them: a Session taken over from an
+	// earlier Works is brought up to date from its spool without replaying
+	// its history as news.
+	quiet    bool
 	result   Result
 	finished bool
 }
 
 func newCore(token string) *core {
-	return &core{token: token, m: NewMachine(), log: newLog(), ids: map[string]bool{}, done: make(chan struct{})}
+	return &core{token: token, m: NewMachine(), log: newLog(), ids: map[string]bool{}, done: make(chan struct{}), sent: 1} // 1: the brief, the first prompt
 }
 
 // Info implements Session.
@@ -36,13 +44,45 @@ func (c *core) Info() Info {
 
 func (c *core) infoLocked() Info {
 	i := c.m.Info()
-	i.Pane, i.Window = c.pane.Pane, c.pane.Window
+	i.Pane, i.Window, i.Dir, i.Runner = c.pane.Pane, c.pane.Window, c.pane.Dir, c.pane.Runner
+	i.Humans = c.humans
 	return i
 }
 
 func (c *core) setPane(pane, window string) {
 	c.mu.Lock()
 	c.pane.Pane, c.pane.Window = pane, window
+	c.mu.Unlock()
+}
+
+// setPlace records where the Session works and which vendor CLI it runs.
+func (c *core) setPlace(dir, runner string) {
+	c.mu.Lock()
+	c.pane.Dir, c.pane.Runner = dir, runner
+	c.mu.Unlock()
+}
+
+// expectPrompt says the Works is about to send a prompt, so the UserPromptSubmit
+// that reports it is not a human's.
+func (c *core) expectPrompt() {
+	c.mu.Lock()
+	c.sent++
+	c.mu.Unlock()
+}
+
+// retractPrompt undoes expectPrompt for a prompt that was never submitted.
+func (c *core) retractPrompt() {
+	c.mu.Lock()
+	c.sent--
+	c.mu.Unlock()
+}
+
+// catchUp ends the quiet replay of a taken-over Session: every prompt so far is
+// accounted for as one the Works or an earlier Works recorded.
+func (c *core) catchUp() {
+	c.mu.Lock()
+	c.quiet = false
+	c.sent = c.m.Info().Prompts
 	c.mu.Unlock()
 }
 
@@ -119,6 +159,9 @@ func (c *core) deliver(d Delivery) {
 	if err := json.Unmarshal(d.Payload, &h); err != nil || h.Event == "" {
 		return
 	}
+	if h.Event == HookStop && h.LastAssistantMessage == "" {
+		h.LastAssistantMessage = lastTranscriptMessage(h.TranscriptPath) // the hook did not carry it
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.ids[d.ID] || c.finished {
@@ -139,12 +182,21 @@ func (c *core) feed(h Hook) {
 }
 
 func (c *core) applyLocked(h Hook, raw json.RawMessage) {
+	before := c.m.Info().Prompts
 	ch, ok := c.m.Apply(h)
-	if !ok {
+	if h.Event == HookUserPromptSubmit && !c.quiet && c.m.Info().Prompts > before && c.m.Info().Prompts-c.humans > c.sent {
+		c.humans++ // a prompt the Works did not send: recorded, never blocked
+		c.log.add(Event{Kind: KindHuman, Hook: h.Event, Text: "a prompt the Works did not send: someone typed in the pane", Raw: raw})
+	}
+	if !ok || c.quiet {
 		return
 	}
 	// A SessionEnd ends the state; the result waits for the pane, whose adapter calls finish.
-	c.log.add(Event{Kind: KindState, State: ch.State, Prev: ch.Prev, Hook: ch.Hook, Tool: ch.Tool, Command: ch.Command, Raw: raw})
+	e := Event{Kind: KindState, State: ch.State, Prev: ch.Prev, Hook: ch.Hook, Tool: ch.Tool, Command: ch.Command, Raw: raw, Turns: c.m.Info().Turns}
+	if h.Event == HookStop {
+		e.Text = h.LastAssistantMessage
+	}
+	c.log.add(e)
 }
 
 // note logs something the developer should know that is not a state change.
@@ -162,7 +214,7 @@ func (c *core) finish(res Result) {
 	c.finished = true
 	if c.m.State() != StateEnded {
 		ch := c.m.End("")
-		c.log.add(Event{Kind: KindState, State: ch.State, Prev: ch.Prev})
+		c.log.add(Event{Kind: KindState, State: ch.State, Prev: ch.Prev, Turns: c.m.Info().Turns})
 	}
 	c.result = res
 	c.mu.Unlock()

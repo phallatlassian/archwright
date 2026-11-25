@@ -532,3 +532,43 @@ func TestTheRoleOfTheArchwrightIsTheSameInTheWorksAndTheSessionAdapter(t *testin
 		t.Fatalf("works says %q, the tmux adapter %q", RoleArchwright, hosted.RoleArchwright)
 	}
 }
+
+// The Job's standing Warden is adopted after a restart like a Wright: its next
+// step is Nudged into the same Session, not run in a second one.
+func TestRestartAdoptsTheStandingWardenAndTheNextStepIsNudgedIntoIt(t *testing.T) {
+	g := newStandingRig(t)
+	g.planFor(g.job.ID, "one:masonry", "two:masonry")
+	g.startStep(g.job.ID, "one")
+	g.handedBack(g.job.ID, "one")
+	eventually(t, "the Warden's Session to be idle", func() bool { return g.fake.Sessions()[0].State() == hosted.StateIdle })
+	// This rig records nothing about Sessions: record what a Works would have.
+	recs, _ := g.st.RunRecords(g.job.ID)
+	info := g.fake.Sessions()[0].Info()
+	g.st.SetRunSession(recs[0].RunID, sessionRecord(info, hosted.StateIdle))
+
+	g.r.Close()
+	if _, err := g.st.InterruptDispatches(); err != nil {
+		t.Fatal(err)
+	}
+	r2 := NewRuns(g.st)
+	r2.poll = 5 * time.Millisecond
+	t.Cleanup(r2.Close)
+	r2.UseSites(g.sm)
+	sr := &SessionRunner{Runners: map[string]hosted.Runner{"claude": g.fake}, Guilds: g.sr.Guilds}
+	r2.Configure(g.sr.Guilds, NewFakeRunner(nil))
+	r2.ConfigureWarden(sr)
+	r2.UseSessions(sr, time.Minute)
+	rec, err := r2.RecoverSessions()
+	if err != nil || rec.Adopted != 1 {
+		t.Fatalf("recovery = %+v, %v", rec, err)
+	}
+	g.r, g.arch = r2, startRun(t, r2, RoleArchwright)
+	g.startStep(g.job.ID, "two")
+	g.handedBack(g.job.ID, "two")
+	if n := len(g.fake.Launches()); n != 1 {
+		t.Fatalf("%d Sessions launched: the Warden was not adopted", n)
+	}
+	if nudges := g.fake.Nudges(); len(nudges) != 1 || !strings.Contains(nudges[0], "Do two") {
+		t.Fatalf("nudges = %q", nudges)
+	}
+}

@@ -35,6 +35,8 @@ type e2eRig struct {
 	tmux, sock, short string
 	tm                *hosted.Tmux
 	sr                *SessionRunner
+	newTmux           func() *hosted.Tmux // another adapter over the same server and files: a Works that started again
+	guilds            GuildSource
 }
 
 func newSessionE2E(t *testing.T, vendor, standinScript string) *e2eRig {
@@ -66,18 +68,22 @@ func newSessionE2E(t *testing.T, vendor, standinScript string) *e2eRig {
 	t.Setenv("ARCHWRIGHT_STANDIN", standinScript)
 	t.Setenv("ARCHWRIGHT_STANDIN_OUT", filepath.Join(short, "out"))
 
-	tm := &hosted.Tmux{
-		Tmux: tmuxBin, HookCommand: []string{bin, "session-hook"}, Socket: sock,
-		Dir: filepath.Join(short, "state"), SocketDir: filepath.Join(short, "h"), UserConf: "-", CancelGrace: time.Second,
-		UserCodexHome: filepath.Join(short, "dev-codex"),
+	newTmux := func() *hosted.Tmux {
+		tm := &hosted.Tmux{
+			Tmux: tmuxBin, HookCommand: []string{bin, "session-hook"}, Socket: sock,
+			Dir: filepath.Join(short, "state"), SocketDir: filepath.Join(short, "h"), UserConf: "-", CancelGrace: time.Second,
+			UserCodexHome: filepath.Join(short, "dev-codex"),
+		}
+		if vendor == "codex" {
+			tm.CodexBin = standin
+		} else {
+			tm.Claude = standin
+		}
+		t.Cleanup(tm.Close)
+		return tm
 	}
-	if vendor == "codex" {
-		tm.CodexBin = standin
-	} else {
-		tm.Claude = standin
-	}
+	tm := newTmux()
 	t.Cleanup(func() {
-		tm.Close()
 		exec.Command(tmuxBin, "-S", sock, "kill-server").Run()
 		os.RemoveAll(short)
 	})
@@ -92,11 +98,11 @@ func newSessionE2E(t *testing.T, vendor, standinScript string) *e2eRig {
 		Runners: map[string]hosted.Runner{"claude": tm, "codex": tm.Codex()},
 		Guilds:  guilds,
 		Record: func(run string, info hosted.Info, state hosted.State) {
-			g.st.SetRunSession(run, info.Pane, info.SessionID, info.TranscriptPath, string(state))
+			g.st.SetRunSession(run, sessionRecord(info, state))
 		},
 	}
 	g.r.Configure(guilds, sr)
-	return &e2eRig{gateRig: g, tmux: tmuxBin, sock: sock, short: short, tm: tm, sr: sr}
+	return &e2eRig{gateRig: g, tmux: tmuxBin, sock: sock, short: short, tm: tm, sr: sr, newTmux: newTmux, guilds: guilds}
 }
 
 func runSessionE2E(t *testing.T, vendor string) {
@@ -329,4 +335,122 @@ func noSpaces(j string) string {
 		out.WriteRune(r)
 	}
 	return out.String()
+}
+
+// restartWorks is the Works stopping and starting again over the same database,
+// the same tmux server and the same files, as ServeWith does it: its Sessions
+// are left in their panes, and the new Works adopts what it finds.
+func (e *e2eRig) restartWorks(t *testing.T) (*Runs, SessionRecovery) {
+	t.Helper()
+	g := e.gateRig
+	g.r.UseSessions(e.sr, time.Hour)
+	g.r.Close()
+	e.tm.Close()
+	if _, err := g.st.InterruptDispatches(); err != nil {
+		t.Fatal(err)
+	}
+	tm := e.newTmux()
+	sr := &SessionRunner{
+		Runners: map[string]hosted.Runner{"claude": tm, "codex": tm.Codex()},
+		Guilds:  e.guilds,
+		Record: func(run string, info hosted.Info, state hosted.State) {
+			g.st.SetRunSession(run, sessionRecord(info, state))
+		},
+	}
+	r2 := NewRuns(g.st)
+	r2.poll = 5 * time.Millisecond
+	t.Cleanup(r2.Close)
+	r2.UseSites(g.sm)
+	r2.Configure(e.guilds, sr)
+	r2.UseSessions(sr, time.Hour)
+	rec, err := r2.RecoverSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r2.Resume(); err != nil {
+		t.Fatal(err)
+	}
+	g.r, e.tm, e.sr = r2, tm, sr
+	return r2, rec
+}
+
+// A Works that stops leaves the Wright's real Session in its pane, and the next
+// one adopts that pane by the id it recorded: the Wright finishes the turn it
+// was in, and the Works then pastes into the same pane what it needs to carry on
+// (the stored brief and the new run's variables), without a second Session.
+func TestRestartedWorksAdoptsTheWrightsRealPaneAndNudgesItOn(t *testing.T) {
+	second := `{"status":"done","result":"second","evidence":["go-test"]}`
+	e := newSessionE2E(t, "claude", "hook SessionStart;hook UserPromptSubmit;sleep 2;hook Stop;readnudge;hook UserPromptSubmit;tool report_result "+second+";hook Stop;hold")
+	g := e.gateRig
+	g.ok(g.warden, "dispatch_wright", `{"piece":"p","brief":`+goodBrief+`}`, nil)
+	var d0 store.Dispatch
+	var rec store.RunRecord
+	eventually(t, "the Wright to be working in its pane", func() bool {
+		d0, _ = g.st.LatestDispatch(g.job.ID, "p")
+		rec, _ = g.st.GetRunRecord(d0.RunID)
+		return rec.SessionState == "working" && rec.PaneID != ""
+	})
+
+	_, recovery := e.restartWorks(t)
+	if recovery.Adopted != 1 || recovery.Lost != 0 || len(recovery.Orphans) != 0 {
+		t.Fatalf("recovery = %+v", recovery)
+	}
+	if old, _ := g.st.GetDispatch(d0.ID); old.Status != store.DispatchInterrupted {
+		t.Fatalf("the old dispatch is %s", old.Status)
+	}
+
+	var d1 store.Dispatch
+	for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		if d1, _ = g.st.LatestDispatch(g.job.ID, "p"); d1.Round == 1 && d1.Status != store.DispatchRunning && d1.Status != store.DispatchQueued {
+			break
+		}
+	}
+	if d1.Round != 1 || d1.Status != store.DispatchReported || !strings.Contains(string(d1.Result), "second") {
+		out, _ := os.ReadFile(filepath.Join(e.short, "out", "tool.out"))
+		t.Fatalf("dispatch = round %d %s %s (report_result said %q)", d1.Round, d1.Status, d1.Result, out)
+	}
+	typed, _ := os.ReadFile(filepath.Join(e.short, "out", "prompt.in"))
+	path := strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(string(typed)), "Read the file "), " in full and carry out what it says.")
+	body, err := os.ReadFile(path)
+	if err != nil || !strings.Contains(string(body), "The Works restarted") || !strings.Contains(string(body), "Add login") || !strings.Contains(string(body), "export ARCHWRIGHT_RUN="+d1.RunID) {
+		t.Fatalf("the Nudge file %s = %q (%v)", path, body, err)
+	}
+	var rec1 store.RunRecord
+	eventually(t, "the new run to be recorded on the adopted pane", func() bool {
+		rec1, _ = g.st.GetRunRecord(d1.RunID)
+		return rec1.PaneID == rec.PaneID && rec1.SessionState == "idle"
+	})
+	if n := len(e.panes(t)); n != 4 { // the factory's own window and the Wright's: "window pane" for each
+		t.Errorf("panes = %q: one Wright pane served both runs", e.panes(t))
+	}
+}
+
+// Cancelling a Wright interrupts its real Session, kills its pane after the
+// grace, records the run cancelled and keeps the worktree.
+func TestCancellingAWrightKillsItsRealPaneAndKeepsItsWorktree(t *testing.T) {
+	e := newSessionE2E(t, "claude", "hook SessionStart;hook UserPromptSubmit;hold")
+	g := e.gateRig
+	g.ok(g.warden, "dispatch_wright", `{"piece":"p","brief":`+goodBrief+`}`, nil)
+	var d store.Dispatch
+	var rec store.RunRecord
+	eventually(t, "the Wright to be working in its pane", func() bool {
+		d, _ = g.st.LatestDispatch(g.job.ID, "p")
+		rec, _ = g.st.GetRunRecord(d.RunID)
+		return rec.SessionState == "working" && rec.PaneID != ""
+	})
+	if _, err := g.r.CancelDispatch(d.ID); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the run to be recorded cancelled", func() bool { rec, _ = g.st.GetRunRecord(d.RunID); return rec.Status == "cancelled" })
+	eventually(t, "the pane to be gone", func() bool {
+		for _, l := range e.panes(t) {
+			if l == rec.PaneID {
+				return false
+			}
+		}
+		return true
+	})
+	if _, err := os.Stat(rec.SessionDir); err != nil {
+		t.Fatalf("the worktree was not kept: %v", err)
+	}
 }
