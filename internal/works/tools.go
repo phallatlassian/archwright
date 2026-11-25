@@ -102,6 +102,12 @@ var catalogue = map[string]tool{
 		}
 		return c.st.ListJobs()
 	}},
+	"list_sites": {roles: []string{RoleArchwright}, call: func(c *callCtx, in json.RawMessage) (any, error) {
+		if err := decode(in, &struct{}{}); err != nil {
+			return nil, err
+		}
+		return c.st.ListSites()
+	}},
 	"show_job": {roles: []string{RoleArchwright}, call: func(c *callCtx, in json.RawMessage) (any, error) {
 		var a struct{ ID string }
 		if err := decode(in, &a); err != nil {
