@@ -260,6 +260,29 @@ func TestStartRejectsUnknownRole(t *testing.T) {
 	}
 }
 
+func TestListSitesToolReturnsEveryRegisteredSite(t *testing.T) {
+	r, st := newRuns(t)
+	env := startRun(t, r, RoleArchwright)
+	var sites []store.Site
+	resp := call(t, env, "ls0", "list_sites", ``)
+	if !resp.OK || json.Unmarshal(resp.Output, &sites) != nil || sites == nil || len(sites) != 0 {
+		t.Fatalf("no Sites should answer an empty list: %+v %s", resp, resp.Output)
+	}
+	for _, n := range []string{"shop", "api"} {
+		if _, err := st.AddSite(store.Site{Name: n, URL: "https://h/o/" + n, ClonePath: "/c/" + n, BaseBranch: "main", ConcurrencyCap: 1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	resp = call(t, env, "ls1", "list_sites", `{}`)
+	sites = nil
+	if !resp.OK || json.Unmarshal(resp.Output, &sites) != nil || len(sites) != 2 || sites[0].Name != "api" || sites[1].Name != "shop" {
+		t.Fatalf("%+v %s", resp, resp.Output)
+	}
+	if resp := call(t, env, "ls2", "list_sites", `{"x":1}`); resp.OK {
+		t.Fatalf("unknown input must be refused: %+v", resp)
+	}
+}
+
 func TestCreateJobToolTakesTheLaunchSiteHint(t *testing.T) {
 	r, st := newRuns(t)
 	if _, err := st.AddSite(store.Site{Name: "shop", URL: "https://git.example.com/o/shop.git", ClonePath: "/c/shop", BaseBranch: "main", ConcurrencyCap: 3}); err != nil {
