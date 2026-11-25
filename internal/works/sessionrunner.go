@@ -235,7 +235,7 @@ func (a *SessionRunner) run(ctx context.Context, req RunRequest, spec runSpec) e
 	for k, v := range req.ExtraEnv {
 		env[k] = v
 	}
-	lreq := hosted.LaunchRequest{Run: req.Env.Run, Job: req.Job, Role: req.Env.Role, Brief: req.Brief, Dir: req.Worktree, Env: env, Spawn: spawn}
+	lreq := hosted.LaunchRequest{Run: req.Env.Run, Job: req.Job, Role: req.Env.Role, Guild: req.Guild, Brief: req.Brief, Dir: req.Worktree, Env: env, Spawn: spawn}
 	var live hosted.Session
 	if rs != nil {
 		// The Session of an earlier Works lost its pane: resume it by id, in the

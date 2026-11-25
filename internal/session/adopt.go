@@ -73,6 +73,8 @@ func (t *Tmux) Adopt(pane string, runs ...string) (Session, error) {
 	s.core.quiet = true
 	s.drainSpool()
 	s.core.catchUp()
+	s.core.onState = s.markState
+	s.markState(s.core.State()) // what the replay found, as the border shows it
 	t.mu.Lock()
 	if err := t.ensureReceiverLocked(); err != nil {
 		t.mu.Unlock()

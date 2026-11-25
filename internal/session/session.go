@@ -55,6 +55,7 @@ type LaunchRequest struct {
 	Run    string // the run id; labels the pane and routes the Session's hooks
 	Job    string // names the Job's window in the factory session
 	Role   string // archwright, warden or wright; labels the pane
+	Guild  string // the Guild the Session works for; its column in the Job's window
 	Brief  string // the first prompt
 	Dir    string // the working directory: the Session's worktree
 	Limits Limits

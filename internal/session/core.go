@@ -26,7 +26,9 @@ type core struct {
 	// quiet applies hooks without logging them: a Session taken over from an
 	// earlier Works is brought up to date from its spool without replaying
 	// its history as news.
-	quiet    bool
+	quiet bool
+	// onState, when set, is told each state the Session enters, under the core's lock.
+	onState  func(State)
 	result   Result
 	finished bool
 }
@@ -188,6 +190,9 @@ func (c *core) applyLocked(h Hook, raw json.RawMessage) {
 		c.humans++ // a prompt the Works did not send: recorded, never blocked
 		c.log.add(Event{Kind: KindHuman, Hook: h.Event, Text: "a prompt the Works did not send: someone typed in the pane", Raw: raw})
 	}
+	if ok && c.onState != nil {
+		c.onState(ch.State)
+	}
 	if !ok || c.quiet {
 		return
 	}
@@ -214,6 +219,9 @@ func (c *core) finish(res Result) {
 	c.finished = true
 	if c.m.State() != StateEnded {
 		ch := c.m.End("")
+		if c.onState != nil {
+			c.onState(ch.State)
+		}
 		c.log.add(Event{Kind: KindState, State: ch.State, Prev: ch.Prev, Turns: c.m.Info().Turns})
 	}
 	c.result = res

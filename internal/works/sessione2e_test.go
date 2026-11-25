@@ -198,7 +198,7 @@ func TestReworkNudgesTheSameWrightSessionInARealTmuxPane(t *testing.T) {
 	if rec1.PaneID != rec.PaneID || d1.Branch != d0.Branch {
 		t.Errorf("panes %q then %q, branches %q then %q", rec.PaneID, rec1.PaneID, d0.Branch, d1.Branch)
 	}
-	panes, _ := exec.Command(e.tmux, "-S", e.sock, "list-panes", "-a", "-F", "#{pane_id}").Output()
+	panes, _ := exec.Command(e.tmux, "-S", e.sock, "list-panes", "-a", "-f", "#{==:#{@placeholder},}", "-F", "#{pane_id}").Output()
 	if n := len(strings.Fields(string(panes))); n != 2 { // the factory's own window and the Wright's
 		t.Errorf("%d panes: %q", n, panes)
 	}
@@ -207,7 +207,7 @@ func TestReworkNudgesTheSameWrightSessionInARealTmuxPane(t *testing.T) {
 // panes lists the panes of the factory session as "window pane" lines.
 func (e *e2eRig) panes(t *testing.T) []string {
 	t.Helper()
-	out, err := exec.Command(e.tmux, "-S", e.sock, "list-panes", "-a", "-F", "#{window_name} #{pane_id}").Output()
+	out, err := exec.Command(e.tmux, "-S", e.sock, "list-panes", "-a", "-f", "#{==:#{@placeholder},}", "-F", "#{window_name} #{pane_id}").Output()
 	if err != nil {
 		t.Fatalf("list-panes: %v", err)
 	}

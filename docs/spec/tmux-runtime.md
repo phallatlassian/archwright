@@ -114,8 +114,8 @@ Delivery to the Works: the hook script appends the payload to the run's spool fi
 - Works-supplied config (`-f`) that first sources the developer's `~/.tmux.conf`, then sets what the factory requires.
 - `remain-on-exit on`, with `pane-died` hooks, so exit status (`pane_dead_status`) and the final screen can be read before cleanup.
 - One `factory` session; window `archwright` for the Archwright; one window per Job named by the Job slug; panes for Wardens and Wrights.
-- Layout: Warden pane left (about 40%), Wrights tiled right (`main-vertical`), re-applied as panes come and go.
-- Pane identity: the pane id is stored per run in SQLite (canonical); pane options `@run` and `@role` are set for convenience; pane borders are labelled `role - piece - state`, derived and rebuilt after a restart.
+- Layout: a Job's window is one column per Guild (masonry, chancery, hallmark, survey, then any other in the order it appeared), each with its Warden on top and its Wrights below. Every column has the same rows; a slot with no Session is an "empty" placeholder pane. Re-applied as panes come and go. A window holding a pane with no Guild (a trust probe) is tiled.
+- Pane identity: the pane id is stored per run in SQLite (canonical); pane options `@run`, `@role`, `@guild` and `@state` (updated on each state transition) are set for convenience; pane borders are labelled `guild · role · run · state` from them, with `⚠` while a permission is waited on, and coloured by role (wright blue, Warden orange, Archwright purple, placeholder grey), so they are rebuilt after a restart. The Works' config also sets prefix `C-a`, double border lines, tabs `[0] Name` and an empty right status; tmux-ukiyo's `nord/default` theme is used if its plugin file is installed and run directly, never through tpm.
 - Attention: Needs-you item, `archwright attach`, and status markers on the pane and window; no automatic popups.
 - Not yet specified: pane cap and overflow in a Job window, and how the dashboard links to live Sessions.
 

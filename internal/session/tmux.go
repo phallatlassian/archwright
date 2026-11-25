@@ -90,6 +90,10 @@ type Tmux struct {
 	// UserConf is the developer's own tmux config, sourced before the Works';
 	// "" means ~/.tmux.conf and "-" none.
 	UserConf string
+	// ThemePlugin is the tmux-ukiyo plugin file the factory's status line is
+	// themed with when it exists; "" means ~/.tmux/plugins/tmux-ukiyo/ukiyo.tmux
+	// and "-" none.
+	ThemePlugin string
 	// BaseEnv, when set, is the developer's shell environment as the Works
 	// snapshotted it (envsnap): the tmux server is started with exactly that and
 	// every Session is spawned with the current snapshot. The Works' own
@@ -254,13 +258,17 @@ func (t *Tmux) launch(ctx context.Context, req LaunchRequest, v vendor) (Session
 		Runner: v.name, Version: t.cliVersion(plan.bin), Mode: req.Spawn.EffectiveMode(), Sandbox: runner.SandboxInherited,
 		Flags: plan.flags, Notices: append([]string{}, plan.notices...),
 	}})
+	s.core.onState = s.markState
 	unregister := t.recv.Register(req.Run, token, s.core.deliver)
-	for opt, val := range map[string]string{"@run": req.Run, "@role": req.Role} {
+	for opt, val := range map[string]string{"@run": req.Run, "@role": req.Role, "@guild": req.Guild, "@state": stateLabel(StateStarting)} {
 		if _, err := t.tmux("set-option", "-p", "-t", pane, opt, val); err != nil {
 			t.tmux("kill-pane", "-t", pane)
 			unregister()
 			return nil, err
 		}
+	}
+	if req.Role != RoleArchwright {
+		t.arrange(window) // after the options: the grid is built from them
 	}
 	go func() {
 		defer unregister()
@@ -388,7 +396,6 @@ func (t *Tmux) place(req LaunchRequest, env map[string]string, argv []string) (p
 	if req.Role == RoleArchwright {
 		t.clearArchwrightWindow(window, pane)
 	}
-	t.tmux("select-layout", "-t", window, "tiled") // keep panes usable as a Job's window fills; a failure is cosmetic
 	return pane, window, nil
 }
 
@@ -442,17 +449,80 @@ func (t *Tmux) writeConf() (string, error) {
 			conf = filepath.Join(home, ".tmux.conf")
 		}
 	}
+	if err := os.MkdirAll(t.Dir, 0o700); err != nil {
+		return "", err
+	}
 	var b strings.Builder
 	if conf != "" && conf != "-" {
 		fmt.Fprintf(&b, "source-file -q %s\n", tmuxQuote(conf))
 	}
 	b.WriteString("# set by the Works, after the developer's own config\n")
 	b.WriteString("set-option -g remain-on-exit on\n") // a dead pane keeps its final screen readable
-	if err := os.MkdirAll(t.Dir, 0o700); err != nil {
+	if err := t.writeTheme(&b); err != nil {           // before the factory's own: a theme sets pane borders too
 		return "", err
 	}
+	b.WriteString(factoryConf)
 	path := filepath.Join(t.Dir, "tmux.conf")
 	return path, os.WriteFile(path, []byte(b.String()), 0o600)
+}
+
+// factoryConf is the factory's look: the prefix, a label on every pane's
+// border built from its pane options (guild, role, run, state), and a border
+// colour by role. The label is "guild · role · run · state" with a warning mark
+// while a permission is waited on; a pane with no @role (the Archwright's) shows
+// its title; the active pane's label is filled and bold with a marker, the others dim.
+const factoryConf = `unbind C-b
+set-option -g prefix C-a
+bind-key C-a send-prefix
+set-option -g pane-border-status top
+set-option -gwq pane-border-lines double
+set-option -g pane-border-format '#{?pane_active,#[reverse bold] ▶ #{?#{&&:#{@role},#{!=:#{@role},archwright}},#{@guild} · #{@role} · #{?@run,#{@run},empty}#{?@state, · #{?#{==:#{@state},permission},⚠ ,}#{@state},},#{pane_title}} #[default],#[dim] #{?#{&&:#{@role},#{!=:#{@role},archwright}},#{@guild} · #{@role} · #{?@run,#{@run},empty}#{?@state, · #{?#{==:#{@state},permission},⚠ ,}#{@state},},#{pane_title}} #[default]}'
+set-option -g pane-border-style 'fg=#{?@placeholder,colour240,#{?#{==:#{@role},archwright},colour141,#{?#{==:#{@role},warden},colour208,#{?@role,colour39,colour141}}}},bg=default'
+set-option -g pane-active-border-style 'fg=#{?@placeholder,colour240,#{?#{==:#{@role},archwright},colour141,#{?#{==:#{@role},warden},colour208,#{?@role,colour39,colour141}}}},bg=default'
+`
+
+// writeTheme writes the status line: tmux-ukiyo's nord theme when its plugin is
+// installed, else tmux's own. The plugin is run directly, never through tpm,
+// which would also read the developer's config and load their other plugins.
+// Either way window tabs read "[0] Name" and the right of the status line is empty.
+func (t *Tmux) writeTheme(b *strings.Builder) error {
+	plugin := t.ThemePlugin
+	if plugin == "" {
+		if home, err := os.UserHomeDir(); err == nil {
+			plugin = filepath.Join(home, ".tmux", "plugins", "tmux-ukiyo", "ukiyo.tmux")
+		}
+	}
+	if st, err := os.Stat(plugin); plugin != "" && plugin != "-" && err == nil && !st.IsDir() {
+		tabs := filepath.Join(t.Dir, "tabs.sh")
+		script := "#!/usr/bin/env bash\n# Rewrite the theme's window tabs from \"#I #W\" to \"[#I] #W\", keeping its colors.\n" +
+			"tmux=" + shellJoin([]string{t.or(t.Tmux, "tmux")}) + "\n" +
+			"for o in window-status-format window-status-current-format; do\n" +
+			"  v=$(\"$tmux\" show-option -gwv \"$o\")\n" +
+			"  \"$tmux\" set-option -gw \"$o\" \"${v//#I #W/[#I] #W}\"\n" +
+			"done\n"
+		if err := os.WriteFile(tabs, []byte(script), 0o700); err != nil {
+			return err
+		}
+		fmt.Fprintf(b, "set-option -g @ukiyo-theme \"nord/default\"\nrun-shell %s\nrun-shell %s\n", tmuxQuote(plugin), tmuxQuote("bash "+shellJoin([]string{tabs})))
+	} else {
+		b.WriteString("set-option -gw window-status-format '[#I] #W'\nset-option -gw window-status-current-format '[#I] #W'\n")
+	}
+	b.WriteString("set-option -g status-right ''\n") // after the theme, which fills it
+	return nil
+}
+
+// stateLabel is a Session's state as the pane's @state option, and so its border label, shows it.
+func stateLabel(s State) string {
+	if s == StateWaitingOnPermission {
+		return "permission"
+	}
+	return string(s)
+}
+
+// markState records the Session's state in its pane's @state option, which the
+// border label shows. A pane that is gone is not an error.
+func (s *tmuxSession) markState(st State) {
+	s.t.tmux("set-option", "-p", "-t", s.pane, "@state", stateLabel(st))
 }
 
 // findWindow returns the id of the Job's window, or "" if it has none.
