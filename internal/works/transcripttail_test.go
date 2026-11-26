@@ -143,3 +143,39 @@ func TestAdoptingASessionAfterARestartTakesNeitherTheEarlierLinesNorLosesTheNewO
 		t.Errorf("new run messages = %q", got)
 	}
 }
+
+func TestAStopMessageTheTranscriptCutIsStillKeptWholeAndOneItCarriedIsNotRepeated(t *testing.T) {
+	long := "findings:\n" + strings.Repeat("y", 40<<10)
+	short := "findings:\nall fine"
+	for _, tc := range []struct {
+		name, said string
+		wantFull   bool
+	}{{"long", long, true}, {"short", short, false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := transcriptWriter{path: t.TempDir() + "/t.jsonl"}
+			g := newSessionRig(t, hosted.Script{
+				Steps: []hosted.Step{w.start(), promptHook, w.says(tc.said), reports, stopHook(tc.said)},
+			})
+			g.send("p")
+			d := g.waitReported("p")
+			g.ended(d.RunID)
+			var whole, messages int
+			for _, e := range mustEvents(t, g.st, d.RunID) {
+				if e.Kind != "message" {
+					continue
+				}
+				messages++
+				raw, err := g.st.RunEventRaw(d.RunID, e.Seq)
+				if err == nil && strings.Contains(string(raw), `"result"`) && strings.Contains(string(raw), tc.said[len(tc.said)-100:]) {
+					whole++
+				}
+			}
+			if tc.wantFull && (whole != 1 || messages != 2) {
+				t.Errorf("long message: %d whole results among %d messages, want 1 of 2", whole, messages)
+			}
+			if !tc.wantFull && messages != 1 {
+				t.Errorf("short message repeated: %d messages", messages)
+			}
+		})
+	}
+}
