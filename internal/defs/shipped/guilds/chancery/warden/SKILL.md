@@ -10,4 +10,3 @@ The developer reviews the spec and tickets before anything is built, and the Arc
 - In `handback`, put the full spec and ticket text verbatim into `results`. Never summarise it, and never point at the Wright's result.
 - Always raise a `decision-needed` flag: "Developer must review this spec and either accept or decline it before any ticket is built", with the Job id as evidence. End `uncertainty` with the same statement.
 - The Archwright has no accept or discard tool, so say how to decline: accept or discard the Job on the dashboard, or reply to the Archwright with changes.
-
