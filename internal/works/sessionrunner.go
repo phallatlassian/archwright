@@ -79,6 +79,10 @@ type liveSession struct {
 	key      string // where the Runner keeps it
 	worktree string
 
+	tailMu sync.Mutex
+	tail   transcriptTail // how far the Session's transcript has been read onto the timeline
+	said   string         // the last message the transcript gave the timeline
+
 	mu    sync.Mutex
 	cur   *carry
 	turns int // turns the Session had finished at the latest event followed
@@ -274,6 +278,7 @@ func (a *SessionRunner) run(ctx context.Context, req RunRequest, spec runSpec) e
 		dir = req.Worktree
 	}
 	ls := &liveSession{job: req.Job, s: live, r: r, key: spec.key, worktree: dir}
+	ls.tail.skip = rs != nil // a resumed Session may go on writing the file it had
 	c := &carry{req: req, armed: true, done: make(chan error, 1)} // the brief was its first prompt
 	ls.cur = c
 	if spec.key != "" {
@@ -441,6 +446,7 @@ func (a *SessionRunner) nudge(ctx context.Context, req RunRequest, ls *liveSessi
 		wait = DefaultNudgeWait
 	}
 	deadline := time.Now().Add(wait)
+	ls.skipTranscript()
 	for {
 		ls.mu.Lock()
 		c.base = ls.s.Info().Turns // while idle, the turns before this prompt
@@ -529,7 +535,31 @@ func (ls *liveSession) settleLocked(c *carry, state hosted.State) {
 
 // follow carries a Session's events to the run that holds it, until it ends.
 func (a *SessionRunner) follow(ls *liveSession) {
-	for e := range ls.s.Events() {
+	events := ls.s.Events()
+	// Tool hooks that move no state make no event, so the transcript is also
+	// read on a tick for what the agent does between them.
+	tick := time.NewTicker(transcriptPoll)
+	defer tick.Stop()
+	for events != nil {
+		var e hosted.Event
+		select {
+		case ev, ok := <-events:
+			if !ok {
+				events = nil
+				continue
+			}
+			e = ev
+		case <-tick.C:
+			if !a.detached.Load() {
+				ls.mu.Lock()
+				c := ls.cur
+				ls.mu.Unlock()
+				if c != nil && !c.finished {
+					ls.ingest(c)
+				}
+			}
+			continue
+		}
 		if a.detached.Load() {
 			continue // the Works has stopped: the Session is the next one's
 		}
@@ -541,8 +571,9 @@ func (a *SessionRunner) follow(ls *liveSession) {
 			continue
 		}
 		if emit {
+			ls.ingest(c) // what the agent did before this event comes first
 			c.req.Trace.Emit(timelineKind(e), summarizeSession(e), rawOfSession(e))
-			if e.Kind == hosted.KindState && e.Hook == hosted.HookStop && strings.TrimSpace(e.Text) != "" {
+			if e.Kind == hosted.KindState && e.Hook == hosted.HookStop && strings.TrimSpace(e.Text) != "" && ls.lastSaid() != strings.TrimSpace(e.Text) {
 				// What the agent said ending its turn, kept as the run's last message: a
 				// Session that ends without reporting still has its last words.
 				raw, _ := json.Marshal(map[string]string{"result": e.Text})
@@ -572,6 +603,50 @@ func (a *SessionRunner) follow(ls *liveSession) {
 	ls.mu.Lock()
 	c.finish(a.ended(ls.r, ls.s))
 	ls.mu.Unlock()
+}
+
+// transcriptPoll is how often a Session's transcript is read between its events.
+const transcriptPoll = 500 * time.Millisecond
+
+// ingest puts what the Session's agent has written to its transcript since the
+// last read onto c's timeline. Only a Claude Session's transcript is read.
+func (ls *liveSession) ingest(c *carry) {
+	if ls.r == nil || ls.r.Name() != "claude" {
+		return
+	}
+	ls.tailMu.Lock()
+	ls.tail.follow(ls.s.Info().TranscriptPath)
+	entries := ls.tail.read(false)
+	for _, e := range entries {
+		if e.kind == "message" {
+			ls.said = e.summary
+		}
+	}
+	ls.tailMu.Unlock()
+	for _, e := range entries {
+		c.req.Trace.Emit(e.kind, e.summary, e.raw)
+	}
+}
+
+// lastSaid is the last message the transcript gave the timeline, which a Stop
+// hook that carries the same words need not repeat.
+func (ls *liveSession) lastSaid() string {
+	ls.tailMu.Lock()
+	defer ls.tailMu.Unlock()
+	return ls.said
+}
+
+// skipTranscript starts the next run at the end of the transcript, so it takes
+// none of the lines of the run before it or of a person typing between.
+func (ls *liveSession) skipTranscript() {
+	if ls.r == nil || ls.r.Name() != "claude" {
+		return
+	}
+	ls.tailMu.Lock()
+	defer ls.tailMu.Unlock()
+	ls.tail.follow(ls.s.Info().TranscriptPath)
+	ls.tail.toEnd()
+	ls.said = ""
 }
 
 func (a *SessionRunner) record(req RunRequest, info hosted.Info, state hosted.State) {
