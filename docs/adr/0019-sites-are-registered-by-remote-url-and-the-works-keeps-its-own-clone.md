@@ -14,3 +14,5 @@ The `archwright` CLI's hint of the current Site (ADR 0010) now matches the launc
 - Worktree cleanup, branch deletion and `worktree prune` (ADR 0008) now touch only the Works' clone.
 - A Wright with a shell can still reach the clone's `.git` through its worktree's pointer file, but that is the factory's copy and the developer's is out of reach.
 - Developers lose the shortcut of registering a repo they have not pushed anywhere.
+
+Amended by ADR 0030 (proposed): the clone is a normal clone with a main checkout that no agent edits, trusted once per runner so every worktree made from it inherits folder trust; the bare clone this ADR chose is replaced. Everything else here stands.

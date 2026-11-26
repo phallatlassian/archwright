@@ -9,3 +9,5 @@ Forge access is direct. Agents of any role run `gh` and `git push` as the develo
 Review before push is Plan ordering only: the `open-pr` step is blocked by Review (ADR 0012, ADR 0021), and nothing enforces it on the push itself. We say so plainly. The hard risk to keep visible: with agents pushing themselves and hooks observe-only, the developer's approval in the pane is the only gate on a push. Which roles may use the Forge is not limited here, and whether `gh` and `git push` prompt under the developer's policy is checked by `archwright doctor` but not otherwise probed.
 
 Supersedes ADR 0022 and ADR 0024, and ADR 0025 in part. Amends ADR 0005's forked `pr` skill (it reverts to plain `gh`), ADR 0008 and ADR 0012 (see their footers).
+
+Amended by ADR 0030 (proposed): the Masonry Warden merges accepted piece branches itself, in its own worktree, and sends a conflict back to the same Wright; there is no merge Wright and the Works no longer runs the merge. The Works still runs the Site's gates on a Snapshot at handback, outside any agent, and that run stays authoritative.
