@@ -41,6 +41,7 @@ type manifest struct {
 	DeniedTools  []string `yaml:"denied_tools"`
 	ReworkRounds int      `yaml:"rework_rounds"`
 	Skills       []string `yaml:"skills"`
+	UserOnly     []string `yaml:"user_only_skills"`
 }
 
 func readGuilds(fsys fs.FS, source string) map[string]attempt[Guild] {
@@ -80,7 +81,7 @@ func loadGuild(fsys fs.FS, dir, name, source string) (Guild, error) {
 		return Guild{}, fmt.Errorf("GUILD.md manifest: %w", err)
 	}
 	g := Guild{Name: name, Intake: m.Intake, Handback: m.Handback, Runner: m.Runner, Runners: m.Runners, Requires: m.Requires,
-		Access: m.Access, DeniedTools: m.DeniedTools, ReworkRounds: m.ReworkRounds, Skills: m.Skills,
+		Access: m.Access, DeniedTools: m.DeniedTools, ReworkRounds: m.ReworkRounds, Skills: m.Skills, UserOnly: m.UserOnly,
 		Charter: strings.TrimSpace(string(charter)), Wrights: map[string]string{}, Source: source}
 	if g.Access == "" {
 		g.Access = ReadOnly // the narrowest, when the manifest does not say
@@ -135,6 +136,11 @@ func (g Guild) validate() error {
 	}
 	if !contains(g.Runners, g.Runner) {
 		return fmt.Errorf("default runner %q is not in the permitted set %v", g.Runner, g.Runners)
+	}
+	for _, u := range g.UserOnly {
+		if !contains(g.Skills, u) {
+			return fmt.Errorf("user_only_skills lists %q, which is not in skills", u)
+		}
 	}
 	for _, c := range g.Requires {
 		if !knownCaps[c] {

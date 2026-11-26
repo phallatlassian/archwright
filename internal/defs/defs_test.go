@@ -167,15 +167,16 @@ func TestInvalidGuildKeepsPreviousAndReportsError(t *testing.T) {
 
 func TestInvalidGuildRules(t *testing.T) {
 	cases := map[string]string{
-		"widening key":     "---\nintake: a\nhandback: b\nrunner: claude\nrunners: [claude]\npermission_mode: bypassPermissions\n---\nx",
-		"allowed tools":    "---\nintake: a\nhandback: b\nrunner: claude\nrunners: [claude]\nallowed_tools: [Bash]\n---\nx",
-		"unknown runner":   "---\nintake: a\nhandback: b\nrunner: gpt\nrunners: [gpt]\n---\nx",
-		"default not in":   "---\nintake: a\nhandback: b\nrunner: claude\nrunners: [codex]\n---\nx",
-		"bad access":       "---\nintake: a\nhandback: b\nrunner: claude\nrunners: [claude]\naccess: root\n---\nx",
-		"unknown requires": "---\nintake: a\nhandback: b\nrunner: claude\nrunners: [claude]\nrequires: [magic]\n---\nx",
-		"no charter":       "---\nintake: a\nhandback: b\nrunner: claude\nrunners: [claude]\n---\n",
-		"no intake":        "---\nhandback: b\nrunner: claude\nrunners: [claude]\n---\nx",
-		"negative rework":  "---\nintake: a\nhandback: b\nrunner: claude\nrunners: [claude]\nrework_rounds: -1\n---\nx",
+		"widening key":       "---\nintake: a\nhandback: b\nrunner: claude\nrunners: [claude]\npermission_mode: bypassPermissions\n---\nx",
+		"allowed tools":      "---\nintake: a\nhandback: b\nrunner: claude\nrunners: [claude]\nallowed_tools: [Bash]\n---\nx",
+		"unknown runner":     "---\nintake: a\nhandback: b\nrunner: gpt\nrunners: [gpt]\n---\nx",
+		"default not in":     "---\nintake: a\nhandback: b\nrunner: claude\nrunners: [codex]\n---\nx",
+		"bad access":         "---\nintake: a\nhandback: b\nrunner: claude\nrunners: [claude]\naccess: root\n---\nx",
+		"unknown requires":   "---\nintake: a\nhandback: b\nrunner: claude\nrunners: [claude]\nrequires: [magic]\n---\nx",
+		"no charter":         "---\nintake: a\nhandback: b\nrunner: claude\nrunners: [claude]\n---\n",
+		"no intake":          "---\nhandback: b\nrunner: claude\nrunners: [claude]\n---\nx",
+		"user-only unlisted": "---\nintake: a\nhandback: b\nrunner: claude\nrunners: [claude]\nskills: [tdd]\nuser_only_skills: [pr]\n---\nx",
+		"negative rework":    "---\nintake: a\nhandback: b\nrunner: claude\nrunners: [claude]\nrework_rounds: -1\n---\nx",
 	}
 	for name, manifest := range cases {
 		cfg := t.TempDir()

@@ -204,3 +204,35 @@ func TestEveryShippedGuildSkillResolves(t *testing.T) {
 }
 
 func readFile(s Skill, name string) ([]byte, error) { return fs.ReadFile(s.FS, name) }
+
+// Every skill a shipped Guild lists is one its agent can invoke, unless the
+// Guild's manifest marks it user-only (#162). A skill flagged against the
+// agent is silently unusable: the Guild would name it and the run could not
+// call it.
+func TestEveryShippedGuildSkillIsInvocableUnlessMarkedUserOnly(t *testing.T) {
+	reg := defs.New(defs.Shipped(), "")
+	reg.Reload()
+	c := Vendored()
+	for _, g := range reg.Guilds() {
+		userOnly := map[string]bool{}
+		for _, name := range g.UserOnly {
+			userOnly[name] = true
+		}
+		set, err := c.Select(g.Skills)
+		if err != nil {
+			t.Fatalf("guild %s: %v", g.Name, err)
+		}
+		for _, s := range set {
+			flags, err := DisablingFlags(s)
+			if err != nil {
+				t.Fatalf("%s/%s: %v", g.Name, s.Name, err)
+			}
+			switch {
+			case len(flags) > 0 && !userOnly[s.Name]:
+				t.Errorf("guild %s lists %s, which the agent cannot invoke (%v); fork it or list it under user_only_skills", g.Name, s.Name, flags)
+			case len(flags) == 0 && userOnly[s.Name]:
+				t.Errorf("guild %s marks %s user-only, but it is invocable; drop it from user_only_skills", g.Name, s.Name)
+			}
+		}
+	}
+}
