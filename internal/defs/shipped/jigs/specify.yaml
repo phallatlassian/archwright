@@ -7,6 +7,6 @@ parameters:
 steps:
   - id: specify
     guild: chancery
-    task: "Write a spec and tickets, with declared blocking dependencies, for: {{ambition}}"
+    task: "Write a spec and tickets, with declared blocking dependencies, for: {{ambition}}. The deliverable is the full text of the spec and every ticket with its blocked-by, handed back in full for the developer to review and accept or decline; not a summary."
     outputs: [spec, tickets]
     checkpoint: true
