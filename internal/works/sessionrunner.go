@@ -278,7 +278,7 @@ func (a *SessionRunner) run(ctx context.Context, req RunRequest, spec runSpec) e
 		dir = req.Worktree
 	}
 	ls := &liveSession{job: req.Job, s: live, r: r, key: spec.key, worktree: dir}
-	ls.tail.skip = rs != nil // a resumed Session may go on writing the file it had
+	ls.tail.skip = rs != nil                                      // a resumed Session may go on writing the file it had
 	c := &carry{req: req, armed: true, done: make(chan error, 1)} // the brief was its first prompt
 	ls.cur = c
 	if spec.key != "" {
