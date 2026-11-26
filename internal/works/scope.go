@@ -79,13 +79,13 @@ func (r *Runs) warnScopeOverlap(d store.Dispatch, b Brief) {
 			shown = append(shown, fmt.Sprintf("%s ~ %s", p.Mine, p.Theirs))
 		}
 		sort.Strings(shown)
-		_, err := r.st.AddNeedsYou(store.NewNeedsYou{
+		_, err := r.st.AddNeedsYouReported(store.NewNeedsYou{
 			Kind: store.NeedsScopeOverlap, JobID: job.ID, Site: job.Site,
 			Summary: fmt.Sprintf("Jobs %s and %s both write to overlapping scope on Site %s (%s); both continue, expect conflicts at merge time",
 				job.ID, other, job.Site, shown[0]),
 			DedupeKey: strings.Join(append([]string{store.NeedsScopeOverlap, lo, hi}, shown...), "|"),
 			Detail:    map[string]any{"jobs": []string{job.ID, other}, "site": job.Site, "overlaps": ps},
-		})
+		}, "scope_overlap")
 		if err != nil {
 			log.Printf("dispatch %s: filing scope overlap warning: %v", d.ID, err)
 		}

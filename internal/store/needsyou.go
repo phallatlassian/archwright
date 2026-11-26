@@ -48,6 +48,30 @@ func (s *Store) AddNeedsYou(n NewNeedsYou) (bool, error) {
 	return true, tx.Commit()
 }
 
+// AddNeedsYouReported files an item like AddNeedsYou and, when it is new, also
+// files a report named reportName in the Archwright's inbox, so the hooks and
+// the idle-wake nudge tell it the item exists.
+func (s *Store) AddNeedsYouReported(n NewNeedsYou, reportName string) (bool, error) {
+	at := s.stamp()
+	tx, err := s.db.Begin()
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	added, err := addNeedsYou(tx, at, n)
+	if err != nil || !added {
+		return false, err
+	}
+	if err := addInbox(tx, at, InboxReport, reportName, n.JobID, n.Summary, n.Detail, 0); err != nil {
+		return false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	s.notifyInbox()
+	return true, nil
+}
+
 // addNeedsYou files an item inside a transaction, reporting whether it was new.
 func addNeedsYou(tx *sql.Tx, at string, n NewNeedsYou) (bool, error) {
 	detail, err := json.Marshal(n.Detail)

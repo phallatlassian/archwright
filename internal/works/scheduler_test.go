@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -224,6 +225,12 @@ func TestOverlappingScopesWarnInNeedsYouWithoutBlocking(t *testing.T) {
 	json.Unmarshal(items[0].Detail, &detail)
 	if fmt.Sprint(detail.Jobs) != fmt.Sprint([]string{j2.ID, j1.ID}) {
 		t.Fatalf("warning names both Jobs: %s", items[0].Detail)
+	}
+	var in InboxRead
+	g.ok(g.arch, "read_inbox", `{}`, &in)
+	if len(in.Items) != 1 || in.Items[0].Kind != store.InboxReport || in.Items[0].Name != "scope_overlap" || in.Items[0].JobID != j2.ID ||
+		!strings.Contains(in.Items[0].Summary, j1.ID) || !strings.Contains(in.Items[0].Summary, j2.ID) {
+		t.Fatalf("the Archwright must be told of the overlap: %+v", in.Items)
 	}
 	send(w2, "p2b", "auth/login", false) // same overlap again: no duplicate warning
 	send(w3, "p3", "billing/", false)    // disjoint
