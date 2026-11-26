@@ -51,11 +51,16 @@ func checkDirs(r *collector, d Deps) {
 }
 
 // checkSchema compares the database's schema version with this binary's. It
-// reads a private copy of the database (store.OpenSnapshot), never the file
-// itself, and returns it when its Sites can be read.
+// reads a private copy of the database (Deps.Snapshot, else
+// store.OpenSnapshot), never the file itself, and returns it when its Sites
+// can be read.
 func checkSchema(r *collector, d Deps) *store.Snapshot {
 	db := d.Dirs.Database()
-	snap, err := store.OpenSnapshot(db)
+	open := d.Snapshot
+	if open == nil {
+		open = func() (*store.Snapshot, error) { return store.OpenSnapshot(db) }
+	}
+	snap, err := open()
 	if errors.Is(err, os.ErrNotExist) {
 		r.pass("schema", "no database yet; the Works creates it at schema v%d on first use", store.SchemaVersion())
 		return nil

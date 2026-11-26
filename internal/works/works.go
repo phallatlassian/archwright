@@ -68,8 +68,11 @@ func Serve(ctx context.Context, d paths.Dirs, ready chan<- struct{}) error {
 
 // Options are what a caller adds to the Works.
 type Options struct {
-	// Preflight must pass before any run starts (ADR 0014); nil means none.
-	Preflight func(context.Context) error
+	// Preflight makes the check that must pass before any run starts (ADR
+	// 0014); nil means none. It is given a way to read the Works' own
+	// database through its open store, so the check never opens that
+	// database's files by path.
+	Preflight func(snapshot func() (*store.Snapshot, error)) func(context.Context) error
 }
 
 // ServeWith is Serve with options.
@@ -118,7 +121,9 @@ func ServeWith(ctx context.Context, d paths.Dirs, ready chan<- struct{}, opts Op
 	defer runs.Close()
 	runs.UseSites(sm)
 	runs.UseForge(forge.Default())
-	runs.SetPreflight(opts.Preflight)
+	if opts.Preflight != nil {
+		runs.SetPreflight(opts.Preflight(st.Snapshot))
+	}
 	reg := defs.New(defs.Shipped(), d.Config)
 	ReloadDefinitions(reg)
 	runs.UseDefinitions(reg)
