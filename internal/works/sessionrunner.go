@@ -171,7 +171,11 @@ func (a *SessionRunner) Run(ctx context.Context, req RunRequest) error {
 // standing Warden Session for its Guild, which is launched for the first step
 // and Nudged with each later one (ADR 0029).
 func (a *SessionRunner) RunWarden(ctx context.Context, req WardenRequest) error {
-	return a.run(ctx, RunRequest{Env: req.Env, Job: req.Job, Guild: req.Guild, Piece: req.Step, Worktree: req.Worktree, Brief: req.Brief, ExtraEnv: req.ExtraEnv, Trace: req.Trace}, a.standing(req.Job, req.Guild, stepNudge))
+	spec := a.standing(req.Job, req.Guild, stepNudge)
+	if req.Answered {
+		spec.nudge = answerNudge
+	}
+	return a.run(ctx, RunRequest{Env: req.Env, Job: req.Job, Guild: req.Guild, Piece: req.Step, Worktree: req.Worktree, Brief: req.Brief, ExtraEnv: req.ExtraEnv, Trace: req.Trace}, spec)
 }
 
 // RunReview implements ReviewRunner: a read-only Session of the Review Guild,

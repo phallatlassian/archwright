@@ -129,3 +129,45 @@ func TestStepsAreDeletedWithTheirJobAndCountAsActive(t *testing.T) {
 		t.Fatalf("steps left: %v", runs)
 	}
 }
+
+func TestAWardensBlockingAskParksItsStepAndTheAnswerResumesIt(t *testing.T) {
+	s, _ := open(t)
+	j := jobWithPlan(t, s)
+	if _, err := s.StartStep(j.ID, "a", allowStart("masonry", "the brief")); err != nil {
+		t.Fatal(err)
+	}
+	q := []Question{{ID: "q", Text: "Accept?"}}
+	// A non-blocking ask parks nothing; a blocking one parks the running step.
+	if _, err := s.CreateAsk(NewAsk{JobID: j.ID, Asker: "warden", Guild: "masonry", Step: "a", Kind: AskDecision, Questions: q}); err != nil {
+		t.Fatal(err)
+	}
+	if sr, _ := s.GetStepRun(j.ID, "a"); sr.Status != StepRunning {
+		t.Fatalf("a non-blocking ask parked the step: %s", sr.Status)
+	}
+	ask, err := s.CreateAsk(NewAsk{JobID: j.ID, Asker: "warden", Guild: "masonry", Step: "a", Kind: AskDecision, Blocking: true, Questions: q})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sr, _ := s.GetStepRun(j.ID, "a"); sr.Status != StepBlocked {
+		t.Fatalf("step is %s, want blocked", sr.Status)
+	}
+	if err := s.FailStep(j.ID, "a", "its run ended"); err != nil {
+		t.Fatal(err)
+	}
+	if sr, _ := s.GetStepRun(j.ID, "a"); sr.Status != StepBlocked {
+		t.Fatalf("the end of the Warden's run failed a parked step: %s", sr.Status)
+	}
+	if _, err := s.StartStep(j.ID, "a", allowStart("masonry", "again")); !errors.Is(err, ErrConflict) {
+		t.Fatalf("a parked step was started again: %v", err)
+	}
+	res, err := s.AnswerAsk(ask.ID, HolderArchwright, "dashboard", []Answer{{QuestionID: "q", Values: []string{"yes"}}}, nil)
+	if err != nil || len(res.Steps) != 1 || res.Steps[0].Status != StepRunning || res.Steps[0].Step != "a" {
+		t.Fatalf("answer: %+v %v", res, err)
+	}
+	if sr, _ := s.GetStepRun(j.ID, "a"); sr.Status != StepRunning {
+		t.Fatalf("step is %s after the answer", sr.Status)
+	}
+	if as, _ := s.StepAsks(j.ID, "a"); len(as) != 2 {
+		t.Fatalf("step asks %+v", as)
+	}
+}

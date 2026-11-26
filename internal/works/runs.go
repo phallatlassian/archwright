@@ -104,6 +104,9 @@ type Runs struct {
 	// dispatches the developer cancelled, so their end is not a failure to report.
 	cancels   map[string]context.CancelFunc
 	cancelled map[string]bool
+	// stepRuns is the latest Warden run of each started step, by job/step: a run
+	// that ends after a later one took over (an answered Ask) does not fail the step.
+	stepRuns map[string]string
 }
 
 type run struct {
@@ -130,7 +133,7 @@ type run struct {
 // NewRuns returns an empty registry over st.
 func NewRuns(st *store.Store) *Runs {
 	bg, cancel := context.WithCancelCause(context.Background())
-	r := &Runs{st: st, poll: 25 * time.Millisecond, runs: map[string]*run{}, cancels: map[string]context.CancelFunc{}, cancelled: map[string]bool{}, prStates: map[string]PRStatus{}, prBusy: map[string]bool{}, prAge: prReadAge, bg: bg, cancelBg: cancel}
+	r := &Runs{st: st, poll: 25 * time.Millisecond, runs: map[string]*run{}, cancels: map[string]context.CancelFunc{}, cancelled: map[string]bool{}, stepRuns: map[string]string{}, prStates: map[string]PRStatus{}, prBusy: map[string]bool{}, prAge: prReadAge, bg: bg, cancelBg: cancel}
 	r.sched = newScheduler(r)
 	st.SetInboxNotifier(r.inboxChanged)
 	r.wg.Add(2)
