@@ -217,7 +217,7 @@ func readDelivered(file string) []string {
 func RemoveDelivered(worktree string) error {
 	file, err := deliveredPath(worktree)
 	if err != nil {
-		return err
+		return nil // no usable git directory, so no record; git's own removal decides
 	}
 	for _, p := range readDelivered(file) {
 		rel := path.Clean(strings.TrimPrefix(p, "/"))
