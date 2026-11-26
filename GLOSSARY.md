@@ -44,8 +44,16 @@ _Avoid_: process, terminal, pane
 The Works delivering text to an idle Session.
 _Avoid_: ping, poke, interrupt
 
+**Main checkout**:
+The one working tree of a Site's clone, which no agent edits or runs in. The developer trusts it once per runner, and every worktree made from it inherits that trust (ADR 0030).
+_Avoid_: base checkout, trusted folder
+
+**Integration worktree**:
+A Job's single full worktree, where accepted pieces are merged and from which the Job's pull request is raised. The Warden of the Guild that declares it stands in it (ADR 0030).
+_Avoid_: merge worktree, Warden's workspace
+
 **Trust probe**:
-A Session the Works launches at Site registration, in the Site's folder under the worktree root (the parent of its Job worktrees), so the developer accepts each runner's folder trust (and Codex's hook trust) once. A Session that starts is the evidence both were given and the hooks reach the Works.
+A Session the Works launches at Site registration, in the Site's main checkout, so the developer accepts each runner's folder trust (and Codex's hook trust) once. A Session that starts is the evidence both were given and the hooks reach the Works.
 _Avoid_: trust check, warm-up
 
 **Job**:
