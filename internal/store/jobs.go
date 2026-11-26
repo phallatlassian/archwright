@@ -10,6 +10,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/phallatlassian/archwright/internal/remote"
 )
 
 // ErrNotFound means the requested Job or Plan does not exist.
@@ -90,6 +92,66 @@ func (s *Store) CreateJobFor(site, title, description, sourceIssue string) (Job,
 		}
 	}
 	return s.createJob(site, title, description, sourceIssue)
+}
+
+// CreateJobFromRef is CreateJobFor taking, instead of a full source issue URL,
+// a short issue reference: N, #N or OWNER/REPO#N. The URL is built from the
+// Site's normalised remote and then gated by ValidSourceIssue. Both creation
+// paths (the create_job tool and POST /jobs) go through it.
+func (s *Store) CreateJobFromRef(site, title, description, sourceIssue, issueRef string) (Job, error) {
+	issueRef = strings.TrimSpace(issueRef)
+	if issueRef == "" {
+		return s.CreateJobFor(site, title, description, sourceIssue)
+	}
+	if sourceIssue != "" {
+		return Job{}, errors.New("give either source_issue or issue, not both")
+	}
+	if site == "" {
+		sites, err := s.ListSites()
+		if err != nil {
+			return Job{}, err
+		}
+		names := make([]string, len(sites))
+		for i, st := range sites {
+			names[i] = st.Name
+		}
+		return Job{}, fmt.Errorf("issue %q needs a Site to build its URL from; registered Sites: %s (or pass the full source_issue URL)", issueRef, strings.Join(names, ", "))
+	}
+	st, err := s.GetSite(site)
+	if err != nil {
+		return Job{}, err
+	}
+	url, err := issueURL(st.URL, issueRef)
+	if err != nil {
+		return Job{}, err
+	}
+	return s.CreateJobFor(site, title, description, url)
+}
+
+// issueURL builds https://host/owner/repo/issues/N from a Site remote and a
+// short reference.
+func issueURL(siteRemote, ref string) (string, error) {
+	key, err := remote.Normalize(siteRemote)
+	if err != nil {
+		return "", err
+	}
+	host, path, _ := strings.Cut(key, "/")
+	if strings.Contains(host, ":") {
+		return "", fmt.Errorf("the Site remote %s has a non-default port, which may not be the web port; pass the full source_issue URL", key)
+	}
+	num := strings.TrimPrefix(ref, "#")
+	if i := strings.LastIndex(ref, "#"); i > 0 {
+		repo := ref[:i]
+		owner, name, ok := strings.Cut(repo, "/")
+		if !ok || owner == "" || name == "" || strings.Contains(name, "/") || strings.ContainsAny(repo, " \t") {
+			return "", fmt.Errorf("issue reference %q must be N, #N or OWNER/REPO#N", ref)
+		}
+		path, num = repo, ref[i+1:]
+	}
+	if !isDigits(num) {
+		return "", fmt.Errorf("issue reference %q must be N, #N or OWNER/REPO#N", ref)
+	}
+	return ValidSourceIssue("https://" + host + "/" + path + "/issues/" + num)
 }
 
 // ValidSourceIssue checks only the shape of a source issue reference, an

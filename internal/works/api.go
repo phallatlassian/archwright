@@ -177,6 +177,7 @@ func newHandler(st *store.Store, runs *Runs, sm *sites.Manager, token string, pi
 		var in struct {
 			Title, Description, Site, Path string
 			SourceIssue                    string `json:"source_issue"`
+			Issue                          string
 		}
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 			fail(w, err)
@@ -188,12 +189,12 @@ func newHandler(st *store.Store, runs *Runs, sm *sites.Manager, token string, pi
 		case in.Path != "": // the directory the developer launched from
 			var site store.Site
 			if site, err = sm.Resolve(in.Path); err == nil {
-				j, err = st.CreateJobFor(site.Name, in.Title, in.Description, in.SourceIssue)
+				j, err = st.CreateJobFromRef(site.Name, in.Title, in.Description, in.SourceIssue, in.Issue)
 			}
 		case in.Site != "":
-			j, err = st.CreateJobFor(in.Site, in.Title, in.Description, in.SourceIssue)
+			j, err = st.CreateJobFromRef(in.Site, in.Title, in.Description, in.SourceIssue, in.Issue)
 		default:
-			j, err = st.CreateJobFor("", in.Title, in.Description, in.SourceIssue)
+			j, err = st.CreateJobFromRef("", in.Title, in.Description, in.SourceIssue, in.Issue)
 		}
 		if err != nil {
 			fail(w, err)
