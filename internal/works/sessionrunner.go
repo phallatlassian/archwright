@@ -81,7 +81,7 @@ type liveSession struct {
 
 	tailMu sync.Mutex
 	tail   transcriptTail // how far the Session's transcript has been read onto the timeline
-	said   string         // the last message the transcript gave the timeline
+	said   string         // the full text of the last message the transcript gave the timeline, if its raw held it all
 
 	mu    sync.Mutex
 	cur   *carry
@@ -574,13 +574,13 @@ func (a *SessionRunner) follow(ls *liveSession) {
 			ls.ingest(c) // what the agent did before this event comes first
 			if e.Kind == hosted.KindState && e.Hook == hosted.HookStop && strings.TrimSpace(e.Text) != "" {
 				// The transcript can lag the turn: look again for the last message before the run settles.
-				for i := 0; i < stopRereads && ls.lastSaid() != clipLine(e.Text); i++ {
+				for i := 0; i < stopRereads && !ls.saidAll(e.Text); i++ {
 					time.Sleep(stopRereadWait)
 					ls.ingest(c)
 				}
 			}
 			c.req.Trace.Emit(timelineKind(e), summarizeSession(e), rawOfSession(e))
-			if e.Kind == hosted.KindState && e.Hook == hosted.HookStop && strings.TrimSpace(e.Text) != "" && ls.lastSaid() != clipLine(e.Text) {
+			if e.Kind == hosted.KindState && e.Hook == hosted.HookStop && strings.TrimSpace(e.Text) != "" && !ls.saidAll(e.Text) {
 				// What the agent said ending its turn, kept as the run's last message: a
 				// Session that ends without reporting still has its last words.
 				raw, _ := json.Marshal(map[string]string{"result": e.Text})
@@ -636,7 +636,7 @@ func (ls *liveSession) ingest(c *carry) {
 	entries := ls.tail.read(false)
 	for _, e := range entries {
 		if e.kind == "message" {
-			ls.said = e.summary
+			ls.said = e.whole
 		}
 	}
 	ls.tailMu.Unlock()
@@ -645,12 +645,12 @@ func (ls *liveSession) ingest(c *carry) {
 	}
 }
 
-// lastSaid is the last message the transcript gave the timeline, which a Stop
-// hook that carries the same words need not repeat.
-func (ls *liveSession) lastSaid() string {
+// saidAll is whether the last message the transcript gave the timeline carried
+// all of text, which a Stop hook with the same words need not repeat.
+func (ls *liveSession) saidAll(text string) bool {
 	ls.tailMu.Lock()
 	defer ls.tailMu.Unlock()
-	return ls.said
+	return ls.said != "" && strings.TrimSpace(ls.said) == strings.TrimSpace(text)
 }
 
 // skipTranscript starts the next run at the end of the transcript, so it takes

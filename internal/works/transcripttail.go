@@ -31,6 +31,7 @@ type transcriptEntry struct {
 	kind    string // message, tool_use, tool_result or other
 	summary string
 	raw     json.RawMessage
+	whole   string // a message's full text, when raw carries all of it
 }
 
 // transcriptTail is where a run's reading of a Session's transcript is. The
@@ -170,6 +171,9 @@ func entriesOf(line []byte) []transcriptEntry {
 			continue
 		}
 		e.raw = rawBlock(top, blk)
+		if e.kind == "message" && !bytes.Contains(e.raw, []byte(`"truncated":true`)) {
+			e.whole = jsonString(blk["text"])
+		}
 		out = append(out, e)
 	}
 	return out
