@@ -10,7 +10,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/fstest"
 
+	"github.com/phallatlassian/archwright/internal/skills"
 	"github.com/phallatlassian/archwright/internal/store"
 )
 
@@ -83,6 +85,9 @@ func (r remotes) create(t *testing.T, path string, files map[string]string) repo
 func (r repo) commit(msg string, files map[string]string) {
 	r.t.Helper()
 	for name, content := range files {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(r.work, name)), 0o755); err != nil {
+			r.t.Fatal(err)
+		}
 		if err := os.WriteFile(filepath.Join(r.work, name), []byte(content), 0o644); err != nil {
 			r.t.Fatal(err)
 		}
@@ -892,5 +897,115 @@ func TestProbeDirIsTheFolderTheJobWorktreesSitIn(t *testing.T) {
 	}
 	if _, err := e.m.ProbeDir("nope"); err == nil {
 		t.Error("a probe dir of a Site that is not registered")
+	}
+}
+
+// deliverSkills puts the Guild's skills into a worktree as a run would.
+func deliverSkills(t *testing.T, w store.Worktree, names ...string) {
+	t.Helper()
+	var set []skills.Skill
+	for _, n := range names {
+		set = append(set, skills.Skill{Name: n, FS: fstest.MapFS{"SKILL.md": {Data: []byte("---\nname: " + n + "\n---\n")}}})
+	}
+	if _, err := skills.Deliver(skills.Request{Worktree: w.Path, RunDir: filepath.Join(realTemp(t), "run-"+w.ID), Runner: "claude", Skills: set}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCloseAcceptRemovesWorktreeHoldingOnlyDeliveredSkills(t *testing.T) {
+	e := setup(t)
+	j := e.job(t)
+	integ, _ := e.m.CreateWorktree(j.ID, store.KindIntegration, "")
+	w, _ := e.m.CreateWorktree(j.ID, store.KindWright, "")
+	deliverSkills(t, w, "to-spec", "wayfinder")
+	deliverSkills(t, integ, "to-spec")
+	if _, err := e.m.Close(j.ID, "accepted"); err != nil {
+		t.Fatal(err)
+	}
+	for _, x := range []store.Worktree{integ, w} {
+		if _, err := os.Stat(x.Path); !os.IsNotExist(err) {
+			t.Errorf("%s kept", x.Kind)
+		}
+	}
+	if job, _ := e.st.GetJob(j.ID); job.Outcome != "accepted" {
+		t.Errorf("outcome %q", job.Outcome)
+	}
+}
+
+func TestCloseAcceptWithDeliveredSkillsStillRefusesRealChanges(t *testing.T) {
+	e := setup(t)
+	j := e.job(t)
+	w, _ := e.m.CreateWorktree(j.ID, store.KindWright, "")
+	deliverSkills(t, w, "to-spec")
+	os.WriteFile(filepath.Join(w.Path, "dirty.txt"), []byte("x"), 0o644)
+	if _, err := e.m.Close(j.ID, "accepted"); err == nil {
+		t.Fatal("accepted with uncommitted work")
+	}
+	if _, err := os.Stat(filepath.Join(w.Path, "dirty.txt")); err != nil {
+		t.Error("real work removed")
+	}
+	if job, _ := e.st.GetJob(j.ID); job.Outcome != "" {
+		t.Errorf("job closed: %q", job.Outcome)
+	}
+}
+
+func TestCloseAcceptRemovesOnlyTheWorksOwnSkillEntries(t *testing.T) {
+	e := setup(t)
+	e.hosts.create(t, "o/own", map[string]string{
+		".agents/skills/mine/SKILL.md": "mine",
+		".claude/skills/mine/SKILL.md": "mine",
+	})
+	if _, err := e.m.Register(RegisterInput{Name: "own", URL: host + "o/own.git", BaseBranch: "main", Gates: &store.Gates{}}); err != nil {
+		t.Fatal(err)
+	}
+	j, err := e.st.CreateJobOn("own", "a job", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := e.m.CreateWorktree(j.ID, store.KindWright, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deliverSkills(t, w, "to-spec")
+	if _, err := os.Stat(filepath.Join(w.Path, ".agents/skills/to-spec/SKILL.md")); err != nil {
+		t.Fatal(err)
+	}
+	// the removal clears only the delivered entries, so tracked files survive
+	if err := skills.RemoveDelivered(w.Path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(w.Path, ".agents/skills/mine/SKILL.md")); err != nil {
+		t.Errorf("tracked skill removed: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(w.Path, ".claude/skills/mine/SKILL.md")); err != nil {
+		t.Errorf("tracked link removed: %v", err)
+	}
+	for _, gone := range []string{".agents/skills/to-spec", ".claude/skills/to-spec"} {
+		if _, err := os.Lstat(filepath.Join(w.Path, gone)); !os.IsNotExist(err) {
+			t.Errorf("%s kept", gone)
+		}
+	}
+	deliverSkills(t, w, "to-spec")
+	if _, err := e.m.Close(j.ID, "accepted"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCleanupMergedRemovesMergedWorktreeHoldingOnlyDeliveredSkills(t *testing.T) {
+	e := setup(t)
+	j := e.job(t)
+	integ, _ := e.m.CreateWorktree(j.ID, store.KindIntegration, "")
+	w, _ := e.m.CreateWorktree(j.ID, store.KindWright, "")
+	os.WriteFile(filepath.Join(w.Path, "b.txt"), []byte("b"), 0o644)
+	run(t, w.Path, "add", "b.txt")
+	run(t, w.Path, "-c", "user.name=t", "-c", "user.email=t@e.com", "commit", "-q", "-m", "b")
+	run(t, integ.Path, "merge", "--ff-only", w.Branch)
+	deliverSkills(t, w, "to-spec")
+	removed, err := e.m.CleanupMerged(j.ID)
+	if err != nil || len(removed) != 1 {
+		t.Fatalf("%v %v", removed, err)
+	}
+	if _, err := os.Stat(w.Path); !os.IsNotExist(err) {
+		t.Error("merged worktree kept")
 	}
 }
