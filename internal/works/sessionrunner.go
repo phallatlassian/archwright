@@ -572,8 +572,15 @@ func (a *SessionRunner) follow(ls *liveSession) {
 		}
 		if emit {
 			ls.ingest(c) // what the agent did before this event comes first
+			if e.Kind == hosted.KindState && e.Hook == hosted.HookStop && strings.TrimSpace(e.Text) != "" {
+				// The transcript can lag the turn: look again for the last message before the run settles.
+				for i := 0; i < stopRereads && ls.lastSaid() != clipLine(e.Text); i++ {
+					time.Sleep(stopRereadWait)
+					ls.ingest(c)
+				}
+			}
 			c.req.Trace.Emit(timelineKind(e), summarizeSession(e), rawOfSession(e))
-			if e.Kind == hosted.KindState && e.Hook == hosted.HookStop && strings.TrimSpace(e.Text) != "" && ls.lastSaid() != strings.TrimSpace(e.Text) {
+			if e.Kind == hosted.KindState && e.Hook == hosted.HookStop && strings.TrimSpace(e.Text) != "" && ls.lastSaid() != clipLine(e.Text) {
 				// What the agent said ending its turn, kept as the run's last message: a
 				// Session that ends without reporting still has its last words.
 				raw, _ := json.Marshal(map[string]string{"result": e.Text})
@@ -599,6 +606,9 @@ func (a *SessionRunner) follow(ls *liveSession) {
 	if c == nil {
 		return
 	}
+	if !c.finished {
+		ls.ingest(c) // the tail the Session wrote before it ended
+	}
 	a.record(c.req, ls.s.Info(), hosted.StateEnded)
 	ls.mu.Lock()
 	c.finish(a.ended(ls.r, ls.s))
@@ -607,6 +617,13 @@ func (a *SessionRunner) follow(ls *liveSession) {
 
 // transcriptPoll is how often a Session's transcript is read between its events.
 const transcriptPoll = 500 * time.Millisecond
+
+// stopRereads and stopRereadWait bound how long a Stop waits for the transcript
+// to show the message the hook carried.
+const (
+	stopRereads    = 5
+	stopRereadWait = 100 * time.Millisecond
+)
 
 // ingest puts what the Session's agent has written to its transcript since the
 // last read onto c's timeline. Only a Claude Session's transcript is read.
