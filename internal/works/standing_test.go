@@ -169,7 +169,7 @@ func TestTwoJobsGetIndependentWardens(t *testing.T) {
 
 func TestSessionsStayOpenUntilTheJobLeavesActiveWorkThenClose(t *testing.T) {
 	g := newStandingRig(t)
-	g.planFor(g.job.ID, "one:masonry", "look:surveyors")
+	g.planFor(g.job.ID, "one:masonry", "look:surveyors", "later:masonry")
 	g.startStep(g.job.ID, "one")
 	g.handedBack(g.job.ID, "one")
 	g.startStep(g.job.ID, "look")
@@ -185,7 +185,7 @@ func TestSessionsStayOpenUntilTheJobLeavesActiveWorkThenClose(t *testing.T) {
 	}
 	left := map[string]time.Time{}
 	now := time.Now()
-	g.r.reapSessions(left, now.Add(time.Hour)) // handed back, but the Job is still in active work
+	g.r.reapSessions(left, now.Add(time.Hour)) // handed back, but a step is still to do
 	for i, s := range sessions {
 		if s.State() != hosted.StateIdle {
 			t.Fatalf("Session %d is %s after handback, with its Job still active", i, s.State())
@@ -210,6 +210,119 @@ func TestSessionsStayOpenUntilTheJobLeavesActiveWorkThenClose(t *testing.T) {
 	if jobs := g.sr.OpenJobs(); len(jobs) != 0 {
 		t.Errorf("still holds Sessions for %v", jobs)
 	}
+}
+
+// idleSessionsOfACompleteJob has every step of the Job's Plan handed back with no
+// PR, and its Sessions idle.
+func (g *standingRig) idleSessionsOfACompleteJob() []hosted.Session {
+	g.t.Helper()
+	g.planFor(g.job.ID, "one:masonry", "look:surveyors")
+	g.startStep(g.job.ID, "one")
+	g.handedBack(g.job.ID, "one")
+	g.startStep(g.job.ID, "look")
+	g.handedBack(g.job.ID, "look")
+	sessions := g.fake.Sessions()
+	for _, s := range sessions {
+		s := s
+		eventually(g.t, "the Session to finish its turn", func() bool { return s.State() == hosted.StateIdle })
+	}
+	return sessions
+}
+
+func (g *standingRig) wantOpen(sessions []hosted.Session, why string) {
+	g.t.Helper()
+	for i, s := range sessions {
+		if s.State() != hosted.StateIdle {
+			g.t.Errorf("Session %d is %s, %s", i, s.State(), why)
+		}
+	}
+	if len(g.sr.OpenJobs()) == 0 {
+		g.t.Errorf("the Job holds no Sessions, %s", why)
+	}
+}
+
+func TestACompleteJobWithNoPRHasItsSessionsClosedAfterRetention(t *testing.T) {
+	g := newStandingRig(t)
+	sessions := g.idleSessionsOfACompleteJob()
+	left, now := map[string]time.Time{}, time.Now()
+	g.r.reapSessions(left, now)
+	g.wantOpen(sessions, "before the retention has passed")
+	g.r.reapSessions(left, now.Add(2*time.Minute))
+	for i, s := range sessions {
+		if st := s.Result().Status; st != hosted.StatusCancelled {
+			t.Errorf("Session %d ended %s, want it closed", i, st)
+		}
+	}
+	if jobs := g.sr.OpenJobs(); len(jobs) != 0 {
+		t.Errorf("still holds Sessions for %v", jobs)
+	}
+}
+
+func TestAJobWithAnUnfinishedStepKeepsItsSessions(t *testing.T) {
+	g := newStandingRig(t)
+	g.planFor(g.job.ID, "one:masonry", "later:masonry")
+	g.startStep(g.job.ID, "one")
+	g.handedBack(g.job.ID, "one")
+	sessions := g.fake.Sessions()
+	eventually(t, "the Session to finish its turn", func() bool { return sessions[0].State() == hosted.StateIdle })
+	left, now := map[string]time.Time{}, time.Now()
+	g.r.reapSessions(left, now)
+	g.r.reapSessions(left, now.Add(time.Hour))
+	g.wantOpen(sessions, "with a step still to do")
+}
+
+func TestAParkedCompleteJobKeepsItsSessions(t *testing.T) {
+	g := newStandingRig(t)
+	sessions := g.idleSessionsOfACompleteJob()
+	if err := g.st.ParkJob(g.job.ID, "needs the Archwright", store.NewNeedsYou{}); err != nil {
+		t.Fatal(err)
+	}
+	left, now := map[string]time.Time{}, time.Now()
+	g.r.reapSessions(left, now)
+	g.r.reapSessions(left, now.Add(time.Hour))
+	g.wantOpen(sessions, "while its Job is parked")
+}
+
+func TestAPausedCompleteJobKeepsItsSessions(t *testing.T) {
+	g := newStandingRig(t)
+	sessions := g.idleSessionsOfACompleteJob()
+	if err := g.st.PauseJob(g.job.ID); err != nil {
+		t.Fatal(err)
+	}
+	left, now := map[string]time.Time{}, time.Now()
+	g.r.reapSessions(left, now)
+	g.r.reapSessions(left, now.Add(time.Hour))
+	g.wantOpen(sessions, "while its Job is paused")
+}
+
+func TestACompleteJobWithAnOpenAskKeepsItsSessions(t *testing.T) {
+	g := newStandingRig(t)
+	sessions := g.idleSessionsOfACompleteJob()
+	if _, err := g.st.CreateAsk(store.NewAsk{JobID: g.job.ID, Asker: "warden", Kind: "decision", Blocking: true, Questions: []store.Question{{Text: "which way?"}}}); err != nil {
+		t.Fatal(err)
+	}
+	left, now := map[string]time.Time{}, time.Now()
+	g.r.reapSessions(left, now)
+	g.r.reapSessions(left, now.Add(time.Hour))
+	g.wantOpen(sessions, "while its Job has an open Ask")
+}
+
+func TestAJobPutBackIntoWorkAfterBeingSeenAsLeftIsNotClosed(t *testing.T) {
+	g := newStandingRig(t)
+	sessions := g.idleSessionsOfACompleteJob()
+	left, now := map[string]time.Time{}, time.Now()
+	g.r.reapSessions(left, now) // seen as left: its retention starts
+	if len(left) != 1 {
+		t.Fatalf("left = %v, want the Job in it", left)
+	}
+	if err := g.st.PauseJob(g.job.ID); err != nil { // back in motion (not complete)
+		t.Fatal(err)
+	}
+	g.r.reapSessions(left, now.Add(2*time.Minute))
+	if len(left) != 0 {
+		t.Errorf("left = %v, want the retention timer reset", left)
+	}
+	g.wantOpen(sessions, "after its Job was put back into work")
 }
 
 func TestACloseLeavesASessionThatIsNotIdleAlone(t *testing.T) {
