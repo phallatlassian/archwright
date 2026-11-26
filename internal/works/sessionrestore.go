@@ -76,6 +76,7 @@ func (a *SessionRunner) Restore(sessions []RestoredSession) ([]RestoreResult, []
 			}
 			ls := &liveSession{job: rs.Job, s: s, r: a.Runners[rs.Runner], key: rs.Key, worktree: cmp.Or(s.Info().Dir, rs.Dir), turns: s.Info().Turns}
 			// Its events record against the run it was last carrying out, until a run takes it over.
+			ls.skipTranscript() // the lines it wrote before the restart are not the next run's
 			ls.cur = &carry{req: RunRequest{Env: RunEnv{Run: rs.Run}}, finished: true}
 			a.live[rs.Key] = ls
 			a.mu.Unlock()
