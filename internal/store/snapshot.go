@@ -42,6 +42,30 @@ func OpenSnapshot(path string) (*Snapshot, error) {
 		os.RemoveAll(dir)
 		return nil, err
 	}
+	return openCopy(path, dir, copyPath)
+}
+
+// Snapshot is the same private view taken through this Store's own
+// connection: VACUUM INTO writes a consistent copy of the live database, so
+// the process never opens and closes its own database, WAL or shm by path.
+// On POSIX close() drops every lock the process holds on that file, which
+// lets another read-write opener unlink the WAL under a running Works. The
+// Works uses this; OpenSnapshot is for the separate `archwright doctor` process.
+func (s *Store) Snapshot() (*Snapshot, error) {
+	dir, err := os.MkdirTemp("", "archwright-snapshot-")
+	if err != nil {
+		return nil, err
+	}
+	copyPath := filepath.Join(dir, "snapshot.db")
+	if _, err := s.db.Exec("VACUUM INTO ?", copyPath); err != nil {
+		os.RemoveAll(dir)
+		return nil, err
+	}
+	return openCopy("the live database", dir, copyPath)
+}
+
+// openCopy opens the copy at copyPath, which lives in dir, as a Snapshot.
+func openCopy(origin, dir, copyPath string) (*Snapshot, error) {
 	db, err := sql.Open("sqlite", "file:"+copyPath+"?_pragma=busy_timeout(5000)")
 	if err != nil {
 		os.RemoveAll(dir)
@@ -53,7 +77,7 @@ func OpenSnapshot(path string) (*Snapshot, error) {
 	if err != nil {
 		db.Close()
 		os.RemoveAll(dir)
-		return nil, fmt.Errorf("reading %s: %w", path, err)
+		return nil, fmt.Errorf("reading %s: %w", origin, err)
 	}
 	return &Snapshot{Version: v, st: s, dir: dir}, nil
 }

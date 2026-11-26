@@ -214,3 +214,27 @@ func TestGateRefusesWithTheFixesAndRemembersBriefly(t *testing.T) {
 		t.Fatalf("pass not remembered: %d runs", calls)
 	}
 }
+
+// The Works hands doctor its own store's Snapshot; the schema check must use
+// it and never open the database files by path (#183).
+func TestSchemaCheckReadsThroughDepsSnapshotNotTheDatabaseFile(t *testing.T) {
+	d := newDeps(t)
+	st, err := store.Open(d.Dirs.Database())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	used := false
+	d.Snapshot = func() (*store.Snapshot, error) { used = true; return st.Snapshot() }
+	if err := os.Chmod(d.Dirs.Database(), 0o000); err != nil { // a by-path open would now fail
+		t.Fatal(err)
+	}
+	defer os.Chmod(d.Dirs.Database(), 0o600)
+
+	r := &collector{}
+	snap := checkSchema(r, d)
+	if snap == nil || !used {
+		t.Fatalf("snapshot %v, Deps.Snapshot used %v, checks %+v", snap, used, r.checks)
+	}
+	snap.Close()
+}

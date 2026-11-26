@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/phallatlassian/archwright/internal/paths"
+	"github.com/phallatlassian/archwright/internal/store"
 	"github.com/phallatlassian/archwright/internal/works"
 )
 
@@ -73,6 +74,11 @@ type Deps struct {
 	// developer's own and managed ones), for the prompt checks.
 	PolicyFiles func(runner string) []string
 	TempDir     string
+	// Snapshot reads the registry. Nil means a private copy of the database
+	// file (store.OpenSnapshot), right for the separate `archwright doctor`
+	// process. The Works supplies its own store's Snapshot, because it must
+	// never open and close its own database files by path (ADR 0002).
+	Snapshot func() (*store.Snapshot, error)
 }
 
 // DefaultDeps is doctor on this machine.
