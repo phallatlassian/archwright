@@ -34,6 +34,7 @@ type Guild struct {
 	DeniedTools  []string          `json:"denied_tools,omitempty"`
 	ReworkRounds int               `json:"rework_rounds,omitempty"`
 	Skills       []string          `json:"skills,omitempty"`
+	UserOnly     []string          `json:"user_only_skills,omitempty"` // skills the Guild lists that only the developer invokes
 	Charter      string            `json:"charter"`
 	Warden       string            `json:"warden"`  // warden/SKILL.md
 	Wrights      map[string]string `json:"wrights"` // brief templates by kind

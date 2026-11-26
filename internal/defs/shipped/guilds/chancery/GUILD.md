@@ -6,6 +6,8 @@ runners: [claude, codex]
 access: read-only
 rework_rounds: 2
 skills: [to-spec, to-tickets, wayfinder, grill-with-docs]
+# Upstream flags these against the agent; the fork (the Chancery ticket) makes them invocable and drops this line.
+user_only_skills: [to-spec, to-tickets, wayfinder, grill-with-docs]
 ---
 # Chancery
 

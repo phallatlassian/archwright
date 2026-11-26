@@ -7,8 +7,9 @@
 #
 # It replaces internal/skills/vendor/upstream with the clone's engineering/ and
 # productivity/ skills (flattened by skill name) and rewrites PROVENANCE.json.
-# Forks under internal/skills/vendor/forks are left alone; review their drift
-# against the recorded upstream hashes by hand.
+# Forks under internal/skills/vendor/forks are left alone, and so is each
+# fork's recorded base: run scripts/skills-drift.sh to see which forks' upstream
+# changed, merge each by hand and record its new base (docs/skills.md).
 set -euo pipefail
 
 src=${1:?usage: vendor-skills.sh <upstream-clone>}
@@ -46,7 +47,7 @@ jq -n --arg url "$url" --arg sha "$sha" --arg date "$date" --arg at "$(date -u +
   license: "MIT (Matt Pocock)",
   paths: ["skills/engineering/*", "skills/productivity/*"],
   note: "Vendored verbatim under upstream/<skill>; never fetched at runtime (ADR 0005). Upgrade by re-running scripts/vendor-skills.sh against a reviewed commit.",
-  forks: ($forks | map(. as $f | .upstream_files = ($files | with_entries(select(.key | startswith($f.name + "/")))))),
+  forks: $forks,
   files: $files
 }' > "$dest/PROVENANCE.json"
 cp "$src/LICENSE" "$dest/LICENSE.upstream"
