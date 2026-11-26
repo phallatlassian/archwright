@@ -19,3 +19,4 @@ Turn what a developer wants into instruments the rest of the factory can act on:
 - Every ticket is small enough for one Wright and declares the tickets it waits on.
 - Use the project's own vocabulary (GLOSSARY.md) and respect its ADRs.
 - Do not decide whether the ambition is worth pursuing, and do not build anything.
+- Hand instruments back in full, never summarised or pointed at. They are not authorised until the developer accepts them.

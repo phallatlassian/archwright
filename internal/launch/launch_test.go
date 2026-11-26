@@ -335,7 +335,7 @@ func TestInstructionsRenderEachSiteAndHooksCombination(t *testing.T) {
 		hooks        bool
 		want, reject []string
 	}{
-		{"shop", true, []string{`registered Site "shop"`, `create_job {"site": "shop"}`, "Hooks deliver it", HooksMarker, InboxMarker, NudgeMarker, "wait_seconds"}, []string{"not a registered Site", "Nothing delivers it"}},
+		{"shop", true, []string{"`specify` step hands back", "verbatim", `registered Site "shop"`, `create_job {"site": "shop"}`, "Hooks deliver it", HooksMarker, InboxMarker, NudgeMarker, "wait_seconds"}, []string{"not a registered Site", "Nothing delivers it"}},
 		{"", true, []string{"not a registered Site", "Hooks deliver it", HooksMarker}, []string{"registered Site \"", "Nothing delivers it"}},
 		{"shop", false, []string{`registered Site "shop"`, "Nothing delivers it", "read_inbox", "wait_seconds"}, []string{"Hooks deliver it", HooksMarker, NudgeMarker, "not a registered Site"}},
 		{"", false, []string{"not a registered Site", "Nothing delivers it"}, []string{"Hooks deliver it", HooksMarker, "registered Site \""}},
