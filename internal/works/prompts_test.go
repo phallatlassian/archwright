@@ -58,6 +58,7 @@ func TestWardenStepBriefTellsTheWardenToUseGhAndRecordThePR(t *testing.T) {
 	for _, want := range []string{
 		"`gh` and `git` yourself", "`gh issue view <URL>`", "`record_pr`", `{"url":"<the PR's URL>","number":<its number>}`,
 		"Review before it is Plan ordering only", "one simple command per Bash call",
+		"has no `Source issue` line", "blocking `ask` of kind `clarification` for the issue URL",
 	} {
 		if !strings.Contains(brief, want) {
 			t.Errorf("Warden brief lacks %q", want)
@@ -75,7 +76,7 @@ func TestStepBriefNamesTheJobsSourceIssue(t *testing.T) {
 		t.Errorf("the step brief does not name the source issue:\n%s", brief)
 	}
 	job.SourceIssue = ""
-	if brief := renderStepBrief(job, store.Step{ID: "build", Title: "Build"}, Guild{Name: "masonry"}, "", ""); strings.Contains(brief, "Source issue") {
+	if brief := renderStepBrief(job, store.Step{ID: "build", Title: "Build"}, Guild{Name: "masonry"}, "", ""); strings.Contains(brief, "\nSource issue: ") {
 		t.Errorf("the step brief names a source issue the Job has not:\n%s", brief)
 	}
 }
