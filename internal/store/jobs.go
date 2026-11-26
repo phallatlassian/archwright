@@ -142,7 +142,8 @@ func issueURL(siteRemote, ref string) (string, error) {
 	num := strings.TrimPrefix(ref, "#")
 	if i := strings.LastIndex(ref, "#"); i > 0 {
 		repo := ref[:i]
-		if strings.Count(repo, "/") != 1 || strings.ContainsAny(repo, " \t") {
+		owner, name, ok := strings.Cut(repo, "/")
+		if !ok || owner == "" || name == "" || strings.Contains(name, "/") || strings.ContainsAny(repo, " \t") {
 			return "", fmt.Errorf("issue reference %q must be N, #N or OWNER/REPO#N", ref)
 		}
 		path, num = repo, ref[i+1:]

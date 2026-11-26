@@ -14,7 +14,9 @@ func TestCreateJobFromIssueRef(t *testing.T) {
 		{"owner repo", "git@github.com:o/r.git", "x/y#3", "https://github.com/x/y/issues/3", ""},
 		{"ssh port", "ssh://git@host:2222/o/r.git", "7", "", "full"},
 		{"bad ref", "https://github.com/o/r", "seven", "", "issue reference"},
-		{"zero", "https://github.com/o/r", "#0x", "", "issue reference"},
+		{"empty owner", "https://github.com/o/r", "/y#3", "", "issue reference"},
+		{"empty repo", "https://github.com/o/r", "x/#3", "", "issue reference"},
+		{"zero","https://github.com/o/r", "#0x", "", "issue reference"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
