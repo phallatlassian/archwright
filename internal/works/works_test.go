@@ -278,6 +278,9 @@ func TestJobSourceIssueOverAPIAndTool(t *testing.T) {
 	if err := c.Do("POST", "/jobs", map[string]string{"title": "V", "source_issue": "#80"}, nil); err == nil {
 		t.Fatal("a malformed source issue was accepted")
 	}
+	if err := c.Do("POST", "/jobs", map[string]string{"title": "W", "issue": "#80"}, nil); err == nil {
+		t.Fatal("an issue number with no Site was accepted")
+	}
 	var shown JobWithPlan
 	if err := c.Do("GET", "/jobs/"+with.ID, nil, &shown); err != nil || shown.SourceIssue != issue {
 		t.Fatalf("%+v %v", shown, err)

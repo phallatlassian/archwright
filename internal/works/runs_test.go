@@ -369,3 +369,23 @@ func TestCreateJobToolRecordsSourceIssue(t *testing.T) {
 		t.Fatalf("create without an issue: %+v", resp)
 	}
 }
+
+func TestCreateJobToolBuildsIssueURLFromSite(t *testing.T) {
+	r, st := newRuns(t)
+	if _, err := st.AddSite(store.Site{Name: "shop", URL: "git@git.example.com:o/shop.git", ClonePath: "/c/shop", BaseBranch: "main", ConcurrencyCap: 3}); err != nil {
+		t.Fatal(err)
+	}
+	env := startRun(t, r, RoleArchwright)
+	var job store.Job
+	resp := call(t, env, "r1", "create_job", `{"title":"T","site":"shop","issue":"#4"}`)
+	json.Unmarshal(resp.Output, &job)
+	if !resp.OK || job.SourceIssue != "https://git.example.com/o/shop/issues/4" {
+		t.Fatalf("%+v %+v", resp, job)
+	}
+	if resp := call(t, env, "r2", "create_job", `{"title":"T","site":"shop","issue":"/y#3"}`); resp.OK {
+		t.Fatalf("empty owner accepted: %+v", resp)
+	}
+	if resp := call(t, env, "r3", "create_job", `{"title":"T","issue":"4"}`); resp.OK || !strings.Contains(resp.Error.Message, "shop") {
+		t.Fatalf("number with no Site must name the Sites: %+v", resp)
+	}
+}
