@@ -159,7 +159,7 @@ func TestSessionStartSurvivesAnUnavailableCatalogue(t *testing.T) {
 func TestInstructionsNameTheCatalogueTools(t *testing.T) {
 	for _, hooks := range []bool{true, false} {
 		got := Instructions("", hooks)
-		for _, want := range []string{"list_sites", "show_catalogue", "start_jig", "start_step", "Guild name", "tell the developer the link"} {
+		for _, want := range []string{"list_sites", "show_catalogue", "start_jig", "start_step", "Guild name", "tell the developer the link", "full issue URL", "ask the developer before calling create_job"} {
 			if !strings.Contains(got, want) {
 				t.Fatalf("hooks=%v: instructions lack %q: %s", hooks, want, got)
 			}
