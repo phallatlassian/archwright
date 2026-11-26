@@ -158,11 +158,88 @@ func Deliver(req Request) (Delivery, error) {
 		}
 	}
 
+	if err := recordDelivered(req.Worktree, hidden); err != nil {
+		return Delivery{}, err
+	}
 	cfg, err := writeGitConfig(req.RunDir, hidden)
 	if err != nil {
 		return Delivery{}, err
 	}
 	return Delivery{Env: map[string]string{"GIT_CONFIG_GLOBAL": cfg}, Hidden: hidden}, nil
+}
+
+// deliveredFile lists, in the worktree's own git directory (so it goes when
+// the worktree does), the paths Deliver created there.
+const deliveredFile = "archwright-delivered"
+
+func deliveredPath(worktree string) (string, error) {
+	dir, err := git(worktree, nil, "rev-parse", "--absolute-git-dir")
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(strings.TrimSpace(dir), deliveredFile), nil
+}
+
+// recordDelivered adds the created paths to the worktree's record of them.
+func recordDelivered(worktree string, hidden []string) error {
+	file, err := deliveredPath(worktree)
+	if err != nil {
+		return err
+	}
+	have := map[string]bool{}
+	var all []string
+	for _, p := range append(readDelivered(file), hidden...) {
+		if !have[p] {
+			have[p] = true
+			all = append(all, p)
+		}
+	}
+	return os.WriteFile(file, []byte(strings.Join(all, "\n")+"\n"), 0o600)
+}
+
+func readDelivered(file string) []string {
+	b, err := os.ReadFile(file)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, l := range strings.Split(string(b), "\n") {
+		if l != "" {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+// RemoveDelivered deletes the paths Deliver created in the worktree, and the
+// .agents and .claude folders if that leaves them empty. Only recorded paths
+// are touched, and never one the Site tracks, so the Site's own files are safe.
+func RemoveDelivered(worktree string) error {
+	file, err := deliveredPath(worktree)
+	if err != nil {
+		return nil // no usable git directory, so no record; git's own removal decides
+	}
+	for _, p := range readDelivered(file) {
+		rel := path.Clean(strings.TrimPrefix(p, "/"))
+		if rel == "." || path.IsAbs(rel) || rel == ".." || strings.HasPrefix(rel, "../") {
+			continue
+		}
+		if ts, err := tracked(worktree, rel); err != nil {
+			return err
+		} else if len(ts) > 0 {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(worktree, filepath.FromSlash(rel))); err != nil {
+			return err
+		}
+	}
+	for _, d := range []string{".agents", ".claude"} {
+		_ = os.Remove(filepath.Join(worktree, d)) // only succeeds when empty
+	}
+	if err := os.Remove(file); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }
 
 func (r Request) check() error {

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/phallatlassian/archwright/internal/skills"
 	"github.com/phallatlassian/archwright/internal/store"
 )
 
@@ -163,6 +164,8 @@ func (m *Manager) remove(site store.Site, w store.Worktree, force, deleteBranch 
 		args := []string{"worktree", "remove"}
 		if force {
 			args = append(args, "--force")
+		} else if err := skills.RemoveDelivered(w.Path); err != nil {
+			return err // run scaffolding is not work; real changes still stop the removal below
 		}
 		if _, err := git(site.ClonePath, append(args, w.Path)...); err != nil {
 			return err
