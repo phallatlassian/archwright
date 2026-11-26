@@ -56,52 +56,62 @@ func Board(st *store.Store) ([]BoardJob, error) {
 	}
 	out := make([]BoardJob, 0, len(jobs))
 	for _, j := range jobs {
-		full, err := jobWithPlan(st, j.ID)
-		if err != nil {
-			return nil, err
-		}
-		b := BoardJob{Job: j, OpenAsks: len(full.Asks)}
-		if full.Plan != nil {
-			b.Approval, b.Jig, b.Steps = full.Plan.Approval, full.Plan.Jig, len(full.Plan.Steps)
-		}
-		ds, err := st.Dispatches(j.ID)
-		if err != nil {
-			return nil, err
-		}
-		for _, d := range ds {
-			if d.Status == store.DispatchQueued || d.Status == store.DispatchRunning {
-				b.LiveRuns++
-			}
-		}
-		rs, err := st.Reviews(j.ID)
-		if err != nil {
-			return nil, err
-		}
-		for _, r := range rs {
-			if r.Status == store.ReviewRunning {
-				b.LiveRuns++
-			}
-		}
-		if b.Steps > 0 {
-			runs, err := st.StepRuns(j.ID)
-			if err != nil {
-				return nil, err
-			}
-			handed := map[string]bool{}
-			for _, sr := range runs {
-				handed[sr.Step] = sr.Status == store.StepHandedBack
-			}
-			b.AllHandedBack = true
-			for _, s := range full.Plan.Steps {
-				b.AllHandedBack = b.AllHandedBack && handed[s.ID]
-			}
-		}
 		t := spent[j.ID]
+		b, err := boardJob(st, j)
+		if err != nil {
+			return nil, err
+		}
 		b.InputTokens, b.OutputTokens, b.CostUSD = t.in, t.out, t.cost
-		b.State = boardState(b, full)
 		out = append(out, b)
 	}
 	return out, nil
+}
+
+// boardJob reads one Job's board state (its usage left zero). The Session reaper
+// uses it too, so the board and the reaper agree on when a Job is complete.
+func boardJob(st *store.Store, j store.Job) (BoardJob, error) {
+	full, err := jobWithPlan(st, j.ID)
+	if err != nil {
+		return BoardJob{}, err
+	}
+	b := BoardJob{Job: j, OpenAsks: len(full.Asks)}
+	if full.Plan != nil {
+		b.Approval, b.Jig, b.Steps = full.Plan.Approval, full.Plan.Jig, len(full.Plan.Steps)
+	}
+	ds, err := st.Dispatches(j.ID)
+	if err != nil {
+		return BoardJob{}, err
+	}
+	for _, d := range ds {
+		if d.Status == store.DispatchQueued || d.Status == store.DispatchRunning {
+			b.LiveRuns++
+		}
+	}
+	rs, err := st.Reviews(j.ID)
+	if err != nil {
+		return BoardJob{}, err
+	}
+	for _, r := range rs {
+		if r.Status == store.ReviewRunning {
+			b.LiveRuns++
+		}
+	}
+	if b.Steps > 0 {
+		runs, err := st.StepRuns(j.ID)
+		if err != nil {
+			return BoardJob{}, err
+		}
+		handed := map[string]bool{}
+		for _, sr := range runs {
+			handed[sr.Step] = sr.Status == store.StepHandedBack
+		}
+		b.AllHandedBack = true
+		for _, s := range full.Plan.Steps {
+			b.AllHandedBack = b.AllHandedBack && handed[s.ID]
+		}
+	}
+	b.State = boardState(b, full)
+	return b, nil
 }
 
 func boardState(b BoardJob, full JobWithPlan) string {

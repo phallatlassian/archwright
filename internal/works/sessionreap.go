@@ -36,10 +36,17 @@ func (r *Runs) UseSessions(js JobSessions, retention time.Duration) {
 	r.mu.Unlock()
 }
 
-// jobActive says whether a Job is in active work: its PR is not yet opened and
-// it is not closed (accepted or discarded, which is how a cancelled or failed
-// Job ends) or purged.
-func jobActive(j store.Job) bool { return j.Outcome == "" && j.PR == "" && j.PurgedAt == "" }
+// jobActive says whether a Job is in active work: its PR is not yet opened, it
+// is not closed (accepted or discarded, which is how a cancelled or failed Job
+// ends) or purged, and it is not complete (every Plan step handed back with no
+// PR, so it waits on the developer and not on any agent).
+func (r *Runs) jobActive(j store.Job) (bool, error) {
+	if j.Outcome != "" || j.PR != "" || j.PurgedAt != "" {
+		return false, nil
+	}
+	b, err := boardJob(r.st, j)
+	return b.State != BoardComplete, err
+}
 
 // reapSessions closes the Sessions of the Jobs that left active work at least
 // retention ago. left remembers when each Job was first seen to have left.
@@ -54,12 +61,15 @@ func (r *Runs) reapSessions(left map[string]time.Time, now time.Time) {
 	for _, id := range js.OpenJobs() {
 		open[id] = true
 		job, err := r.st.GetJob(id)
-		switch {
-		case err != nil && !errors.Is(err, store.ErrNotFound):
+		if err == nil {
+			var active bool
+			if active, err = r.jobActive(job); err == nil && active {
+				delete(left, id) // back in active work, or never left
+				continue
+			}
+		}
+		if err != nil && !errors.Is(err, store.ErrNotFound) {
 			log.Printf("session %s: reading its Job: %v", id, err)
-			continue
-		case err == nil && jobActive(job):
-			delete(left, id) // back in active work, or never left
 			continue
 		}
 		since, ok := left[id]
