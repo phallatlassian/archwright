@@ -54,7 +54,7 @@ func TestJigPlanDispatchesWithoutApproval(t *testing.T) {
 	g.fails(g.arch, "start_jig", `{"job":"`+g.job.ID+`","jig":"fix"}`, spool.CodeInvalidInput) // missing required parameter
 	var cat Catalogue
 	g.ok(g.arch, "show_catalogue", `{}`, &cat)
-	if len(cat.Guilds) != 4 || len(cat.Jigs) != 6 || len(cat.Errors) != 0 {
+	if len(cat.Guilds) != 4 || len(cat.Jigs) != 7 || len(cat.Errors) != 0 {
 		t.Errorf("catalogue: %d guilds %d jigs %v", len(cat.Guilds), len(cat.Jigs), cat.Errors)
 	}
 	g.fails(g.warden, "show_catalogue", `{}`, spool.CodeForbidden)
@@ -88,4 +88,17 @@ func TestGuildsFromRegistryBindsAndFailsOnUnmetCapability(t *testing.T) {
 	if g, _ := GuildsFromRegistry(reg, DefaultProfiles(), nil)("survey"); g.Standards == "x" {
 		t.Error("invalid override took effect")
 	}
+}
+
+func TestPrototypeJigStartsOneMasonryStep(t *testing.T) {
+	g := newRig(t, map[string][]WrightResult{"p": {doneResult}})
+	reg := defs.New(defs.Shipped(), "")
+	reg.Reload()
+	g.r.UseDefinitions(reg)
+	var plan store.Plan
+	g.ok(g.arch, "start_jig", `{"job":"`+g.job.ID+`","jig":"prototype","params":{"question":"which layout?"}}`, &plan)
+	if plan.Jig != "prototype" || len(plan.Steps) != 1 || plan.Steps[0].Guild != "masonry" || plan.Steps[0].Brief == "" {
+		t.Fatalf("%+v", plan)
+	}
+	g.fails(g.arch, "start_jig", `{"job":"`+g.job.ID+`","jig":"prototype"}`, spool.CodeInvalidInput)
 }
