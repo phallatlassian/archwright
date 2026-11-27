@@ -314,6 +314,11 @@ func reworkWright(c *callCtx, in json.RawMessage) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	prev, err := c.st.LatestDispatch(c.run.ctx.Job, a.Piece)
+	if err != nil {
+		return nil, err
+	}
+	b.Interactive = interactiveBrief(prev.Brief)
 	raw, _ := json.Marshal(b)
 	asks, err := c.st.PieceAsks(c.run.ctx.Job, a.Piece)
 	if err != nil {
