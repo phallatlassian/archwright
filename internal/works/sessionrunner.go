@@ -43,6 +43,14 @@ type SessionRunner struct {
 	NudgeWait time.Duration
 	// Started is told when a run launches a fresh Session; nil ignores it.
 	Started func(req RunRequest, info hosted.Info)
+	// Stalled is told when a launched Session has not started within StallAfter
+	// (zero means DefaultStallAfter), and the func it returns when it starts or
+	// is gone. Nil ignores a stall. FocusIdle is how long the developer's
+	// terminal must have been idle before the Session's pane is brought to it
+	// (zero means DefaultFocusIdle).
+	Stalled    func(req RunRequest, info hosted.Info) (resolve func())
+	StallAfter time.Duration
+	FocusIdle  time.Duration
 
 	mu        sync.Mutex
 	live      map[string]*liveSession  // the open Session of each piece of each Job, and each Guild's Warden of each Job
@@ -282,6 +290,7 @@ func (a *SessionRunner) run(ctx context.Context, req RunRequest, spec runSpec) e
 	if a.Started != nil && !a.detached.Load() {
 		a.Started(req, live.Info())
 	}
+	go a.watchStall(ctx, req, live, r)
 	dir := live.Info().Dir
 	if dir == "" {
 		dir = req.Worktree
