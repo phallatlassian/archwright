@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -97,9 +98,19 @@ func TestShippedDefinitionsLoad(t *testing.T) {
 			t.Errorf("guild %q not shipped", g)
 		}
 	}
-	for _, j := range []string{"fix", "build", "specify", "map", "investigate", "review"} {
+	for _, j := range []string{"fix", "build", "specify", "map", "investigate", "review", "prototype"} {
 		if _, ok := r.Jig(j); !ok {
 			t.Errorf("jig %q not shipped", j)
+		}
+	}
+	pj, _ := r.Jig("prototype")
+	if len(pj.Steps) != 1 || pj.Steps[0].Guild != "masonry" || !reflect.DeepEqual(pj.Steps[0].Outputs, []string{"verdict", "question", "branch"}) || !strings.Contains(pj.Steps[0].Task, "{{question}}") {
+		t.Errorf("prototype jig: %+v", pj)
+	}
+	mg, _ := r.Guild("masonry")
+	for _, want := range []string{"issues/212", "issues/213", "wait_seconds", "never end your turn", "do not dispatch a second Wright"} {
+		if !strings.Contains(mg.Warden, want) {
+			t.Errorf("masonry warden steering missing %q", want)
 		}
 	}
 	rg, _ := r.Guild("survey")
