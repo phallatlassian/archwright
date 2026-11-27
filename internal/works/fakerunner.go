@@ -104,12 +104,12 @@ func (f *FakeRunner) Run(ctx context.Context, req RunRequest) error {
 		}
 		return nil
 	}
-	if strings.Contains(req.Brief, "- base ref: ") && req.Worktree != "" { // a sent-back piece names the integration branch to merge in
-		if err := fakeMerge(req); err != nil {
+	if fakeResolves(req.Brief) && req.Worktree != "" { // a sent-back piece names the integration branch to merge in
+		if err := fakeResolveConflict(req); err != nil {
 			return err
 		}
 	}
-	if len(f.files) > 0 && !strings.Contains(req.Brief, "- base ref: ") { // a Wright that merges writes only the merge
+	if len(f.files) > 0 && !fakeResolves(req.Brief) { // a Wright that merges writes only the merge
 		args := []string{"add", "--"}
 		for rel, content := range f.files {
 			p := filepath.Join(req.Worktree, rel)
@@ -157,7 +157,7 @@ func fakeGit(dir string, args ...string) ([]byte, error) {
 // fakeMerge plays a Wright resolving a conflict: it merges the base ref named in the brief
 // into the worktree, taking the integration side of every conflict, and
 // commits. It only merges: no rebase, reset, amend or push.
-func fakeMerge(req RunRequest) error {
+func fakeResolveConflict(req RunRequest) error {
 	_, ref, ok := strings.Cut(req.Brief, "- base ref: ")
 	if !ok {
 		_, ref, ok = strings.Cut(req.Brief, "- branch to merge: ")
