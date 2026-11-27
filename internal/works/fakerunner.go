@@ -104,12 +104,12 @@ func (f *FakeRunner) Run(ctx context.Context, req RunRequest) error {
 		}
 		return nil
 	}
-	if isMergeWright(req.Piece) && req.Worktree != "" {
-		if err := fakeMerge(req); err != nil {
+	if fakeResolves(req.Brief) && req.Worktree != "" { // a sent-back piece names the integration branch to merge in
+		if err := fakeResolveConflict(req); err != nil {
 			return err
 		}
 	}
-	if !isMergeWright(req.Piece) && len(f.files) > 0 { // a merge Wright's work is the merge; the files are for Wrights that write
+	if len(f.files) > 0 && !fakeResolves(req.Brief) { // a Wright that merges writes only the merge
 		args := []string{"add", "--"}
 		for rel, content := range f.files {
 			p := filepath.Join(req.Worktree, rel)
@@ -154,22 +154,26 @@ func fakeGit(dir string, args ...string) ([]byte, error) {
 	return cmd.CombinedOutput()
 }
 
-// fakeMerge plays a merge Wright: it merges the base ref named in the brief
+// fakeResolves says whether a brief sends a piece back to merge a base ref
+// into its branch: it names one on a "- base ref: " line.
+func fakeResolves(brief string) bool { return strings.Contains(brief, "- base ref: ") }
+
+// fakeResolveConflict plays a Wright resolving a conflict: it merges the base ref named in the brief
 // into the worktree, taking the integration side of every conflict, and
 // commits. It only merges: no rebase, reset, amend or push.
-func fakeMerge(req RunRequest) error {
+func fakeResolveConflict(req RunRequest) error {
 	_, ref, ok := strings.Cut(req.Brief, "- base ref: ")
 	if !ok {
 		_, ref, ok = strings.Cut(req.Brief, "- branch to merge: ")
 	}
 	ref, _, _ = strings.Cut(ref, "\n")
 	if !ok || ref == "" {
-		return fmt.Errorf("fake merge Wright: the brief names no ref to merge")
+		return fmt.Errorf("fake Wright: the brief names no ref to merge")
 	}
 	git := func(args ...string) error {
-		cmd := exec.Command("git", append([]string{"-C", req.Worktree, "-c", "user.name=fake merge Wright", "-c", "user.email=fake@archwright.invalid"}, args...)...)
+		cmd := exec.Command("git", append([]string{"-C", req.Worktree, "-c", "user.name=fake Wright", "-c", "user.email=fake@archwright.invalid"}, args...)...)
 		if out, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("fake merge Wright: git %s: %v: %s", args[0], err, out)
+			return fmt.Errorf("fake Wright: git %s: %v: %s", args[0], err, out)
 		}
 		return nil
 	}

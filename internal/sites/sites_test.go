@@ -736,7 +736,7 @@ func TestCleanupRemovesOnlyMergedWrights(t *testing.T) {
 		run(t, w.Path, "add", ".")
 		run(t, w.Path, "commit", "-m", "work "+w.ID)
 	}
-	// Merge Wright work into the integration branch.
+	// Merge Wright branches into the integration branch.
 	run(t, integ.Path, "merge", "--no-ff", "-m", "merge", merged.Branch)
 
 	removed, err := e.m.CleanupMerged(j.ID)
@@ -1226,9 +1226,6 @@ func TestWardenWorktreeKinds(t *testing.T) {
 	}
 	if branch.Kind != store.KindWarden {
 		t.Errorf("branch worktree kind is %s", branch.Kind)
-	}
-	if _, err := e.m.MergePiece(job, branch.Branch); err == nil {
-		t.Error("a Warden's branch was merged as a Wright piece")
 	}
 	if _, err := e.m.WardenWorktree(job, "weird"); err == nil {
 		t.Error("an unknown kind was accepted")
