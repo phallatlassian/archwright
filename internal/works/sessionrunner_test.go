@@ -37,6 +37,13 @@ type sessionRig struct {
 
 func newSessionRig(t *testing.T, script hosted.Script) *sessionRig {
 	t.Helper()
+	return newSessionRigWith(t, script, nil)
+}
+
+// newSessionRigWith is newSessionRig with the SessionRunner configured further
+// and, when wrap is given, the fake's Runner replaced by what it returns.
+func newSessionRigWith(t *testing.T, script hosted.Script, configure func(g *sessionRig, sr *SessionRunner) hosted.Runner) *sessionRig {
+	t.Helper()
 	g := &sessionRig{gateRig: newGateRig(t, store.Gates{}), fake: hosted.NewFake(script)}
 	guilds := func(name string) (Guild, error) {
 		if gd, ok := agentGuilds[name]; ok {
@@ -51,6 +58,9 @@ func newSessionRig(t *testing.T, script hosted.Script) *sessionRig {
 		Record: func(run string, info hosted.Info, state hosted.State) {
 			g.st.SetRunSession(run, sessionRecord(info, state))
 		},
+	}
+	if configure != nil {
+		sr.Runners["claude"] = configure(g, sr)
 	}
 	g.r.Configure(guilds, sr)
 	return g

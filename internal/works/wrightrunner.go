@@ -20,7 +20,9 @@ const (
 	EnvFakeRunDelay  = "ARCHWRIGHT_FAKE_RUN_DELAY"
 	EnvClaudeBinary  = "ARCHWRIGHT_CLAUDE_BIN" // the claude CLI to run, for tests and live checks with a stub
 	EnvCodexBinary   = "ARCHWRIGHT_CODEX_BIN"
-	EnvTmuxBinary    = "ARCHWRIGHT_TMUX_BIN" // the tmux the factory's panes run in
+	EnvStallAfter    = "ARCHWRIGHT_STALL_AFTER" // how long a launched Session may take to start before the developer is told (default 5s)
+	EnvFocusIdle     = "ARCHWRIGHT_FOCUS_IDLE"  // how long the developer's terminal must be idle before a stalled pane is focused (default 5s)
+	EnvTmuxBinary    = "ARCHWRIGHT_TMUX_BIN"    // the tmux the factory's panes run in
 	wrightRunnerFake = "fake"
 )
 
@@ -62,9 +64,12 @@ func sessionRunnerFrom(getenv func(string) string, guilds GuildSource, st *store
 		return nil, err
 	}
 	return &SessionRunner{
-		Runners: map[string]hosted.Runner{"claude": tm, "codex": tm.Codex()},
-		Guilds:  guilds,
-		Started: AnnounceInteractive(st),
+		Runners:    map[string]hosted.Runner{"claude": tm, "codex": tm.Codex()},
+		Guilds:     guilds,
+		Started:    AnnounceInteractive(st),
+		Stalled:    AnnounceStall(st),
+		StallAfter: envDuration(getenv, EnvStallAfter),
+		FocusIdle:  envDuration(getenv, EnvFocusIdle),
 		Record: func(run string, info hosted.Info, state hosted.State) {
 			if err := st.SetRunSession(run, sessionRecord(info, state)); err != nil {
 				log.Printf("run %s: recording its Session: %v", run, err)
