@@ -362,7 +362,11 @@ func (m *Manager) Remove(name string) (store.Site, error) {
 	if !inside(site.ClonePath, m.clones) || site.ClonePath == m.clones {
 		return site, fmt.Errorf("site %q unregistered, but its clone %s is outside %s and was left alone", name, site.ClonePath, m.clones)
 	}
-	if err := os.RemoveAll(cloneFolder(site)); err != nil {
+	folder := cloneFolder(site)
+	if !inside(folder, m.clones) || folder == m.clones {
+		return site, fmt.Errorf("site %q unregistered, but its clone folder %s is outside %s and was left alone", name, folder, m.clones)
+	}
+	if err := os.RemoveAll(folder); err != nil {
 		return site, fmt.Errorf("site %q unregistered, but deleting its clone failed: %w", name, err)
 	}
 	return site, nil

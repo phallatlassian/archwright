@@ -34,9 +34,9 @@ func CloneMigrationKey(site string) string { return store.NeedsCloneMigration + 
 // again at the next start. It reports the Sites it migrated.
 func (r *Runs) MigrateClones() []string {
 	r.mu.Lock()
-	sm := r.sites
+	sm, hosted := r.sites, r.probes != nil
 	r.mu.Unlock()
-	if sm == nil {
+	if sm == nil || !hosted { // without a probe nobody would be asked to trust the new main checkout
 		return nil
 	}
 	list, err := r.st.ListSites()
@@ -47,6 +47,10 @@ func (r *Runs) MigrateClones() []string {
 	var done []string
 	for _, s := range list {
 		migrated, err := sm.Migrate(s.Name)
+		if err != nil && migrated { // migrated, but the old bare clone could not be deleted
+			log.Printf("migrating the clone of Site %s: %v", s.Name, err)
+			err = nil
+		}
 		switch {
 		case sites.IsBlocked(err):
 			r.migrationWaiting(s.Name, err)

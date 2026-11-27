@@ -76,6 +76,14 @@ func (m *Manager) Migrate(name string) (bool, error) {
 		os.RemoveAll(filepath.Dir(dir))
 		return false, err
 	}
+	// A Job may have been created while the clone ran: check again before the swap.
+	if active, err = m.st.ActiveJobs(name); err != nil || len(active) > 0 {
+		os.RemoveAll(filepath.Dir(dir))
+		if err != nil {
+			return false, err
+		}
+		return false, &BlockedError{Site: name, Jobs: active}
+	}
 	if err := m.st.SetClonePath(name, dir); err != nil {
 		os.RemoveAll(filepath.Dir(dir))
 		return false, err
