@@ -5,7 +5,7 @@ runner: claude
 runners: [claude, codex]
 access: read-write
 rework_rounds: 2
-skills: [implement, implement-spec, tdd, codebase-design, pr, diagnosing-bugs]
+skills: [implement, implement-spec, tdd, codebase-design, pr, diagnosing-bugs, prototype]
 ---
 # Masonry
 

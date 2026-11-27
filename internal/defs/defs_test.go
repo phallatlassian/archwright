@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -97,10 +98,14 @@ func TestShippedDefinitionsLoad(t *testing.T) {
 			t.Errorf("guild %q not shipped", g)
 		}
 	}
-	for _, j := range []string{"fix", "build", "specify", "map", "investigate", "review"} {
+	for _, j := range []string{"fix", "build", "specify", "map", "investigate", "review", "prototype"} {
 		if _, ok := r.Jig(j); !ok {
 			t.Errorf("jig %q not shipped", j)
 		}
+	}
+	pj, _ := r.Jig("prototype")
+	if len(pj.Steps) != 1 || pj.Steps[0].Guild != "masonry" || !reflect.DeepEqual(pj.Steps[0].Outputs, []string{"verdict", "question", "branch"}) || !strings.Contains(pj.Steps[0].Task, "{{question}}") {
+		t.Errorf("prototype jig: %+v", pj)
 	}
 	rg, _ := r.Guild("survey")
 	if rg.Access != ReadOnly || rg.Wrights["docs"] == "" || rg.Wrights["code-trace"] == "" {

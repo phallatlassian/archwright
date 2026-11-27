@@ -113,7 +113,9 @@ func TestForksOverrideUpstreamAndRecordTheirBase(t *testing.T) {
 			t.Errorf("%s does not use the Works' tools", name)
 		}
 	}
-	// prototype waits for #165: still verbatim upstream.
+	// prototype is pinned, unforked and model-invocable as is (#188): the
+	// developer works with its Wright in the pane, so the Jig text and the
+	// Warden steering carry the factory-specific parts.
 	for _, name := range []string{"prototype"} {
 		skill, err := c.Skill(name)
 		if err != nil {
@@ -165,9 +167,14 @@ func TestImplementForkLacksTheInstructionsAWrightCannotFollow(t *testing.T) {
 
 // Every fork a Wright or Warden of Masonry, Survey or Hallmark follows reads
 // the Job's issue with gh issue view and asks with archwright tool ask (#160).
+// The pinned prototype skill is the exception: its Wright asks the developer,
+// who is in its pane, not an Ask (#188).
 func TestForksOfTheSkillUsingGuildsUseTheWorksTools(t *testing.T) {
 	for _, guild := range skillUsingGuilds {
 		for _, s := range shippedGuildSkills(t, guild) {
+			if s.Name == "prototype" {
+				continue
+			}
 			b, _ := readFile(s, "SKILL.md")
 			for _, want := range []string{"gh issue view", "archwright tool ask"} {
 				if !strings.Contains(string(b), want) {

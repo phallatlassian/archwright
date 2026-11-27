@@ -1,0 +1,11 @@
+name: prototype
+description: "Answer a design question with a throwaway prototype the developer tries out with the Wright, as a logic demo or several UI variants. Use when the developer wants to see or feel options before deciding."
+parameters:
+  - name: question
+    description: The design question the prototype answers
+    required: true
+steps:
+  - id: prototype
+    guild: masonry
+    task: "Dispatch one prototype Wright to answer this design question with a throwaway prototype, following the prototype skill: {{question}}. The developer will try the prototype and steer the Wright directly in its pane, so it runs the project's dev server itself, adds variants as asked and waits for the developer's verdict. Nothing is pushed before that verdict. The result is the verdict, the question and a pointer to the branch; the winning variant is built later as a normal Build or Fix Job."
+    outputs: [verdict, question, branch]

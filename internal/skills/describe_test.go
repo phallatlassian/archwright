@@ -131,7 +131,7 @@ func TestMasonrysSkillsAreTheOnesTheFactoryCanRun(t *testing.T) {
 	reg := defs.New(defs.Shipped(), "")
 	reg.Reload()
 	g, _ := reg.Guild("masonry")
-	if want := []string{"implement", "implement-spec", "tdd", "codebase-design", "pr", "diagnosing-bugs"}; !reflect.DeepEqual(g.Skills, want) {
+	if want := []string{"implement", "implement-spec", "tdd", "codebase-design", "pr", "diagnosing-bugs", "prototype"}; !reflect.DeepEqual(g.Skills, want) {
 		t.Errorf("masonry skills = %v, want %v", g.Skills, want)
 	}
 }
