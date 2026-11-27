@@ -62,6 +62,9 @@ func raiseAsk(c *callCtx, in json.RawMessage) (any, error) {
 		return nil, fmt.Errorf("%w: this run is not bound to a Job", errInvalidInput)
 	}
 	n := store.NewAsk{JobID: c.run.ctx.Job, Asker: c.run.role, Guild: c.run.ctx.Guild, Kind: a.Kind, Blocking: *a.Blocking, Why: a.Why, Questions: a.Questions}
+	if c.run.role == RoleWarden {
+		n.Step = c.run.ctx.Task
+	}
 	if c.run.role == RoleWright {
 		if c.run.ctx.DispatchID == "" {
 			return nil, fmt.Errorf("%w: this run carries out no dispatch", errInvalidInput)
@@ -81,6 +84,9 @@ func raiseAsk(c *callCtx, in json.RawMessage) (any, error) {
 		next = "Stop now and end your turn without reporting a result: your task is parked and this Session stays open. The answer arrives here as a message, with the variables of a new run; if this Session has ended by then, a fresh run starts with this brief plus the answers."
 		if c.run.role != RoleWright {
 			next = "End your run. The Archwright will answer through the Needs-you inbox; no fresh run starts automatically. Read the answer with show_ask or list_asks when you are next summoned."
+			if n.Step != "" {
+				next = "Stop now and end your turn without handing back: your step is parked and this Session stays open. The Archwright will answer through the Needs-you inbox, and the answer arrives here as a message, with the variables of a new run; if this Session has ended by then, a fresh run starts with this step's brief plus the answers."
+			}
 		}
 	}
 	return AskReceipt{AskID: ask.ID, Holder: ask.Holder, Blocking: ask.Blocking, Next: next}, nil
@@ -213,6 +219,7 @@ func (r *Runs) AnswerAsk(id, by, who string, answers []store.Answer) (store.Answ
 		return store.AnswerResult{}, err
 	}
 	r.launchResumed(res.Resumed)
+	r.resumeAnsweredSteps(res.Steps)
 	return res, nil
 }
 

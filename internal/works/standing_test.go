@@ -46,7 +46,11 @@ func carriesOutItsStep(st *store.Store) func(context.Context, hosted.LaunchReque
 	}
 }
 
-func newStandingRig(t *testing.T) *standingRig {
+func newStandingRig(t *testing.T) *standingRig { return newStandingRigWith(t, nil) }
+
+// newStandingRigWith is newStandingRig whose Warden Session opens with the
+// script's first turn when first is not nil, instead of carrying out its step.
+func newStandingRigWith(t *testing.T, first func(*store.Store) hosted.Script) *standingRig {
 	t.Helper()
 	g := newGateRig(t, store.Gates{})
 	script := hosted.Script{Steps: hosted.Turn(carriesOutItsStep(g.st)).Steps, Nudged: []hosted.Step{
@@ -54,6 +58,9 @@ func newStandingRig(t *testing.T) *standingRig {
 		{Act: carriesOutItsStep(g.st)},
 		{Hook: &hosted.Hook{Event: hosted.HookStop}},
 	}}
+	if first != nil {
+		script.Steps = first(g.st).Steps
+	}
 	fake := hosted.NewFake(script)
 	guilds := func(name string) (Guild, error) {
 		if name == ReviewGuild {

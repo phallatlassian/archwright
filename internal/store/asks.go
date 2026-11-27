@@ -57,6 +57,7 @@ type Ask struct {
 	Guild      string     `json:"guild,omitempty"`
 	Piece      string     `json:"piece,omitempty"`
 	DispatchID string     `json:"dispatch_id,omitempty"` // the Wright dispatch that is blocked on it
+	Step       string     `json:"step,omitempty"`        // the Plan step a Warden's blocking ask parked
 	ParentID   string     `json:"parent_id,omitempty"`   // the ask this one escalates
 	Kind       string     `json:"kind"`
 	Blocking   bool       `json:"blocking"`
@@ -72,9 +73,9 @@ type Ask struct {
 
 // NewAsk is an ask as its raiser supplies it.
 type NewAsk struct {
-	JobID, Asker, Guild, Piece, DispatchID, ParentID, Kind, Why string
-	Blocking                                                    bool
-	Questions                                                   []Question
+	JobID, Asker, Guild, Piece, DispatchID, Step, ParentID, Kind, Why string
+	Blocking                                                          bool
+	Questions                                                         []Question
 }
 
 func invalid(format string, a ...any) error { return fmt.Errorf("invalid input: "+format, a...) }
@@ -181,12 +182,12 @@ func SkipAnswers(qs []Question) []Answer {
 	return out
 }
 
-const askCols = "id, job_id, asker, guild, piece, dispatch_id, parent_id, kind, blocking, why, questions, holder, status, answers, answered_by, created_at, COALESCE(answered_at,'')"
+const askCols = "id, job_id, asker, guild, piece, dispatch_id, step, parent_id, kind, blocking, why, questions, holder, status, answers, answered_by, created_at, COALESCE(answered_at,'')"
 
 func scanAsk(r scanner) (Ask, error) {
 	var a Ask
 	var qs, ans, created, answered string
-	if err := r.Scan(&a.ID, &a.JobID, &a.Asker, &a.Guild, &a.Piece, &a.DispatchID, &a.ParentID, &a.Kind, &a.Blocking, &a.Why, &qs, &a.Holder, &a.Status, &ans, &a.AnsweredBy, &created, &answered); err != nil {
+	if err := r.Scan(&a.ID, &a.JobID, &a.Asker, &a.Guild, &a.Piece, &a.DispatchID, &a.Step, &a.ParentID, &a.Kind, &a.Blocking, &a.Why, &qs, &a.Holder, &a.Status, &ans, &a.AnsweredBy, &created, &answered); err != nil {
 		return Ask{}, err
 	}
 	if err := json.Unmarshal([]byte(qs), &a.Questions); err != nil {
@@ -303,15 +304,24 @@ func (s *Store) createAsk(tx *sql.Tx, n NewAsk) (Ask, error) {
 		}
 	}
 	at := s.stamp()
-	a := Ask{ID: newID("ask-"), JobID: n.JobID, Asker: n.Asker, Guild: n.Guild, Piece: n.Piece, DispatchID: n.DispatchID, ParentID: n.ParentID,
+	if n.Step != "" && n.Blocking {
+		res, err := tx.Exec("UPDATE steps SET status = ? WHERE job_id = ? AND step = ? AND status = ?", StepBlocked, n.JobID, n.Step, StepRunning)
+		if err != nil {
+			return Ask{}, err
+		}
+		if c, _ := res.RowsAffected(); c == 0 {
+			return Ask{}, fmt.Errorf("step %q is not running, so it cannot block on an ask: %w", n.Step, ErrConflict)
+		}
+	}
+	a := Ask{ID: newID("ask-"), JobID: n.JobID, Asker: n.Asker, Guild: n.Guild, Piece: n.Piece, DispatchID: n.DispatchID, Step: n.Step, ParentID: n.ParentID,
 		Kind: n.Kind, Blocking: n.Blocking, Why: n.Why, Questions: qs, Holder: HolderArchwright, Status: AskOpen, Answers: []Answer{}}
 	if n.Asker == "wright" {
 		a.Holder = HolderWarden
 	}
 	a.CreatedAt, _ = time.Parse(time.RFC3339Nano, at)
 	rawQs, _ := json.Marshal(qs)
-	if _, err := tx.Exec("INSERT INTO asks (id, job_id, asker, guild, piece, dispatch_id, parent_id, kind, blocking, why, questions, holder, status, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-		a.ID, a.JobID, a.Asker, a.Guild, a.Piece, a.DispatchID, a.ParentID, a.Kind, a.Blocking, a.Why, string(rawQs), a.Holder, a.Status, at); err != nil {
+	if _, err := tx.Exec("INSERT INTO asks (id, job_id, asker, guild, piece, dispatch_id, step, parent_id, kind, blocking, why, questions, holder, status, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+		a.ID, a.JobID, a.Asker, a.Guild, a.Piece, a.DispatchID, a.Step, a.ParentID, a.Kind, a.Blocking, a.Why, string(rawQs), a.Holder, a.Status, at); err != nil {
 		return Ask{}, err
 	}
 	if err := appendEvent(tx, at, a.JobID, "ask.raised", map[string]any{"ask": a.ID, "asker": a.Asker, "kind": a.Kind, "blocking": a.Blocking, "holder": a.Holder}); err != nil {
@@ -360,6 +370,7 @@ func (s *Store) EscalateAsk(id, why string) (Ask, error) {
 type AnswerResult struct {
 	Resolved []Ask      `json:"resolved"` // the ask and any ask it was escalated from
 	Resumed  []Dispatch `json:"resumed"`  // fresh dispatches that replace blocked ones
+	Steps    []StepRun  `json:"steps"`    // steps a Warden's answered ask put back to running
 }
 
 // RenderResume builds the brief of a fresh dispatch that replaces a blocked
@@ -449,7 +460,29 @@ func (s *Store) AnswerAsk(id, level, by string, answers []Answer, render RenderR
 		}
 		res.Resumed = append(res.Resumed, next)
 	}
+	for _, r := range res.Resolved {
+		if r.Step == "" || !r.Blocking {
+			continue
+		}
+		up, err := tx.Exec("UPDATE steps SET status = ? WHERE job_id = ? AND step = ? AND status = ?", StepRunning, r.JobID, r.Step, StepBlocked)
+		if err != nil {
+			return AnswerResult{}, err
+		}
+		if c, _ := up.RowsAffected(); c == 0 {
+			continue
+		}
+		sr, err := scanStep(tx.QueryRow("SELECT "+stepCols+" FROM steps WHERE job_id = ? AND step = ?", r.JobID, r.Step))
+		if err != nil {
+			return AnswerResult{}, err
+		}
+		res.Steps = append(res.Steps, sr)
+	}
 	return res, tx.Commit()
+}
+
+// StepAsks lists the asks a Warden raised on a step, which a fresh run's brief carries.
+func (s *Store) StepAsks(jobID, step string) ([]Ask, error) {
+	return listAsks(s.db, "WHERE job_id = ? AND step = ? AND asker = 'warden'", jobID, step)
 }
 
 // CancelAsk is the developer cancelling the Job an ask belongs to: the ask,
@@ -483,6 +516,9 @@ func (s *Store) CancelAsk(id, by string) ([]Ask, error) {
 		}
 	}
 	if _, err := tx.Exec("UPDATE dispatches SET status = ? WHERE job_id = ? AND status = ?", DispatchRejected, a.JobID, DispatchBlocked); err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec("UPDATE steps SET status = ?, reason = ?, finished_at = ? WHERE job_id = ? AND status = ?", StepFailed, "the ask it was parked on was cancelled", at, a.JobID, StepBlocked); err != nil {
 		return nil, err
 	}
 	if err := appendEvent(tx, at, a.JobID, "ask.cancelled", map[string]any{"ask": id, "by": by}); err != nil {

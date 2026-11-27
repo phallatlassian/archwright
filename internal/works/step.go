@@ -19,12 +19,13 @@ import (
 // fresh Warden run that works through the spool in Env and ends by calling
 // handback.
 type WardenRequest struct {
-	Env     RunEnv
-	Job     string
-	Guild   string
-	Step    string
-	Brief   string // the task brief stored with the step, plus a resume note after a restart
-	Resumed bool   // the Works restarted while the step was running
+	Env      RunEnv
+	Job      string
+	Guild    string
+	Step     string
+	Brief    string // the task brief stored with the step, plus a resume note after a restart
+	Resumed  bool   // the Works restarted while the step was running
+	Answered bool   // the Warden parked the step on a blocking Ask, now answered; Brief is the stored brief plus the Q&A record
 
 	Worktree string            // a read-only checkout of the Job's code to run in; empty when the Job has no Site
 	ExtraEnv map[string]string // further variables for the runner process, such as GIT_CONFIG_GLOBAL for delivered skills
@@ -158,7 +159,7 @@ func (r *Runs) startStep(jobID, stepID string) (store.StepRun, error) {
 	if err != nil {
 		return store.StepRun{}, err
 	}
-	if err := r.summon(sr, false); err != nil {
+	if err := r.summon(sr, false, false); err != nil {
 		return store.StepRun{}, err
 	}
 	return sr, nil
@@ -275,8 +276,11 @@ func (r *Runs) resumeNote(sr store.StepRun) string {
 }
 
 // summon starts the Warden run for a running step. A step whose run cannot
-// start is failed, so the Archwright can start it again.
-func (r *Runs) summon(sr store.StepRun, resumed bool) error {
+// start is failed, so the Archwright can start it again. An answered run
+// follows a blocking Ask of the Warden's own: its Session, when still open, is
+// Nudged the Q&A record, and a fresh Session runs the stored brief plus that
+// record.
+func (r *Runs) summon(sr store.StepRun, resumed, answered bool) error {
 	r.mu.Lock()
 	warden := r.warden
 	r.mu.Unlock()
@@ -293,6 +297,13 @@ func (r *Runs) summon(sr store.StepRun, resumed bool) error {
 	brief := sr.Brief
 	if resumed {
 		brief += r.resumeNote(sr)
+	}
+	if answered {
+		asks, err := r.st.StepAsks(sr.JobID, sr.Step)
+		if err != nil {
+			return fail(err)
+		}
+		brief += qaSection(asks)
 	}
 	env, err := r.StartFor(RoleWarden, root, RunContext{Job: sr.JobID, Guild: sr.Guild, Task: sr.Step})
 	if err != nil {
@@ -312,6 +323,10 @@ func (r *Runs) summon(sr store.StepRun, resumed bool) error {
 		log.Printf("run %s: recording it for the dashboard: %v", env.Run, err)
 	}
 	r.recordBrief(env.Run, brief)
+	key := sr.JobID + "/" + sr.Step
+	r.mu.Lock()
+	r.stepRuns[key] = env.Run
+	r.mu.Unlock()
 	go func() {
 		defer r.wg.Done()
 		wt, runErr := r.wardenWorkspace(env.Run, root)
@@ -320,12 +335,18 @@ func (r *Runs) summon(sr store.StepRun, resumed bool) error {
 			extra, runErr = r.deliverGuildSkills(sr.Guild, env.Run, wt, nil)
 		}
 		if runErr == nil {
-			runErr = warden.RunWarden(r.bg, WardenRequest{Env: env, Job: sr.JobID, Guild: sr.Guild, Step: sr.Step, Brief: brief, Resumed: resumed, Worktree: wt, ExtraEnv: extra, Trace: r.traceFor(env.Run)})
+			runErr = warden.RunWarden(r.bg, WardenRequest{Env: env, Job: sr.JobID, Guild: sr.Guild, Step: sr.Step, Brief: brief, Resumed: resumed, Answered: answered, Worktree: wt, ExtraEnv: extra, Trace: r.traceFor(env.Run)})
 		}
 		r.End(env.Run)
 		r.endRunRecord(env.Run, runErr)
 		if r.bg.Err() != nil {
 			return // the Works is stopping: the step stays running and its Warden is re-summoned on the next start
+		}
+		r.mu.Lock()
+		superseded := r.stepRuns[key] != env.Run // an answer to its Ask started a later run of the step
+		r.mu.Unlock()
+		if superseded {
+			return
 		}
 		msg := "the Warden ended without handing back"
 		if runErr != nil {
@@ -336,6 +357,16 @@ func (r *Runs) summon(sr store.StepRun, resumed bool) error {
 		}
 	}()
 	return nil
+}
+
+// resumeAnsweredSteps starts the Warden run of each step a Warden's Ask had
+// parked and an answer has put back to running.
+func (r *Runs) resumeAnsweredSteps(steps []store.StepRun) {
+	for _, sr := range steps {
+		if err := r.summon(sr, false, true); err != nil {
+			log.Printf("step %s/%s: resuming after an answer: %v", sr.JobID, sr.Step, err)
+		}
+	}
 }
 
 // wardenWorkspace is the directory a task Warden works in: a per-run
@@ -399,7 +430,7 @@ func (r *Runs) resumeSteps() error {
 			log.Printf("step %s/%s: running, but no Warden runner is configured to resume it", sr.JobID, sr.Step)
 			continue
 		}
-		if err := r.summon(sr, true); err != nil {
+		if err := r.summon(sr, true, false); err != nil {
 			log.Printf("step %s/%s: resuming: %v", sr.JobID, sr.Step, err)
 		}
 	}

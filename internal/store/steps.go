@@ -11,6 +11,7 @@ import (
 const (
 	StepPending    = "pending"
 	StepRunning    = "running"
+	StepBlocked    = "blocked" // the Warden's blocking ask is open; the step waits for the answer (ADR 0015, 0029)
 	StepHandedBack = "handed_back"
 	StepFailed     = "failed"
 )
@@ -68,7 +69,7 @@ func (s *Store) StartStep(jobID, stepID string, check func(plan Plan, runs []Ste
 		return StepRun{}, err
 	}
 	for _, r := range runs {
-		if r.Step == stepID && (r.Status == StepRunning || r.Status == StepHandedBack) {
+		if r.Step == stepID && (r.Status == StepRunning || r.Status == StepBlocked || r.Status == StepHandedBack) {
 			return StepRun{}, fmt.Errorf("step %q of job %q is %s: %w", stepID, jobID, r.Status, ErrConflict)
 		}
 	}
