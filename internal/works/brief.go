@@ -22,7 +22,11 @@ type Brief struct {
 	Constraints *[]string `json:"constraints"`
 	// ReadOnly declares that the Wright writes nothing, so its scope cannot
 	// conflict with another Job's. Absent means the piece writes.
-	ReadOnly         bool     `json:"read_only,omitempty"`
+	ReadOnly bool `json:"read_only,omitempty"`
+	// Interactive declares a Wright the developer works with directly in its pane
+	// (a prototype): the Works tells them how to attach when it starts. It is set
+	// by dispatch_wright's interactive argument.
+	Interactive      bool     `json:"interactive,omitempty"`
 	Inputs           []string `json:"inputs"` // pointers to what the Wright needs, not the content
 	DefinitionOfDone []string `json:"definition_of_done"`
 	ReturnShape      string   `json:"return_shape"`

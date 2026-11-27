@@ -68,18 +68,19 @@ func GuildsFromRegistry(reg *defs.Registry, profiles map[string]defs.Profile, ca
 
 // RunRequest is what a Runner is given to carry out one dispatch.
 type RunRequest struct {
-	Env        RunEnv // the Wright's run: it reports through the spool in Env
-	Job        string
-	Guild      string // the Guild whose binding picks the runner
-	Piece      string
-	DispatchID string
-	Worktree   string            // the Wright's own worktree; empty when the Works has no Sites
-	Rework     bool              // a piece sent back, or an answered Ask, in the worktree of its Wright's open Session: the Session is Nudged, not relaunched
-	Answered   bool              // the Nudge carries the answer to the Ask that parked the piece, not an amended brief
-	Restarted  bool              // the run takes over from one a stopped Works left running: the Session it continues was adopted or is resumed
-	Brief      string            // the rendered brief, Guild standards included
-	ExtraEnv   map[string]string // further variables for the runner process, such as GIT_CONFIG_GLOBAL for delivered skills
-	Trace      Trace             // where a runner reports its timeline and usage for the dashboard
+	Env         RunEnv // the Wright's run: it reports through the spool in Env
+	Job         string
+	Guild       string // the Guild whose binding picks the runner
+	Piece       string
+	DispatchID  string
+	Worktree    string            // the Wright's own worktree; empty when the Works has no Sites
+	Interactive bool              // the developer works with this Wright in its pane: they are told how to attach once its Session starts
+	Rework      bool              // a piece sent back, or an answered Ask, in the worktree of its Wright's open Session: the Session is Nudged, not relaunched
+	Answered    bool              // the Nudge carries the answer to the Ask that parked the piece, not an amended brief
+	Restarted   bool              // the run takes over from one a stopped Works left running: the Session it continues was adopted or is resumed
+	Brief       string            // the rendered brief, Guild standards included
+	ExtraEnv    map[string]string // further variables for the runner process, such as GIT_CONFIG_GLOBAL for delivered skills
+	Trace       Trace             // where a runner reports its timeline and usage for the dashboard
 }
 
 // Trace is how a run shows itself on the dashboard (ADR 0007): timeline
@@ -246,8 +247,9 @@ func (c *callCtx) launch(d store.Dispatch, b Brief) (DispatchInfo, error) {
 
 func dispatchWright(c *callCtx, in json.RawMessage) (any, error) {
 	var a struct {
-		Piece string          `json:"piece"`
-		Brief json.RawMessage `json:"brief"`
+		Piece       string          `json:"piece"`
+		Brief       json.RawMessage `json:"brief"`
+		Interactive bool            `json:"interactive"` // the developer works with this Wright in its pane (a prototype)
 	}
 	if err := decode(in, &a); err != nil {
 		return nil, err
@@ -272,6 +274,7 @@ func dispatchWright(c *callCtx, in json.RawMessage) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	b.Interactive = a.Interactive
 	raw, _ := json.Marshal(b)
 	d, err := c.st.NewPiece(c.run.ctx.Job, g.Name, a.Piece, c.run.id, raw, b.Render(g.Name, g.Standards, g.Skills, 0, ""))
 	if err != nil {
@@ -311,6 +314,11 @@ func reworkWright(c *callCtx, in json.RawMessage) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	prev, err := c.st.LatestDispatch(c.run.ctx.Job, a.Piece)
+	if err != nil {
+		return nil, err
+	}
+	b.Interactive = interactiveBrief(prev.Brief)
 	raw, _ := json.Marshal(b)
 	asks, err := c.st.PieceAsks(c.run.ctx.Job, a.Piece)
 	if err != nil {
@@ -489,6 +497,7 @@ func reportResult(c *callCtx, in json.RawMessage) (any, error) {
 	if err := c.st.RecordResult(c.run.ctx.DispatchID, raw); err != nil {
 		return nil, err
 	}
+	c.runs.clearInteractive(c.run.ctx.DispatchID)
 	return map[string]string{"status": "recorded"}, nil
 }
 
@@ -577,6 +586,7 @@ func (r *Runs) failDispatch(id, msg string) {
 	if err := r.st.RecordResult(id, raw); err != nil && !errors.Is(err, store.ErrConflict) {
 		log.Printf("dispatch %s: recording failure: %v", id, err)
 	}
+	r.clearInteractive(id)
 }
 
 // start launches the Wright run for a dispatch the scheduler has released.
@@ -649,7 +659,7 @@ func (r *Runs) start(d store.Dispatch) error {
 			extra, runErr = r.deliverSkillsFor(d, env.Run, wt)
 		}
 		if runErr == nil {
-			runErr = runner.Run(ctx, RunRequest{Env: env, Job: d.JobID, Guild: d.Guild, Piece: d.Piece, DispatchID: d.ID, Worktree: wt, Rework: reused, Answered: answered, Restarted: restarted, Brief: brief, ExtraEnv: extra, Trace: trace})
+			runErr = runner.Run(ctx, RunRequest{Env: env, Job: d.JobID, Guild: d.Guild, Piece: d.Piece, DispatchID: d.ID, Worktree: wt, Rework: reused, Answered: answered, Restarted: restarted, Interactive: interactiveBrief(d.Brief), Brief: brief, ExtraEnv: extra, Trace: trace})
 		}
 		if errors.Is(runErr, ErrWorksStopping) {
 			// The Works is stopping and its runner left the Wright's Session open in

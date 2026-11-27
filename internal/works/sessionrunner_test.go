@@ -47,6 +47,7 @@ func newSessionRig(t *testing.T, script hosted.Script) *sessionRig {
 	sr := &SessionRunner{
 		Runners: map[string]hosted.Runner{"claude": g.fake},
 		Guilds:  guilds,
+		Started: AnnounceInteractive(g.st),
 		Record: func(run string, info hosted.Info, state hosted.State) {
 			g.st.SetRunSession(run, sessionRecord(info, state))
 		},

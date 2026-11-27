@@ -41,6 +41,8 @@ type SessionRunner struct {
 	// NudgeWait is how long a rework waits for its Session to be idle before
 	// giving up on it; zero means DefaultNudgeWait.
 	NudgeWait time.Duration
+	// Started is told when a run launches a fresh Session; nil ignores it.
+	Started func(req RunRequest, info hosted.Info)
 
 	mu        sync.Mutex
 	live      map[string]*liveSession  // the open Session of each piece of each Job, and each Guild's Warden of each Job
@@ -277,6 +279,9 @@ func (a *SessionRunner) run(ctx context.Context, req RunRequest, spec runSpec) e
 		}
 	}
 	a.record(req, live.Info(), hosted.StateStarting)
+	if a.Started != nil && !a.detached.Load() {
+		a.Started(req, live.Info())
+	}
 	dir := live.Info().Dir
 	if dir == "" {
 		dir = req.Worktree
