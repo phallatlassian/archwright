@@ -64,3 +64,18 @@ func TestFocusMovesOnlyWhenTheClientIsIdle(t *testing.T) {
 		})
 	}
 }
+
+func TestCodexRunnerFocusesLikeClaude(t *testing.T) {
+	tm, log := scriptedTmux(t, 60)
+	f, ok := tm.Codex().(Focuser)
+	if !ok {
+		t.Fatal("codex runner is not a Focuser")
+	}
+	got, err := f.FocusIfIdle("%7", 5*time.Second)
+	if err != nil || !got {
+		t.Fatalf("focused = %v, %v", got, err)
+	}
+	if l := log(); !strings.Contains(l, "select-pane -t %7") || strings.Contains(l, "send-keys") {
+		t.Fatalf("log = %q", l)
+	}
+}

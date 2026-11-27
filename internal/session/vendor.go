@@ -1,6 +1,9 @@
 package session
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // vendor is what differs between the CLIs the tmux adapter hosts: the launch
 // line, where the hooks come from, and what can be said to a running Session.
@@ -66,6 +69,11 @@ type codexRunner struct{ t *Tmux }
 
 // UseBaseEnv implements BaseEnvUser: Codex Sessions share the server and its environment.
 func (c codexRunner) UseBaseEnv(f func() map[string]string) { c.t.UseBaseEnv(f) }
+
+// FocusIfIdle implements Focuser.
+func (c codexRunner) FocusIfIdle(pane string, idle time.Duration) (bool, error) {
+	return c.t.FocusIfIdle(pane, idle)
+}
 
 // Name implements Runner.
 func (c codexRunner) Name() string { return "codex" }
