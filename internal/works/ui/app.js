@@ -240,6 +240,7 @@ const views = {
       entries.push({ key: 'item:' + it.id, kind: it.kind, jobId: it.job_id || '', at: it.created_at, guild: detail.guild, piece: detail.piece, latest: true, build: () => h('div', { class: 'panel attn' },
         h('h3', {}, tag(it.kind), ' ', it.job_id ? jobLink(it.job_id, title(it.job_id)) : '', ' ', h('span', { class: 'muted' }, ago(it.created_at))),
         h('p', {}, it.summary),
+        detail.attach ? h('p', {}, 'Attach: ', h('code', {}, detail.attach)) : null,
         it.detail && Object.keys(it.detail).length ? h('pre', {}, JSON.stringify(it.detail, null, 2)) : null,
         it.job_id ? instructBox(it.job_id, 'Tell the Archwright what to do about it') : null) });
     }

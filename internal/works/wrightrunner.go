@@ -64,6 +64,7 @@ func sessionRunnerFrom(getenv func(string) string, guilds GuildSource, st *store
 	return &SessionRunner{
 		Runners: map[string]hosted.Runner{"claude": tm, "codex": tm.Codex()},
 		Guilds:  guilds,
+		Started: AnnounceInteractive(st),
 		Record: func(run string, info hosted.Info, state hosted.State) {
 			if err := st.SetRunSession(run, sessionRecord(info, state)); err != nil {
 				log.Printf("run %s: recording its Session: %v", run, err)
