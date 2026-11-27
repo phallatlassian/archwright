@@ -318,7 +318,11 @@ func (m *Manager) WardenWorktree(jobID string, kind defs.Worktree) (store.Worktr
 		if err != nil {
 			return store.Worktree{}, err
 		}
-		return activeOf(wts, store.KindIntegration)[0], nil
+		integration := activeOf(wts, store.KindIntegration)
+		if len(integration) == 0 {
+			return store.Worktree{}, fmt.Errorf("job %s has no integration worktree: %w", jobID, store.ErrConflict)
+		}
+		return integration[0], nil
 	}
 	storeKind := map[defs.Worktree]string{defs.WorktreeBranch: store.KindWright, defs.WorktreeDetached: store.KindReadOnly, defs.WorktreeEmpty: store.KindEmpty}[kind]
 	if storeKind == "" {

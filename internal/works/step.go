@@ -391,6 +391,7 @@ func (r *Runs) wardenWorktreeKind(sr store.StepRun) (defs.Worktree, error) {
 		for _, s := range plan.Steps {
 			if s.ID == sr.Step && s.Worktree != "" {
 				kind = defs.Worktree(s.Worktree)
+				break
 			}
 		}
 	}
