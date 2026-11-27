@@ -6,7 +6,7 @@ import (
 
 // Trust probe outcomes, per Site and runner.
 const (
-	TrustCaptured    = "captured"    // a Session started in a worktree of the Site: folder trust (and Codex's hook trust) is given and the hooks reach the Works
+	TrustCaptured    = "captured"    // a Session started in the Site's main checkout: folder trust (and Codex's hook trust) is given and the hooks reach the Works
 	TrustPending     = "pending"     // the probe is waiting for the developer to answer the trust dialog
 	TrustUnconfirmed = "unconfirmed" // the probe waited and no Session started: the dialog was not answered, or hooks are blocked
 	TrustFailed      = "failed"      // the probe could not be run

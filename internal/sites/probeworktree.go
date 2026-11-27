@@ -7,16 +7,20 @@ import (
 )
 
 // ProbeDir is the folder the trust probe runs in (docs/spec/tmux-runtime.md):
-// the Site's folder under the worktree root, the parent of every Job's
-// worktree of the Site, so trust given there is the trust a later Session in
-// one of them is covered by wherever a CLI inherits trust from a parent folder.
-// It is a plain folder, not a worktree, and stays: nothing in it needs cleaning.
+// the Site's main checkout, the one folder the developer trusts once per
+// runner and the one every Job worktree is created from, so they inherit
+// trust (ADR 0030). The probe is the only Session ever started there. A Site
+// not yet migrated from its bare clone has no main checkout and is probed in
+// the folder its Job worktrees sit in, as before.
 func (m *Manager) ProbeDir(siteName string) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	site, err := m.st.GetSite(siteName)
 	if err != nil {
 		return "", err
+	}
+	if !isBare(site) {
+		return site.ClonePath, nil
 	}
 	root, err := m.realRoot()
 	if err != nil {

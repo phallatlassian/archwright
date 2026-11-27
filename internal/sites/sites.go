@@ -1,7 +1,7 @@
 // Package sites registers git repositories as Sites by remote URL, keeps the
 // Works' own clone of each, and manages the worktrees Wrights work in, all
 // created from that clone and never from a developer's checkout (ADR 0008,
-// 0010, 0019).
+// 0010, 0019, 0030).
 package sites
 
 import (
@@ -27,7 +27,7 @@ var ErrUnregistered = errors.New("not a registered Site (a Site is matched by it
 type Manager struct {
 	st     *store.Store
 	root   string // where worktrees live: outside every Site
-	clones string // where the Works' bare clones live
+	clones string // where the Works' clones live: <clones>/<site>/main (ADR 0030)
 	mu     sync.Mutex
 
 	// lookPath finds an executable on PATH; injectable so detection does not
@@ -77,6 +77,51 @@ func (m *Manager) remoteDefaultBranch(rawURL string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("%s has no default branch; give the base branch explicitly", rawURL)
+}
+
+// mainDir is where a Site's main checkout lives, under the Site's own folder
+// in the clones directory (ADR 0030).
+func mainDir(clones, site string) string { return filepath.Join(clones, site, "main") }
+
+// legacyClone is where a Site's bare clone lived before ADR 0030.
+func legacyClone(clones, site string) string { return filepath.Join(clones, site+".git") }
+
+// cloneMain makes a normal clone of rawURL at dir (<clones>/<site>/main), the
+// Site's main checkout: every branch is fetched into refs/remotes/origin/*,
+// HEAD is detached at the base branch and no local branch is left, so nothing
+// is ever checked out there that a later fetch would have to move. It does not
+// check that the base branch exists.
+func cloneMain(dir, rawURL, base string) error {
+	if err := os.MkdirAll(filepath.Dir(dir), 0o700); err != nil {
+		return err
+	}
+	if _, err := git(filepath.Dir(dir), "clone", "--quiet", "--no-checkout", "--no-tags", "--origin", "origin", "--", rawURL, filepath.Base(dir)); err != nil {
+		return fmt.Errorf("cannot clone %s: %w", rawURL, err)
+	}
+	ref := "refs/remotes/origin/" + base
+	if !gitOK(dir, "rev-parse", "--verify", "--quiet", ref+"^{commit}") {
+		return fmt.Errorf("base branch %q does not exist on %s", base, rawURL)
+	}
+	if _, err := git(dir, "checkout", "--quiet", "--detach", ref); err != nil {
+		return err
+	}
+	out, err := git(dir, "for-each-ref", "--format=%(refname:short)", "refs/heads")
+	if err != nil {
+		return err
+	}
+	for _, b := range strings.Fields(out) { // the branch the clone began on
+		if _, err := git(dir, "branch", "-D", "--", b); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// syncMain moves the main checkout to the freshly fetched base branch. It is
+// never edited, so forcing loses nothing. A failure leaves it where it was:
+// worktrees are made from a commit, not from the main checkout's HEAD.
+func syncMain(site store.Site) {
+	_, _ = git(site.ClonePath, "checkout", "--quiet", "--detach", "--force", "refs/remotes/origin/"+site.BaseBranch)
 }
 
 // fetchBare makes dir a bare repository whose origin is rawURL and fetches
@@ -259,24 +304,23 @@ func (m *Manager) Register(in RegisterInput) (store.Site, error) {
 	if err := os.MkdirAll(m.clones, 0o700); err != nil {
 		return store.Site{}, err
 	}
-	clone := filepath.Join(m.clones, in.Name+".git")
-	if err := os.RemoveAll(clone); err != nil { // debris of a crashed registration: ours, and no Site claims it
-		return store.Site{}, err
+	clone := mainDir(m.clones, in.Name)
+	for _, debris := range []string{filepath.Dir(clone), legacyClone(m.clones, in.Name)} { // of a crashed registration, or a removed Site: ours, and no Site claims it
+		if err := os.RemoveAll(debris); err != nil {
+			return store.Site{}, err
+		}
 	}
 	site, err := m.cloneAndRecord(in, clone)
 	if err != nil {
-		os.RemoveAll(clone)
+		os.RemoveAll(filepath.Dir(clone))
 		return store.Site{}, err
 	}
 	return site, nil
 }
 
 func (m *Manager) cloneAndRecord(in RegisterInput, clone string) (store.Site, error) {
-	if err := fetchBare(clone, in.URL, nil); err != nil {
+	if err := cloneMain(clone, in.URL, in.BaseBranch); err != nil {
 		return store.Site{}, err
-	}
-	if !gitOK(clone, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+in.BaseBranch+"^{commit}") {
-		return store.Site{}, fmt.Errorf("base branch %q does not exist on %s", in.BaseBranch, in.URL)
 	}
 	return m.st.AddSite(store.Site{
 		Name: in.Name, URL: in.URL, ClonePath: clone, BaseBranch: in.BaseBranch,
@@ -304,7 +348,8 @@ func validBranch(b string) error {
 	return nil
 }
 
-// Remove unregisters a Site and deletes the Works' clone of it. The Site's
+// Remove unregisters a Site and deletes the Works' clone of it (its whole
+// folder in the clones directory). The Site's
 // Jobs and their history are kept (ADR 0017). It is refused while a Job still
 // has worktrees from the clone.
 func (m *Manager) Remove(name string) (store.Site, error) {
@@ -317,7 +362,7 @@ func (m *Manager) Remove(name string) (store.Site, error) {
 	if !inside(site.ClonePath, m.clones) || site.ClonePath == m.clones {
 		return site, fmt.Errorf("site %q unregistered, but its clone %s is outside %s and was left alone", name, site.ClonePath, m.clones)
 	}
-	if err := os.RemoveAll(site.ClonePath); err != nil {
+	if err := os.RemoveAll(cloneFolder(site)); err != nil {
 		return site, fmt.Errorf("site %q unregistered, but deleting its clone failed: %w", name, err)
 	}
 	return site, nil
@@ -358,4 +403,13 @@ func (m *Manager) Resolve(path string) (store.Site, error) {
 		return store.Site{}, fmt.Errorf("%s (origin %s): %w", real, origin, ErrUnregistered)
 	}
 	return site, err
+}
+
+// cloneFolder is what Remove deletes: the Site's folder holding its main
+// checkout, or the bare clone itself for a Site not yet migrated.
+func cloneFolder(site store.Site) string {
+	if filepath.Base(site.ClonePath) == "main" {
+		return filepath.Dir(site.ClonePath)
+	}
+	return site.ClonePath
 }

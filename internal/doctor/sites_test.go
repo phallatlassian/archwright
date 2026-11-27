@@ -20,7 +20,7 @@ func git(t *testing.T, args ...string) {
 }
 
 // siteDeps registers one Site "demo" whose remote is a local repository (spelled
-// as an https URL through git's insteadOf) and whose clone is the Works' bare clone of it.
+// as an https URL through git's insteadOf) and whose clone is the Works' normal clone of it (ADR 0030).
 func siteDeps(t *testing.T, pocock bool, gates store.Gates) (Deps, string) {
 	t.Helper()
 	d := newDeps(t)
@@ -47,11 +47,10 @@ func siteDeps(t *testing.T, pocock bool, gates store.Gates) (Deps, string) {
 	}
 	git(t, "-C", work, "add", "-A")
 	git(t, "-C", work, "commit", "-m", "init")
-	clone := filepath.Join(d.Dirs.State, "clones", "demo")
-	os.MkdirAll(clone, 0o700)
-	git(t, "init", "--bare", "--quiet", clone)
-	git(t, "-C", clone, "remote", "add", "origin", "https://git.example.com/o/r")
-	git(t, "-C", clone, "fetch", "--quiet", "origin")
+	clone := filepath.Join(d.Dirs.State, "clones", "demo", "main")
+	os.MkdirAll(filepath.Dir(clone), 0o700)
+	git(t, "clone", "--quiet", "--no-checkout", "https://git.example.com/o/r", clone)
+	git(t, "-C", clone, "checkout", "--quiet", "--detach", "refs/remotes/origin/main")
 
 	st, err := store.Open(d.Dirs.Database())
 	if err != nil {
@@ -126,7 +125,7 @@ func TestSiteGateToolMissingWarnsAndPendingChangeIsReported(t *testing.T) {
 
 func TestSiteCloneProblems(t *testing.T) {
 	d, _ := siteDeps(t, true, store.Gates{Test: "true"})
-	clone := filepath.Join(d.Dirs.State, "clones", "demo")
+	clone := filepath.Join(d.Dirs.State, "clones", "demo", "main")
 	git(t, "-C", clone, "update-ref", "-d", "refs/remotes/origin/main")
 	c := byName(Run(context.Background(), d), "site-repo:demo")
 	if c.Status != Fail || !strings.Contains(c.Fix, "fetch origin") {
@@ -136,6 +135,69 @@ func TestSiteCloneProblems(t *testing.T) {
 	c = byName(Run(context.Background(), d), "site-repo:demo")
 	if c.Status != Fail || !strings.Contains(c.Fix, "archwright site register") {
 		t.Fatalf("no clone: %+v", c)
+	}
+}
+
+// legacyClone swaps the Site's normal clone for the bare clone it had before ADR 0030.
+func legacyClone(t *testing.T, d Deps) string {
+	t.Helper()
+	bare := filepath.Join(d.Dirs.State, "clones", "demo.git")
+	os.MkdirAll(bare, 0o700)
+	git(t, "init", "--bare", "--quiet", bare)
+	git(t, "-C", bare, "remote", "add", "origin", "https://git.example.com/o/r")
+	git(t, "-C", bare, "fetch", "--quiet", "origin")
+	st, err := store.Open(d.Dirs.Database())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if err := st.SetClonePath("demo", bare); err != nil {
+		t.Fatal(err)
+	}
+	return bare
+}
+
+func TestSiteNormalCloneIsReportedAsSuch(t *testing.T) {
+	d, _ := siteDeps(t, true, store.Gates{Test: "true"})
+	if c := byName(Run(context.Background(), d), "site-clone:demo"); c.Status != Pass || !strings.Contains(c.Detail, "main checkout") {
+		t.Fatalf("%+v", c)
+	}
+}
+
+func TestSiteBareCloneWarnsThatItsMigrationIsWaiting(t *testing.T) {
+	d, _ := siteDeps(t, true, store.Gates{Test: "true"})
+	legacyClone(t, d)
+	// Not enabled: the warning says how to enable it.
+	d.Getenv = func(string) string { return "" }
+	c := byName(Run(context.Background(), d), "site-clone:demo")
+	if c.Status != Warn || !strings.Contains(c.Fix, "ARCHWRIGHT_MIGRATE_CLONES") {
+		t.Fatalf("not enabled: %+v", c)
+	}
+	if r := byName(Run(context.Background(), d), "site-repo:demo"); r.Status != Pass {
+		t.Errorf("a bare clone is still a working clone: %+v", r)
+	}
+	// Enabled: it moves at the next start.
+	d.Getenv = func(k string) string {
+		if k == "ARCHWRIGHT_MIGRATE_CLONES" {
+			return "1"
+		}
+		return ""
+	}
+	if c := byName(Run(context.Background(), d), "site-clone:demo"); c.Status != Warn || !strings.Contains(c.Detail, "next Works start") {
+		t.Fatalf("enabled: %+v", c)
+	}
+	// An active Job holds it back.
+	st, err := store.Open(d.Dirs.Database())
+	if err != nil {
+		t.Fatal(err)
+	}
+	j, err := st.CreateJobOn("demo", "running", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+	if c := byName(Run(context.Background(), d), "site-clone:demo"); c.Status != Warn || !strings.Contains(c.Detail, "waiting for active Jobs") || !strings.Contains(c.Detail, j.ID) {
+		t.Fatalf("active Job: %+v", c)
 	}
 }
 
