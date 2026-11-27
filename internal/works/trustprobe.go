@@ -35,14 +35,15 @@ const (
 const trustProbeBrief = "This is a trust probe, not a task: the Archwright factory is checking that a Session can start in this folder. " +
 	"Reply with the single word ready, run no command and edit no file."
 
-// SiteWorktrees is what the probe needs of the Sites: the folder the Site's Job worktrees sit in.
+// SiteWorktrees is what the probe needs of the Sites: the Site's main checkout.
 type SiteWorktrees interface {
 	ProbeDir(site string) (dir string, err error)
 }
 
 // TrustProber is the probe a Site's registration runs once (docs/spec/tmux-runtime.md):
-// a Session of each installed runner, launched in the folder the Site's Job
-// worktrees sit in. No hook fires before a CLI's
+// a Session of each installed runner, launched in the Site's main checkout,
+// the one folder every Job worktree is made from and so inherits trust from
+// (ADR 0030); it is the only Session ever started there. No hook fires before a CLI's
 // folder-trust dialog is answered (and Codex's hook trust), so a Session that
 // starts is the evidence both were given and that the hooks reach the Works.
 // One that does not start raises a Needs-you item asking the developer to
@@ -78,7 +79,7 @@ func (p *TrustProber) init() {
 }
 
 // Close stops the probes in flight: their Sessions are cancelled and their
-// worktrees removed, and what they had not yet found stays unrecorded.
+// folders left alone, and what they had not yet found stays unrecorded.
 func (p *TrustProber) Close() {
 	p.init()
 	p.mu.Lock()
@@ -259,7 +260,7 @@ func (p *TrustProber) probeOne(ctx context.Context, site, name string, rn hosted
 	for {
 		switch {
 		case started():
-			p.record(site, name, store.TrustCaptured, "a Session started in a worktree of the Site: folder trust (and Codex hook trust) was given there, and the hooks reach the Works")
+			p.record(site, name, store.TrustCaptured, "a Session started in the Site's main checkout: folder trust (and Codex hook trust) was given there, which the Job worktrees made from it inherit, and the hooks reach the Works")
 			p.St.ResolveNeedsYou(itemKey(site, name))
 			return
 		case ctx.Err() != nil:

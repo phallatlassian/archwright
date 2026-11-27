@@ -77,6 +77,7 @@ func (m *Manager) CreateWorktree(jobID, kind, baseRef string) (store.Worktree, e
 		if _, err := git(site.ClonePath, "fetch", "--quiet", "--no-tags", "--prune", "origin"); err != nil {
 			return store.Worktree{}, fmt.Errorf("fetching site %s: %w", site.Name, err)
 		}
+		syncMain(site)
 	}
 	sha, err := resolveBase(site, baseRef)
 	if err != nil {
@@ -147,7 +148,8 @@ func (m *Manager) EnsureIntegration(jobID string) error {
 // resolveBase resolves a base ref to a commit in the Site's clone. A branch
 // name means the remote's branch (refs/remotes/origin/<name>); anything else
 // (the Job's own factory branches, a SHA or tag) is resolved as given. The
-// clone has no local branches of its own, so no local branch can answer.
+// clone has no local branches of its own (its main checkout is detached), so
+// no local branch can answer.
 func resolveBase(site store.Site, ref string) (string, error) {
 	for _, candidate := range []string{"refs/remotes/origin/" + ref, ref} {
 		if sha, err := git(site.ClonePath, "rev-parse", "--verify", "--quiet", candidate+"^{commit}"); err == nil {

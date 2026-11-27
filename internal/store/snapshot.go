@@ -114,3 +114,6 @@ func copyFile(from, to string) error {
 	}
 	return out.Close()
 }
+
+// ActiveJobs lists the IDs of a Site's Jobs that are not closed or hold a worktree.
+func (s *Snapshot) ActiveJobs(site string) ([]string, error) { return s.st.ActiveJobs(site) }

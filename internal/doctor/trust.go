@@ -7,7 +7,8 @@ import (
 )
 
 // checkTrust reports what each Site's trust probe found (docs/spec/tmux-runtime.md):
-// whether a Session of each runner starts in a worktree of the Site, which needs
+// whether a Session of each runner starts in the Site's main checkout (the folder its
+// Job worktrees inherit trust from, ADR 0030), which needs
 // folder trust (and Codex's hook trust) and shows the vendor's hooks reach the
 // Works. A Site whose dialog is unanswered is a warning: its Sessions would
 // stall at the dialog with no signal, but runs of other Sites are not blocked.
@@ -57,6 +58,6 @@ func trustFix(site, runner string) string {
 	if runner == "codex" {
 		what += " and its hook-trust dialog (\"Trust all and continue\")"
 	}
-	return fmt.Sprintf("attach to the probe Session (tmux -L archwright attach-session -t =factory:probe-%s), %s once, then re-check with `archwright site probe %s`; "+
+	return fmt.Sprintf("attach to the probe Session (tmux -L archwright attach-session -t =factory:probe-%s), which runs in the Site's main checkout, %s once, then re-check with `archwright site probe %s`; "+
 		"the factory never answers it or writes trust configuration for you. If no dialog appears, your managed policy may block hooks: Sessions then run with state read from the pane, marked unreliable", site, what, site)
 }

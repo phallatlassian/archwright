@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/phallatlassian/archwright/internal/store"
+	"github.com/phallatlassian/archwright/internal/works"
 )
 
 // pocockDocs are the files the Pocock skills configuration points at
@@ -36,6 +37,7 @@ func checkSites(ctx context.Context, r *collector, d Deps, snap *store.Snapshot)
 	}
 	for _, s := range sites {
 		checkRepository(ctx, r, d, s)
+		checkCloneLayout(ctx, r, d, snap, s)
 		checkPocock(ctx, r, d, s)
 		checkGates(r, d, s, pending)
 	}
@@ -48,7 +50,7 @@ func checkRepository(ctx context.Context, r *collector, d Deps, s store.Site) {
 		r.fail(name, "the Works' clone is missing at "+s.ClonePath, fix)
 		return
 	}
-	if out, err := d.Output(ctx, "git", "-C", s.ClonePath, "rev-parse", "--is-bare-repository"); err != nil || out != "true" {
+	if _, err := d.Output(ctx, "git", "-C", s.ClonePath, "rev-parse", "--is-bare-repository"); err != nil {
 		r.fail(name, "the Works' clone at "+s.ClonePath+" is not a valid repository", fix)
 		return
 	}
@@ -64,6 +66,35 @@ func checkRepository(ctx context.Context, r *collector, d Deps, s store.Site) {
 		return
 	}
 	r.pass(name, "clone %s at %s; remote %s reachable", s.ClonePath, s.BaseBranch, s.URL)
+}
+
+// checkCloneLayout reports a Site still on the bare clone that ADR 0030
+// replaces with a normal clone with one trusted main checkout, and why it has
+// not moved: Jobs are active, or the automatic migration is not enabled (it
+// waits for the live check, #191). A Site on a normal clone has nothing to say.
+func checkCloneLayout(ctx context.Context, r *collector, d Deps, snap *store.Snapshot, s store.Site) {
+	name := "site-clone:" + s.Name
+	if _, err := os.Stat(s.ClonePath); err != nil {
+		return // reported by the repository check
+	}
+	if out, err := d.Output(ctx, "git", "-C", s.ClonePath, "rev-parse", "--is-bare-repository"); err != nil || out != "true" {
+		r.pass(name, "normal clone with a main checkout at %s", s.ClonePath)
+		return
+	}
+	active, err := snap.ActiveJobs(s.Name)
+	switch {
+	case err != nil:
+		r.warn(name, "the Works' clone is a bare clone, and its active Jobs cannot be read: "+err.Error(), "re-run `archwright doctor`")
+	case len(active) > 0:
+		r.warn(name, fmt.Sprintf("the Works' clone is still a bare clone: its move to a normal clone with one trusted main checkout is waiting for active Jobs (%s)", strings.Join(active, ", ")),
+			"close or finish those Jobs, then restart the Works (`archwright works stop`; it starts again on the next command); you will be asked to trust the main checkout once per runner")
+	case !works.MigrateClonesEnabled(d.Getenv):
+		r.warn(name, "the Works' clone is still a bare clone, and the automatic move to a normal clone is not enabled",
+			works.EnvMigrateClones+"=1 in the environment that starts the Works enables it, once the live check (#191) has shown both CLIs inherit trust into worktrees of a normal clone")
+	default:
+		r.warn(name, "the Works' clone is still a bare clone; it moves to a normal clone at the next Works start",
+			"restart the Works (`archwright works stop`; it starts again on the next command); you will be asked to trust the main checkout once per runner")
+	}
 }
 
 func baseRef(s store.Site) string { return "refs/remotes/origin/" + s.BaseBranch }

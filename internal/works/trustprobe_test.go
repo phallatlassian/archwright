@@ -91,7 +91,17 @@ func (r *probeRig) noWorktreeLeft() {
 	}
 }
 
-func TestProbeCapturesTrustWhenASessionStartsInTheFolderTheSitesWorktreesSitIn(t *testing.T) {
+// mainCheckout is where the probe runs: the Site's main checkout.
+func (r *probeRig) mainCheckout() string {
+	r.t.Helper()
+	s, err := r.st.GetSite("demo")
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	return s.ClonePath
+}
+
+func TestProbeCapturesTrustWhenASessionStartsInTheSitesMainCheckout(t *testing.T) {
 	r := newProbeRig(t)
 	if err := r.p.Probe(t.Context(), "demo"); err != nil {
 		t.Fatal(err)
@@ -106,8 +116,8 @@ func TestProbeCapturesTrustWhenASessionStartsInTheFolderTheSitesWorktreesSitIn(t
 		t.Fatalf("claude was launched %d times", len(launches))
 	}
 	l := launches[0]
-	if l.Dir != filepath.Join(r.root, "demo") || l.Job != "probe-demo" || l.Role != "probe" {
-		t.Errorf("the probe Session ran as %+v, want the Site's worktree folder, in the Site's probe window", l)
+	if l.Dir != r.mainCheckout() || filepath.Base(l.Dir) != "main" || l.Job != "probe-demo" || l.Role != "probe" {
+		t.Errorf("the probe Session ran as %+v, want the Site's main checkout, in the Site's probe window", l)
 	}
 	if !strings.Contains(l.Brief, "trust probe") || strings.Contains(strings.ToLower(l.Brief), "archwright tool") {
 		t.Errorf("brief = %q: the probe asks for nothing but to start", l.Brief)

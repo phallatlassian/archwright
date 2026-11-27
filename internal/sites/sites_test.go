@@ -142,7 +142,7 @@ func setup(t *testing.T) env {
 	return e
 }
 
-func (e env) clone() string { return filepath.Join(e.clones, "demo.git") }
+func (e env) clone() string { return mainDir(e.clones, "demo") }
 
 func (e env) job(t *testing.T) store.Job {
 	t.Helper()
@@ -159,12 +159,12 @@ func (e env) assertNoClonesOrSites(t *testing.T, what string) {
 		t.Errorf("%s: sites %+v", what, list)
 	}
 	entries, _ := os.ReadDir(e.clones)
-	if len(entries) != 1 || entries[0].Name() != "demo.git" {
+	if len(entries) != 1 || entries[0].Name() != "demo" {
 		t.Errorf("%s: clones directory holds %v", what, entries)
 	}
 }
 
-func TestRegisterClonesBareAndRecordsURL(t *testing.T) {
+func TestRegisterMakesANormalCloneWithADetachedMainCheckoutAndRecordsURL(t *testing.T) {
 	e := setup(t)
 	list, err := e.st.ListSites()
 	if err != nil || len(list) != 1 {
@@ -174,8 +174,21 @@ func TestRegisterClonesBareAndRecordsURL(t *testing.T) {
 	if s.Name != "demo" || s.URL != e.remote.url || s.ClonePath != e.clone() || s.BaseBranch != "main" || s.ConcurrencyCap != 3 || s.Gates.Test != "go test ./..." {
 		t.Fatalf("%+v", s)
 	}
-	if got := run(t, s.ClonePath, "rev-parse", "--is-bare-repository"); got != "true" {
-		t.Errorf("clone is not bare: %s", got)
+	if got := run(t, s.ClonePath, "rev-parse", "--is-bare-repository"); got != "false" {
+		t.Errorf("clone is bare: %s", got)
+	}
+	if _, err := os.Stat(filepath.Join(s.ClonePath, "a.txt")); err != nil {
+		t.Errorf("main checkout has no files: %v", err)
+	}
+	want0 := run(t, e.remote.bare, "rev-parse", "main")
+	if got := run(t, s.ClonePath, "rev-parse", "HEAD"); got != want0 {
+		t.Errorf("main checkout at %s, want %s", got, want0)
+	}
+	if exec.Command("git", "-C", s.ClonePath, "symbolic-ref", "-q", "HEAD").Run() == nil {
+		t.Error("main checkout is on a branch, not detached")
+	}
+	if got := run(t, s.ClonePath, "for-each-ref", "refs/heads"); got != "" {
+		t.Errorf("clone has local branches: %s", got)
 	}
 	if !inside(s.ClonePath, e.clones) || inside(s.ClonePath, e.dev) {
 		t.Errorf("clone at %s", s.ClonePath)
@@ -876,27 +889,176 @@ func TestConcurrentRegistrationsOfOneRepoLeaveOneWorkingSite(t *testing.T) {
 	}
 }
 
-func TestProbeDirIsTheFolderTheJobWorktreesSitIn(t *testing.T) {
+func TestProbeDirIsTheMainCheckoutEveryJobWorktreeIsMadeFrom(t *testing.T) {
 	e := setup(t)
 	dir, err := e.m.ProbeDir("demo")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := filepath.Join(e.root, "demo"); dir != want {
-		t.Errorf("probe dir %s, want %s", dir, want)
-	}
-	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
-		t.Fatalf("probe dir not made: %v", err)
+	if dir != e.clone() || dir != filepath.Join(e.clones, "demo", "main") {
+		t.Errorf("probe dir %s, want the main checkout %s", dir, e.clone())
 	}
 	w, err := e.m.CreateWorktree(e.job(t).ID, store.KindIntegration, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := filepath.Dir(w.Path); got != dir {
-		t.Errorf("a Job worktree sits in %s, not the probe dir %s", got, dir)
+	if got := run(t, w.Path, "rev-parse", "--path-format=absolute", "--git-common-dir"); got != filepath.Join(dir, ".git") {
+		t.Errorf("a Job worktree is made from %s, not the main checkout %s", got, dir)
 	}
 	if _, err := e.m.ProbeDir("nope"); err == nil {
 		t.Error("a probe dir of a Site that is not registered")
+	}
+}
+
+func TestMainCheckoutFollowsTheFetchedBaseBranchAndStaysDetached(t *testing.T) {
+	e := setup(t)
+	e.remote.commit("second", map[string]string{"b.txt": "b"})
+	if _, err := e.m.CreateWorktree(e.job(t).ID, store.KindIntegration, ""); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := run(t, e.clone(), "rev-parse", "HEAD"), run(t, e.remote.bare, "rev-parse", "main"); got != want {
+		t.Errorf("main checkout at %s, want the fetched base %s", got, want)
+	}
+	if _, err := os.Stat(filepath.Join(e.clone(), "b.txt")); err != nil {
+		t.Errorf("main checkout files not updated: %v", err)
+	}
+	if exec.Command("git", "-C", e.clone(), "symbolic-ref", "-q", "HEAD").Run() == nil {
+		t.Error("main checkout is on a branch")
+	}
+}
+
+// legacySite registers a Site the way the Works did before ADR 0030: a bare
+// clone at <clones>/<name>.git.
+func (e env) legacySite(t *testing.T, name string, rp repo) store.Site {
+	t.Helper()
+	clone := legacyClone(e.clones, name)
+	if err := fetchBare(clone, rp.url, nil); err != nil {
+		t.Fatal(err)
+	}
+	s, err := e.st.AddSite(store.Site{Name: name, URL: rp.url, ClonePath: clone, BaseBranch: "main", ConcurrencyCap: 3, Gates: store.Gates{Test: "true"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+func TestMigrateReplacesABareCloneKeepingJobHistory(t *testing.T) {
+	e := setup(t)
+	rp := e.hosts.create(t, "o/old", map[string]string{"old.txt": "old"})
+	old := e.legacySite(t, "old", rp)
+	j, err := e.st.CreateJobOn("old", "finished", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.st.CloseJob(j.ID, "accepted"); err != nil {
+		t.Fatal(err)
+	}
+	if need, err := e.m.NeedsMigration("old"); err != nil || !need {
+		t.Fatalf("a bare clone does not need migration: %v %v", need, err)
+	}
+	if need, _ := e.m.NeedsMigration("demo"); need {
+		t.Error("a normal clone needs migration")
+	}
+	// Until migrated the probe runs where the worktrees sit, as before.
+	if dir, err := e.m.ProbeDir("old"); err != nil || dir != filepath.Join(e.root, "old") {
+		t.Errorf("probe dir of an unmigrated Site: %s %v", dir, err)
+	}
+
+	migrated, err := e.m.Migrate("old")
+	if err != nil || !migrated {
+		t.Fatalf("migrate: %v %v", migrated, err)
+	}
+	s, err := e.st.GetSite("old")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := mainDir(e.clones, "old"); s.ClonePath != want {
+		t.Errorf("clone path %s, want %s", s.ClonePath, want)
+	}
+	if got := run(t, s.ClonePath, "rev-parse", "--is-bare-repository"); got != "false" {
+		t.Errorf("migrated clone is bare: %s", got)
+	}
+	if _, err := os.Stat(filepath.Join(s.ClonePath, "old.txt")); err != nil {
+		t.Errorf("main checkout has no files: %v", err)
+	}
+	if _, err := os.Stat(old.ClonePath); !os.IsNotExist(err) {
+		t.Error("the old bare clone was kept")
+	}
+	if got, err := e.st.GetJob(j.ID); err != nil || got.Site != "old" || got.Outcome != "accepted" {
+		t.Errorf("job history: %+v %v", got, err)
+	}
+	if dir, err := e.m.ProbeDir("old"); err != nil || dir != s.ClonePath {
+		t.Errorf("probe dir after migration: %s %v", dir, err)
+	}
+	// Job worktrees are created from the new clone, and a second migration does nothing.
+	nj, err := e.st.CreateJobOn("old", "new", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.m.CreateWorktree(nj.ID, store.KindIntegration, ""); err != nil {
+		t.Fatal(err)
+	}
+	if migrated, err := e.m.Migrate("old"); err != nil || migrated {
+		t.Errorf("second migration: %v %v", migrated, err)
+	}
+	if migrated, err := e.m.Migrate("demo"); err != nil || migrated {
+		t.Errorf("migrating a normal clone: %v %v", migrated, err)
+	}
+}
+
+func TestMigrateWaitsForActiveJobs(t *testing.T) {
+	e := setup(t)
+	rp := e.hosts.create(t, "o/old", map[string]string{"old.txt": "old"})
+	old := e.legacySite(t, "old", rp)
+	j, err := e.st.CreateJobOn("old", "running", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := e.m.CreateWorktree(j.ID, store.KindIntegration, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	migrated, err := e.m.Migrate("old")
+	var blocked *BlockedError
+	if migrated || !errors.As(err, &blocked) || !IsBlocked(err) || len(blocked.Jobs) != 1 || blocked.Jobs[0] != j.ID {
+		t.Fatalf("migrate with an active Job: %v %v", migrated, err)
+	}
+	if s, _ := e.st.GetSite("old"); s.ClonePath != old.ClonePath {
+		t.Errorf("clone path moved to %s", s.ClonePath)
+	}
+	if _, err := os.Stat(w.Path); err != nil {
+		t.Errorf("the Job's worktree is gone: %v", err)
+	}
+	if _, err := os.Stat(mainDir(e.clones, "old")); !os.IsNotExist(err) {
+		t.Error("a main checkout was made while blocked")
+	}
+	// Once the Job closes it migrates.
+	if _, err := e.m.Close(j.ID, "discarded"); err != nil {
+		t.Fatal(err)
+	}
+	if migrated, err := e.m.Migrate("old"); err != nil || !migrated {
+		t.Fatalf("migrate after close: %v %v", migrated, err)
+	}
+}
+
+func TestMigrateFailureLeavesTheBareCloneInPlace(t *testing.T) {
+	e := setup(t)
+	rp := e.hosts.create(t, "o/old", map[string]string{"old.txt": "old"})
+	old := e.legacySite(t, "old", rp)
+	if err := os.RemoveAll(rp.bare); err != nil { // the remote is gone
+		t.Fatal(err)
+	}
+	if migrated, err := e.m.Migrate("old"); err == nil || migrated {
+		t.Fatalf("migrate with an unreachable remote: %v %v", migrated, err)
+	}
+	if s, _ := e.st.GetSite("old"); s.ClonePath != old.ClonePath {
+		t.Errorf("clone path moved to %s", s.ClonePath)
+	}
+	if !gitOK(old.ClonePath, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/main") {
+		t.Error("the bare clone was damaged")
+	}
+	if _, err := os.Stat(filepath.Dir(mainDir(e.clones, "old"))); !os.IsNotExist(err) {
+		t.Error("a half-made main checkout was left")
 	}
 }
 

@@ -132,7 +132,7 @@ func (s *Store) RemoveSite(name string) (Site, error) {
 	if _, err := tx.Exec("DELETE FROM site_trust WHERE site = ?", name); err != nil {
 		return Site{}, err
 	}
-	if _, err := tx.Exec("DELETE FROM needs_you WHERE site = ? AND job_id = '' AND kind = ?", name, NeedsTrustProbe); err != nil {
+	if _, err := tx.Exec("DELETE FROM needs_you WHERE site = ? AND job_id = '' AND kind IN (?, ?)", name, NeedsTrustProbe, NeedsCloneMigration); err != nil {
 		return Site{}, err
 	}
 	if err := appendEvent(tx, at, "", "site.removed", map[string]string{"name": name, "url": site.URL}); err != nil {
@@ -317,4 +317,41 @@ func (s *Store) CloseJob(jobID, outcome string) error {
 		return err
 	}
 	return tx.Commit()
+}
+
+// SetClonePath records where a Site's clone now is, after the Works re-cloned
+// it (ADR 0030).
+func (s *Store) SetClonePath(name, path string) error {
+	if path == "" {
+		return errors.New("clone path is required")
+	}
+	res, err := s.db.Exec("UPDATE sites SET clone_path = ? WHERE name = ? AND unregistered_at IS NULL", path, name)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("site %q: %w", name, ErrNotFound)
+	}
+	return nil
+}
+
+// ActiveJobs lists the IDs of the Site's Jobs that are not closed, and so may
+// have worktrees in the Site's clone, and of the Jobs holding a worktree that
+// is not removed.
+func (s *Store) ActiveJobs(site string) ([]string, error) {
+	rows, err := s.db.Query(`SELECT id FROM jobs WHERE site = ? AND COALESCE(outcome, '') = ''
+		UNION SELECT job_id FROM worktrees WHERE site = ? AND removed_at IS NULL ORDER BY 1`, site, site)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	ids := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
 }

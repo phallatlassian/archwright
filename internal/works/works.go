@@ -149,6 +149,9 @@ func ServeWith(ctx context.Context, d paths.Dirs, ready chan<- struct{}, opts Op
 			SpoolRoot: func(runner string) string { return launch.SpoolRoot(runner, os.Getuid(), os.TempDir()) },
 		})
 	}
+	if MigrateClonesEnabled(os.Getenv) {
+		runs.MigrateClones()
+	}
 	runs.ConfigureWarden(warden)
 	if reviewer != nil {
 		runs.ConfigureReview(reviewer)
