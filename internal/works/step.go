@@ -342,6 +342,8 @@ func (r *Runs) summon(sr store.StepRun, resumed, answered bool) error {
 		if r.bg.Err() != nil {
 			return // the Works is stopping: the step stays running and its Warden is re-summoned on the next start
 		}
+		r.stepMu.Lock()
+		defer r.stepMu.Unlock()
 		r.mu.Lock()
 		superseded := r.stepRuns[key] != env.Run // an answer to its Ask started a later run of the step
 		r.mu.Unlock()
