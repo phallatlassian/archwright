@@ -129,8 +129,8 @@ present a guess with the same confidence as a citation.
 **Handback.** A diff, passing tests, and anything the Guild noticed that exceeds its remit.
 **Draws on.** `implement`, `implement-spec`, `tdd`, `pr` and `diagnosing-bugs`, with
 `codebase-design` as a standing standard every brief inherits, and `prototype`, unforked,
-for the `prototype` Jig's one interactive Wright (#188). The shipped Guild's skills are forks the Works lists in each Warden's and
-Wright's brief (#160, #186).
+for the `prototype` Jig's one interactive Wright (#188). The shipped Guild's skills, `prototype`
+aside, are forks the Works lists in each Warden's and Wright's brief (#160, #186).
 
 Masons built to a lodge's standards, course by course, each stone set on those already
 laid. Here the courses are tickets and the standards are the codebase's.
