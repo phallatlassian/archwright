@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/phallatlassian/archwright/internal/skills"
 	"github.com/phallatlassian/archwright/internal/store"
 )
 
@@ -60,7 +61,7 @@ func (m *Manager) MergePiece(jobID, branch string) (PieceMerge, error) {
 	if on, err := git(w.Path, "symbolic-ref", "--short", "HEAD"); err != nil || on != w.Branch {
 		return PieceMerge{}, fmt.Errorf("job %s's integration worktree is not on %s: %w", jobID, w.Branch, store.ErrConflict)
 	}
-	if dirty, err := git(w.Path, "status", "--porcelain"); err != nil || dirty != "" {
+	if dirty, err := dirtyWorktree(w.Path); err != nil || dirty {
 		return PieceMerge{}, fmt.Errorf("job %s's integration worktree has uncommitted changes or an unfinished merge: %w", jobID, store.ErrConflict)
 	}
 	tip, err := git(site.ClonePath, "rev-parse", "--verify", "--quiet", "refs/heads/"+w.Branch+"^{commit}")
@@ -94,4 +95,33 @@ func (m *Manager) MergePiece(jobID, branch string) (PieceMerge, error) {
 	}
 	out.Status = PieceMerged
 	return out, nil
+}
+
+// dirtyWorktree reports uncommitted changes, ignoring the skills the Works
+// delivered into the worktree for a Warden.
+func dirtyWorktree(dir string) (bool, error) {
+	out, err := git(dir, "status", "--porcelain", "--untracked-files=all")
+	if err != nil {
+		return false, err
+	}
+	delivered := skills.Delivered(dir)
+	for line := range strings.SplitSeq(out, "\n") {
+		if line == "" {
+			continue
+		}
+		if p, ok := strings.CutPrefix(line, "?? "); ok && isDelivered(p, delivered) {
+			continue
+		}
+		return true, nil
+	}
+	return false, nil
+}
+
+func isDelivered(p string, delivered []string) bool {
+	for _, d := range delivered {
+		if p == d || strings.HasPrefix(p, d+"/") {
+			return true
+		}
+	}
+	return false
 }
