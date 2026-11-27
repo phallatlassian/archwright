@@ -80,7 +80,7 @@ func TestGuildsFromRegistryListsOnlyTheSkillsTheAgentCanInvoke(t *testing.T) {
 			t.Errorf("skill %s has no one-line description: %q", s.Name, s.Description)
 		}
 	}
-	if got, want := strings.Join(names, ","), "implement,implement-spec,tdd,codebase-design,pr"; got != want {
+	if got, want := strings.Join(names, ","), "implement,implement-spec,tdd,codebase-design,pr,diagnosing-bugs"; got != want {
 		t.Errorf("masonry skills = %s, want %s", got, want)
 	}
 	for _, guild := range []string{"survey", "hallmark"} {

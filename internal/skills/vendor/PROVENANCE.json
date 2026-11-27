@@ -31,6 +31,16 @@
       }
     },
     {
+      "name": "diagnosing-bugs",
+      "upstream": "upstream/diagnosing-bugs",
+      "edited": "for a Wright in the factory (#186): allows implicit invocation in agents/openai.yaml; reads the source issue with gh issue view, asks with ask instead of the user (the HITL script is not carried), runs the loop and checks in its own shell and commits its own work; adds the rules to remove every instrument before committing and say so, to end the result with a diagnosis section, and to report blocked rather than exceed the wall-time limit",
+      "upstream_files": {
+        "diagnosing-bugs/SKILL.md": "849198df88cdb65fd0d97236604c1fca7ff2f22d2f705f9724a800d0266b118d",
+        "diagnosing-bugs/agents/openai.yaml": "3e430dbe4334a87597488c060cb3dc3786bb00c9182877d6f5ec41f62490e90b",
+        "diagnosing-bugs/scripts/hitl-loop.template.sh": "35103539fc36873eea36074769ad454f9379d6fc8b2dc0e26ce987fd3bfe5503"
+      }
+    },
+    {
       "name": "domain-modeling",
       "upstream": "upstream/domain-modeling",
       "edited": "for a read-only Chancery Wright in the factory (#163): proposes GLOSSARY.md and ADR text in its result instead of writing the files, asks with ask, reads the source issue with gh issue view; GLOSSARY-FORMAT.md and ADR-FORMAT.md are unchanged",

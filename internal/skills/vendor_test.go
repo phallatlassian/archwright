@@ -89,7 +89,7 @@ func TestForksOverrideUpstreamAndRecordTheirBase(t *testing.T) {
 		}
 	}
 	// Forks the Works dispatches through, and forks a Wright follows.
-	for _, name := range []string{"implement-spec", "code-review", "triage", "pr", "implement", "tdd", "codebase-design", "research"} {
+	for _, name := range []string{"implement-spec", "code-review", "triage", "pr", "implement", "tdd", "codebase-design", "research", "diagnosing-bugs"} {
 		if _, ok := forked[name]; !ok {
 			t.Errorf("%s is not recorded as a fork", name)
 		}
@@ -106,15 +106,15 @@ func TestForksOverrideUpstreamAndRecordTheirBase(t *testing.T) {
 			t.Errorf("%s is not the factory's fork", name)
 		}
 	}
-	for _, name := range []string{"implement-spec", "code-review", "triage", "pr", "implement"} {
+	for _, name := range []string{"implement-spec", "code-review", "triage", "pr", "implement", "diagnosing-bugs"} {
 		fork, _ := c.Skill(name)
 		b, _ := readFile(fork, "SKILL.md")
 		if !strings.Contains(string(b), "archwright tool") {
 			t.Errorf("%s does not use the Works' tools", name)
 		}
 	}
-	// diagnosing-bugs and prototype wait for #164 and #165: still verbatim upstream.
-	for _, name := range []string{"diagnosing-bugs", "prototype"} {
+	// prototype waits for #165: still verbatim upstream.
+	for _, name := range []string{"prototype"} {
 		skill, err := c.Skill(name)
 		if err != nil {
 			t.Fatal(err)
@@ -250,5 +250,30 @@ func TestChanceryForksAreModelInvocable(t *testing.T) {
 		if err != nil || len(flags) > 0 {
 			t.Errorf("%s is flagged against the agent: %v %v", name, flags, err)
 		}
+	}
+}
+
+// A diagnosing Wright runs code itself and answers through the Works' tools
+// (ADR 0028, #186): the fork carries the three Masonry rules and no brokered
+// tool, and is model-invocable on both runners.
+func TestDiagnosingBugsForkIsAWrightsAndCarriesItsRules(t *testing.T) {
+	fork, err := Vendored().Skill("diagnosing-bugs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := readFile(fork, "SKILL.md")
+	text := string(b)
+	for _, want := range []string{"gh issue view", "archwright tool ask", "git diff", "Diagnosis", "report blocked"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("fork lacks %q", want)
+		}
+	}
+	for _, stale := range []string{"run_gate", "read_issue", "hitl-loop"} {
+		if strings.Contains(text, stale) {
+			t.Errorf("fork still says %q", stale)
+		}
+	}
+	if flags, err := DisablingFlags(fork); err != nil || len(flags) != 0 {
+		t.Errorf("fork is not model-invocable: %v, %v", flags, err)
 	}
 }
