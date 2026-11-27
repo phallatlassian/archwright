@@ -89,7 +89,7 @@ func TestForksOverrideUpstreamAndRecordTheirBase(t *testing.T) {
 		}
 	}
 	// Forks the Works dispatches through, and forks a Wright follows.
-	for _, name := range []string{"implement-spec", "code-review", "triage", "pr", "implement", "tdd", "codebase-design", "research"} {
+	for _, name := range []string{"implement-spec", "code-review", "triage", "pr", "implement", "tdd", "codebase-design", "research", "diagnosing-bugs"} {
 		if _, ok := forked[name]; !ok {
 			t.Errorf("%s is not recorded as a fork", name)
 		}
@@ -113,8 +113,8 @@ func TestForksOverrideUpstreamAndRecordTheirBase(t *testing.T) {
 			t.Errorf("%s does not use the Works' tools", name)
 		}
 	}
-	// diagnosing-bugs and prototype wait for #164 and #165: still verbatim upstream.
-	for _, name := range []string{"diagnosing-bugs", "prototype"} {
+	// prototype waits for #165: still verbatim upstream.
+	for _, name := range []string{"prototype"} {
 		skill, err := c.Skill(name)
 		if err != nil {
 			t.Fatal(err)
@@ -250,5 +250,16 @@ func TestChanceryForksAreModelInvocable(t *testing.T) {
 		if err != nil || len(flags) > 0 {
 			t.Errorf("%s is flagged against the agent: %v %v", name, flags, err)
 		}
+	}
+}
+
+// A diagnosing Wright is model-invocable on both runners (ADR 0028, #186).
+func TestDiagnosingBugsForkIsModelInvocable(t *testing.T) {
+	fork, err := Vendored().Skill("diagnosing-bugs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if flags, err := DisablingFlags(fork); err != nil || len(flags) != 0 {
+		t.Errorf("fork is not model-invocable: %v, %v", flags, err)
 	}
 }
