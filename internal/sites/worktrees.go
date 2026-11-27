@@ -50,8 +50,8 @@ func activeOf(wts []store.Worktree, kind string) []store.Worktree {
 func (m *Manager) CreateWorktree(jobID, kind, baseRef string) (store.Worktree, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if kind != store.KindIntegration && kind != store.KindWright && kind != store.KindReadOnly && kind != store.KindEmpty {
-		return store.Worktree{}, fmt.Errorf("kind must be integration, wright, readonly or empty, not %q", kind)
+	if kind != store.KindIntegration && kind != store.KindWright && kind != store.KindReadOnly && kind != store.KindEmpty && kind != store.KindWarden {
+		return store.Worktree{}, fmt.Errorf("kind must be integration, wright, warden, readonly or empty, not %q", kind)
 	}
 	job, site, err := m.jobSite(jobID)
 	if err != nil {
@@ -324,7 +324,7 @@ func (m *Manager) WardenWorktree(jobID string, kind defs.Worktree) (store.Worktr
 		}
 		return integration[0], nil
 	}
-	storeKind := map[defs.Worktree]string{defs.WorktreeBranch: store.KindWright, defs.WorktreeDetached: store.KindReadOnly, defs.WorktreeEmpty: store.KindEmpty}[kind]
+	storeKind := map[defs.Worktree]string{defs.WorktreeBranch: store.KindWarden, defs.WorktreeDetached: store.KindReadOnly, defs.WorktreeEmpty: store.KindEmpty}[kind]
 	if storeKind == "" {
 		return store.Worktree{}, fmt.Errorf("unknown worktree kind %q", kind)
 	}

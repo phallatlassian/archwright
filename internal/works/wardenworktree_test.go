@@ -133,7 +133,7 @@ func TestStepWardensStartInWorktreesOfTheMainCheckout(t *testing.T) {
 		t.Errorf("a step's detached override gave a %s worktree", peek.Kind)
 	}
 	own := g.wardenWorktree("own")
-	if own.Kind != store.KindWright || own.Branch == "" {
+	if own.Kind != store.KindWarden || own.Branch == "" {
 		t.Errorf("a step's branch override gave %+v", own)
 	}
 }
