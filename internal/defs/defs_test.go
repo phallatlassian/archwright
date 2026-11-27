@@ -107,6 +107,12 @@ func TestShippedDefinitionsLoad(t *testing.T) {
 	if len(pj.Steps) != 1 || pj.Steps[0].Guild != "masonry" || !reflect.DeepEqual(pj.Steps[0].Outputs, []string{"verdict", "question", "branch"}) || !strings.Contains(pj.Steps[0].Task, "{{question}}") {
 		t.Errorf("prototype jig: %+v", pj)
 	}
+	mg, _ := r.Guild("masonry")
+	for _, want := range []string{"issues/212", "issues/213", "wait_seconds", "never end your turn", "do not dispatch a second Wright"} {
+		if !strings.Contains(mg.Warden, want) {
+			t.Errorf("masonry warden steering missing %q", want)
+		}
+	}
 	rg, _ := r.Guild("survey")
 	if rg.Access != ReadOnly || rg.Wrights["docs"] == "" || rg.Wrights["code-trace"] == "" {
 		t.Errorf("survey guild: %+v", rg)
