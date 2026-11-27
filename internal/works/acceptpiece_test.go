@@ -1,117 +1,113 @@
 package works
 
 import (
+	"encoding/json"
+	"os/exec"
 	"strings"
 	"testing"
 
 	"github.com/phallatlassian/archwright/internal/store"
 )
 
-func accept(g *gateRig, piece string) AcceptInfo {
+func accept(g *gateRig, piece string) store.Piece {
 	g.t.Helper()
-	var out AcceptInfo
+	var out store.Piece
 	g.ok(g.warden, "accept_piece", `{"piece":"`+piece+`"}`, &out)
 	return out
 }
 
-func TestAcceptPieceLandsTheBranchOnTheIntegrationBranchWithoutAnAgentRun(t *testing.T) {
+// wardenMerge plays the Warden merging a piece branch into the integration
+// branch in its own worktree (ADR 0030). A conflict is aborted, as the Warden
+// does, and its files are returned.
+func (g *gateRig) wardenMerge(branch string) (conflicts []string) {
+	g.t.Helper()
+	cmd := exec.Command("git", "-C", g.worktree.Path, "-c", "user.name=Warden", "-c", "user.email=warden@archwright.invalid", "-c", "commit.gpgsign=false", "merge", "--no-edit", branch)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		files := git(g.t, g.worktree.Path, "diff", "--name-only", "--diff-filter=U")
+		if files == "" {
+			g.t.Fatalf("merge failed without a conflict: %v: %s", err, out)
+		}
+		git(g.t, g.worktree.Path, "merge", "--abort")
+		return strings.Fields(files)
+	}
+	return nil
+}
+
+func TestAcceptPieceOnlyRecordsAcceptanceAndTheWardensMergeFeedsTheGates(t *testing.T) {
 	g := newGateRig(t, store.Gates{Test: "test -f work.txt"}) // the gate passes only on a tree holding the piece's work
 	g.runner.WriteFiles(map[string]string{"work.txt": "w"})
 	g.dispatch("p")
+	d := g.waitReported("p")
 	before := git(t, g.worktree.Path, "rev-parse", "HEAD")
 
-	got := accept(g, "p")
-	if got.Status != store.PieceAccepted || got.Merge != "merged" {
+	if got := accept(g, "p"); got.Status != store.PieceAccepted {
 		t.Fatalf("%+v", got)
 	}
-	if reqs := g.runner.Requests(); len(reqs) != 1 {
-		t.Errorf("a clean merge ran an agent: %d runs", len(reqs))
+	if after := git(t, g.worktree.Path, "rev-parse", "HEAD"); after != before {
+		t.Fatalf("accept_piece ran a merge in the integration worktree: %s -> %s", before, after)
 	}
-	if after := git(t, g.worktree.Path, "rev-parse", "HEAD"); after == before {
-		t.Error("the integration branch did not move")
+	if reqs := g.runner.Requests(); len(reqs) != 1 {
+		t.Errorf("accepting ran an agent: %d runs", len(reqs))
+	}
+
+	if c := g.wardenMerge(d.Branch); len(c) != 0 {
+		t.Fatalf("a clean piece conflicted: %v", c)
 	}
 	if w := git(t, g.worktree.Path, "show", "HEAD:work.txt"); w != "w" {
 		t.Errorf("work.txt = %q", w)
 	}
-	if tip := git(t, g.repo, "rev-parse", g.worktree.Branch); tip != git(t, g.worktree.Path, "rev-parse", "HEAD") {
-		t.Error("the Works' clone and the integration worktree disagree")
-	}
-
-	// the handback gates run on that tip, and so do the push and PR head (the branch's tip)
 	g.ok(g.warden, "handback", handbackJSON("done", `"integration"`, ""), nil)
 	if run := g.shownGates(); run.Status != store.GateRunPassed {
 		t.Fatalf("gates on the integration branch: %+v", run)
 	}
 }
 
-// The Works makes no commit for a Wright (ADR 0028): what a Wright leaves
-// uncommitted stays in its worktree, and accepting its piece lands nothing.
-func TestTheWorksCommitsNothingForAWrightAndAcceptingLandsOnlyWhatItCommitted(t *testing.T) {
-	g := newGateRig(t, store.Gates{})
-	g.runner.WriteFiles(map[string]string{"work.txt": "w"}).LeaveUncommitted()
-	g.dispatch("p")
-	d := g.waitReported("p")
-	if tip, base := git(t, g.repo, "rev-parse", d.Branch), git(t, g.repo, "rev-parse", g.worktree.Branch); tip != base {
-		t.Errorf("the piece branch holds a commit the Wright did not make: %s, integration %s", tip, base)
-	}
-	before := git(t, g.worktree.Path, "rev-parse", "HEAD")
-	if got := accept(g, "p"); got.Merge != "unchanged" {
-		t.Errorf("accepting uncommitted work: %+v", got)
-	}
-	if after := git(t, g.worktree.Path, "rev-parse", "HEAD"); after != before {
-		t.Errorf("the integration branch moved: %s -> %s", before, after)
-	}
-}
-
-func TestAcceptPieceWithNoCommitsIsRecordedAndChangesNothing(t *testing.T) {
-	g := newGateRig(t, store.Gates{})
-	g.runner.WriteFiles(nil)
-	g.dispatch("p")
-	before := git(t, g.worktree.Path, "rev-parse", "HEAD")
-	got := accept(g, "p")
-	if got.Status != store.PieceAccepted || got.Merge != "unchanged" {
-		t.Fatalf("%+v", got)
-	}
-	if after := git(t, g.worktree.Path, "rev-parse", "HEAD"); after != before {
-		t.Errorf("the integration branch moved: %s -> %s", before, after)
-	}
-}
-
-func TestAcceptPieceOnAConflictLeavesThePieceOpenAndDispatchesAMergeWright(t *testing.T) {
+// A conflicting piece goes back to its own Wright, which merges the integration
+// branch into its piece branch; the Warden's second merge is then clean. No
+// merge Wright is ever started.
+func TestAConflictingPieceIsSentBackToItsWrightAndMergesCleanlyTheSecondTime(t *testing.T) {
 	g := newGateRig(t, store.Gates{})
 	g.runner.WriteFiles(map[string]string{"verdict.txt": "theirs\n"})
 	g.dispatch("p")
-	tip := g.commit("verdict.txt", "ours\n")
+	round0 := g.waitReported("p")
+	g.commit("verdict.txt", "ours\n")
+	tip := git(t, g.worktree.Path, "rev-parse", "HEAD")
 
-	got := accept(g, "p")
-	if got.Status != AcceptConflict || got.Merge != "conflict" || len(got.Conflicts) != 1 || got.Conflicts[0] != "verdict.txt" ||
-		got.Dispatch == nil || got.Dispatch.Piece != "merge-piece-1" {
-		t.Fatalf("%+v", got)
+	conflicts := g.wardenMerge(round0.Branch)
+	if len(conflicts) != 1 || conflicts[0] != "verdict.txt" {
+		t.Fatalf("conflicts: %v", conflicts)
+	}
+	if now := git(t, g.worktree.Path, "rev-parse", "HEAD"); now != tip || git(t, g.worktree.Path, "status", "--porcelain") != "" {
+		t.Fatal("the aborted merge left the integration worktree changed")
 	}
 	if p, _ := g.st.GetPiece(g.job.ID, "p"); p.Status != store.PieceOpen {
-		t.Errorf("a conflicting piece was accepted: %+v", p)
-	}
-	if d := g.waitReported("merge-piece-1"); !strings.Contains(string(d.Result), `"done"`) {
-		t.Fatalf("%s: %s", d.Status, d.Result)
-	}
-	reqs := g.runner.Requests()
-	if last := reqs[len(reqs)-1]; last.Worktree != g.worktree.Path || !strings.Contains(last.Brief, "conflicted files: verdict.txt") {
-		t.Fatalf("the merge Wright did not work in the integration worktree: %+v", last)
-	}
-	head := git(t, g.worktree.Path, "rev-parse", "HEAD")
-	if parents := git(t, g.worktree.Path, "rev-list", "--parents", "-n1", head); !strings.HasPrefix(parents, head+" "+tip+" ") {
-		t.Fatalf("the merge Wright did not merge onto the old tip: %s", parents)
+		t.Fatalf("a conflicting piece was accepted: %+v", p)
 	}
 
-	// accepting the merge piece merges nothing more; accepting the piece again finds it already in
-	if m := accept(g, "merge-piece-1"); m.Status != store.PieceAccepted || m.Merge != "" {
-		t.Fatalf("%+v", m)
+	reason := "verdict.txt conflicts with the integration branch\n- base ref: " + g.worktree.Branch + "\n"
+	g.ok(g.warden, "rework_wright", `{"piece":"p","reason":`+quote(reason)+`,"diagnosis":"d","brief":`+goodBrief+`}`, nil)
+	round1 := g.waitReported("p")
+	if round1.Round != 1 || !strings.Contains(string(round1.Result), `"done"`) {
+		t.Fatalf("%+v", round1)
 	}
-	if again := accept(g, "p"); again.Status != store.PieceAccepted || again.Merge != "unchanged" {
-		t.Fatalf("%+v", again)
+
+	if c := g.wardenMerge(round1.Branch); len(c) != 0 {
+		t.Fatalf("the second merge conflicted: %v", c)
 	}
-	if after := git(t, g.worktree.Path, "rev-parse", "HEAD"); after != head {
-		t.Error("accepting after the merge Wright moved the branch")
+	if got := git(t, g.worktree.Path, "show", "HEAD:verdict.txt"); got != "theirs" {
+		t.Errorf("verdict.txt = %q", got)
+	}
+	if got := accept(g, "p"); got.Status != store.PieceAccepted {
+		t.Fatalf("%+v", got)
+	}
+	pieces, err := g.st.Pieces(g.job.ID)
+	if err != nil || len(pieces) != 1 {
+		t.Fatalf("a piece other than p exists: %+v %v", pieces, err)
+	}
+	for _, r := range g.runner.Requests() {
+		if r.Piece != "p" {
+			t.Errorf("an agent other than p's Wright ran: %+v", r)
+		}
 	}
 }
 
@@ -139,4 +135,9 @@ func TestReworkRoundStartsFromThePreviousRoundsCommittedWork(t *testing.T) {
 	if brief := reqs[len(reqs)-1].Brief; !strings.Contains(brief, "continues from the previous round's work") || !strings.Contains(brief, round0.Branch) {
 		t.Errorf("the rework brief does not say what it continues from:\n%s", brief)
 	}
+}
+
+func quote(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
 }

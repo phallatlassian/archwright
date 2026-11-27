@@ -104,12 +104,12 @@ func (f *FakeRunner) Run(ctx context.Context, req RunRequest) error {
 		}
 		return nil
 	}
-	if isMergeWright(req.Piece) && req.Worktree != "" {
+	if strings.Contains(req.Brief, "- base ref: ") && req.Worktree != "" { // a sent-back piece names the integration branch to merge in
 		if err := fakeMerge(req); err != nil {
 			return err
 		}
 	}
-	if !isMergeWright(req.Piece) && len(f.files) > 0 { // a merge Wright's work is the merge; the files are for Wrights that write
+	if len(f.files) > 0 && !strings.Contains(req.Brief, "- base ref: ") { // a Wright that merges writes only the merge
 		args := []string{"add", "--"}
 		for rel, content := range f.files {
 			p := filepath.Join(req.Worktree, rel)
@@ -154,7 +154,7 @@ func fakeGit(dir string, args ...string) ([]byte, error) {
 	return cmd.CombinedOutput()
 }
 
-// fakeMerge plays a merge Wright: it merges the base ref named in the brief
+// fakeMerge plays a Wright resolving a conflict: it merges the base ref named in the brief
 // into the worktree, taking the integration side of every conflict, and
 // commits. It only merges: no rebase, reset, amend or push.
 func fakeMerge(req RunRequest) error {
@@ -164,12 +164,12 @@ func fakeMerge(req RunRequest) error {
 	}
 	ref, _, _ = strings.Cut(ref, "\n")
 	if !ok || ref == "" {
-		return fmt.Errorf("fake merge Wright: the brief names no ref to merge")
+		return fmt.Errorf("fake Wright: the brief names no ref to merge")
 	}
 	git := func(args ...string) error {
-		cmd := exec.Command("git", append([]string{"-C", req.Worktree, "-c", "user.name=fake merge Wright", "-c", "user.email=fake@archwright.invalid"}, args...)...)
+		cmd := exec.Command("git", append([]string{"-C", req.Worktree, "-c", "user.name=fake Wright", "-c", "user.email=fake@archwright.invalid"}, args...)...)
 		if out, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("fake merge Wright: git %s: %v: %s", args[0], err, out)
+			return fmt.Errorf("fake Wright: git %s: %v: %s", args[0], err, out)
 		}
 		return nil
 	}

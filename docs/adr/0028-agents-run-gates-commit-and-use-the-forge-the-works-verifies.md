@@ -2,7 +2,7 @@
 
 A Session runs with the developer's own permissions and can prompt, so the workarounds that kept the Works in the middle are removed. A Wright runs the Site's checks in its own shell and commits its own work to its piece branch. `run_gate`, Works-made WIP commits and the `merge_base` tool are deleted. This supersedes ADR 0025 in part.
 
-Kept from ADR 0025, restated here: the Works runs the Site's registered gates on a Snapshot of the Wright's worktree at handback, outside any agent, and that gate run stays authoritative; the Archwright trusts the Works' record, not an agent's claim of green. The Works also still merges an accepted piece branch into the Job's integration branch (fast-forward where possible); a conflict becomes a merge Wright task. A Warden never does a mechanical merge.
+Kept from ADR 0025, restated here: the Works runs the Site's registered gates on a Snapshot of the Wright's worktree at handback, outside any agent, and that gate run stays authoritative; the Archwright trusts the Works' record, not an agent's claim of green. ~~The Works also still merges an accepted piece branch into the Job's integration branch (fast-forward where possible); a conflict becomes a merge Wright task. A Warden never does a mechanical merge.~~ Superseded by ADR 0030: see the footer.
 
 Forge access is direct. Agents of any role run `gh` and `git push` as the developer, and only the pane approval gates them. All brokered Forge tools are deleted, which supersedes ADR 0022 and, with it, ADR 0024 (a note only: its prototype and revisit conditions are moot). One recording tool remains: `archwright tool record_pr` (Warden role) takes the PR's url and number, is validated against the Site's remote, and stores it on the Job; one PR per Job. The Works reads PR and CI state itself for the dashboard and does not depend on an agent to report it. ADR 0008's original shape returns: the Warden pushes and opens the PR.
 
@@ -10,4 +10,4 @@ Review before push is Plan ordering only: the `open-pr` step is blocked by Revie
 
 Supersedes ADR 0022 and ADR 0024, and ADR 0025 in part. Amends ADR 0005's forked `pr` skill (it reverts to plain `gh`), ADR 0008 and ADR 0012 (see their footers).
 
-Amended by ADR 0030 (proposed): the Masonry Warden merges accepted piece branches itself, in its own worktree, and sends a conflict back to the same Wright; there is no merge Wright and the Works no longer runs the merge. The Works still runs the Site's gates on a Snapshot at handback, outside any agent, and that run stays authoritative.
+Amended by ADR 0030: the Masonry Warden merges accepted piece branches itself, in its own worktree, and sends a conflict back to the same Wright; there is no merge Wright and the Works no longer runs the merge. The Works still runs the Site's gates on a Snapshot at handback, outside any agent, and that run stays authoritative.

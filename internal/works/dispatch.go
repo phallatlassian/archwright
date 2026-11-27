@@ -257,9 +257,6 @@ func dispatchWright(c *callCtx, in json.RawMessage) (any, error) {
 	if err := requireField("piece", a.Piece); err != nil {
 		return nil, err
 	}
-	if isMergeWright(a.Piece) {
-		return nil, fmt.Errorf("%w: the %q piece prefix is reserved for merge Wrights", errInvalidInput, mergePiecePiece+"-")
-	}
 	g, err := c.warden()
 	if err != nil {
 		return nil, err
@@ -295,9 +292,6 @@ func reworkWright(c *callCtx, in json.RawMessage) (any, error) {
 	}
 	if err := requireField("reason", a.Reason); err != nil {
 		return nil, err
-	}
-	if isMergeWright(a.Piece) {
-		return nil, fmt.Errorf("%w: merge Wright pieces cannot be reworked; accept the piece again", errInvalidInput)
 	}
 	g, err := c.warden()
 	if err != nil {
@@ -641,7 +635,7 @@ func (r *Runs) start(d store.Dispatch) error {
 		answered := reused && r.followsAnswer(d)
 		restarted := reused && r.followsRestart(d)
 		brief := d.Rendered
-		if runErr == nil && d.Round > 0 && !isMergeWright(d.Piece) && wt != "" {
+		if runErr == nil && d.Round > 0 && wt != "" {
 			switch {
 			case restarted:
 				brief += restartStartingPoint(from)
@@ -824,17 +818,10 @@ func (r *Runs) wrightWorktree(d store.Dispatch) (path, from string, reused bool,
 		return "", "", false, nil
 	}
 	if path, branch := r.sessionWorktree(d); path != "" {
-		if err := r.st.SetDispatchBranch(d.ID, branch); err != nil { // accept_piece merges this branch
+		if err := r.st.SetDispatchBranch(d.ID, branch); err != nil { // the Warden merges this branch
 			return "", "", false, fmt.Errorf("recording the Wright's branch: %w", err)
 		}
 		return path, branch, true, nil
-	}
-	if isMergeWright(d.Piece) { // a merge Wright commits on the integration branch itself, so the merge stays a fast-forward
-		path, err := sm.IntegrationWorktree(d.JobID)
-		if err != nil {
-			return "", "", false, fmt.Errorf("finding the integration worktree: %w", err)
-		}
-		return path, "", false, nil
 	}
 	if err := sm.EnsureIntegration(d.JobID); err != nil {
 		return "", "", false, fmt.Errorf("creating the integration worktree: %w", err)
@@ -849,7 +836,7 @@ func (r *Runs) wrightWorktree(d store.Dispatch) (path, from string, reused bool,
 	if err != nil {
 		return "", "", false, fmt.Errorf("creating the Wright's worktree: %w", err)
 	}
-	if err := r.st.SetDispatchBranch(d.ID, wt.Branch); err != nil { // accept_piece merges this branch
+	if err := r.st.SetDispatchBranch(d.ID, wt.Branch); err != nil { // the Warden merges this branch
 		return "", "", false, fmt.Errorf("recording the Wright's branch: %w", err)
 	}
 	return wt.Path, from, false, nil
@@ -865,7 +852,7 @@ func (r *Runs) sessionWorktree(d store.Dispatch) (path, branch string) {
 	r.mu.Lock()
 	reuser, _ := r.runner.(SessionReuser)
 	r.mu.Unlock()
-	if reuser == nil || d.Round == 0 || isMergeWright(d.Piece) {
+	if reuser == nil || d.Round == 0 {
 		return "", ""
 	}
 	prev, ok := r.previousDispatch(d)

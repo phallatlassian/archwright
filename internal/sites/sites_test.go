@@ -1227,9 +1227,6 @@ func TestWardenWorktreeKinds(t *testing.T) {
 	if branch.Kind != store.KindWarden {
 		t.Errorf("branch worktree kind is %s", branch.Kind)
 	}
-	if _, err := e.m.MergePiece(job, branch.Branch); err == nil {
-		t.Error("a Warden's branch was merged as a Wright piece")
-	}
 	if _, err := e.m.WardenWorktree(job, "weird"); err == nil {
 		t.Error("an unknown kind was accepted")
 	}

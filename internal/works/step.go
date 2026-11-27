@@ -221,7 +221,7 @@ func (r *Runs) priorWork(job store.Job) (string, error) {
 	}
 	var accepted []string
 	for _, p := range pieces {
-		if p.Status == store.PieceAccepted && !isMergeWright(p.Piece) {
+		if p.Status == store.PieceAccepted {
 			accepted = append(accepted, fmt.Sprintf("- %s (%s Guild)", p.Piece, p.Guild))
 		}
 	}

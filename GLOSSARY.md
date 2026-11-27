@@ -81,7 +81,7 @@ A ticket that authorises work; no Wright touches code that no writ authorised.
 _Avoid_: work order
 
 **Piece**:
-One scoped unit of a Job's work that a Warden dispatches to a Wright, and may send back for rework before accepting.
+One scoped unit of a Job's work that a Warden dispatches to a Wright, and may send back for rework before accepting. A Warden that stands in the integration worktree merges an accepted piece's branch itself; a conflict sends the piece back to the same Wright (ADR 0030).
 _Avoid_: subtask, chunk
 
 **Brief**:
