@@ -11,3 +11,5 @@ When the Warden accepts a piece, the Works merges, or fast-forwards, the piece b
 This amends ADR 0008 (the Works merges accepted pieces itself), ADR 0011 (a Wright's checks no longer need an allow rule, so the denial that blocked the shakedown cannot arise for them) and ADR 0022 (the Works also runs gates and makes commits for Wrights; both stay local to the machine). It does not widen any permission: the Works already runs gate commands as the developer (ADR 0010), and now also runs them earlier, when asked, from a role-checked Wright of the Job. The cost is a slower test-first loop, since a Wright runs a whole gate, not one test.
 
 Superseded in part by ADR 0028: `run_gate` and Works-made commits for Wrights are removed; Wrights run checks and commit themselves. Kept and restated in ADR 0028: the authoritative handback gate run on a Snapshot, and the Works merging accepted piece branches into the integration branch.
+
+Amended by ADR 0030: the Masonry Warden merges accepted piece branches itself and sends a conflict back to the same Wright; the Works no longer merges and no merge Wright is started.

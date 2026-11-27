@@ -154,7 +154,11 @@ func fakeGit(dir string, args ...string) ([]byte, error) {
 	return cmd.CombinedOutput()
 }
 
-// fakeMerge plays a Wright resolving a conflict: it merges the base ref named in the brief
+// fakeResolves says whether a brief sends a piece back to merge a base ref
+// into its branch: it names one on a "- base ref: " line.
+func fakeResolves(brief string) bool { return strings.Contains(brief, "- base ref: ") }
+
+// fakeResolveConflict plays a Wright resolving a conflict: it merges the base ref named in the brief
 // into the worktree, taking the integration side of every conflict, and
 // commits. It only merges: no rebase, reset, amend or push.
 func fakeResolveConflict(req RunRequest) error {

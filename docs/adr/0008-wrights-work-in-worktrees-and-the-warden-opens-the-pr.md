@@ -7,3 +7,5 @@ The Masonry Warden itself pushes and opens the PR (the `pr` skill, under the run
 Amended by ADR 0025: the Works, not a merge Wright, merges an accepted piece branch into the integration branch; a merge Wright is dispatched only for a conflict.
 
 Amended by ADR 0028: the Warden pushes and opens the PR itself again, as the developer, and records it with `record_pr`; the Works still merges accepted piece branches.
+
+Amended by ADR 0030: the Masonry Warden merges accepted piece branches itself and sends a conflict back to the same Wright; the Works no longer merges and no merge Wright is started.
