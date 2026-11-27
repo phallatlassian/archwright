@@ -48,6 +48,7 @@ Every fork changes, for Archwright:
   Warden pushes and opens the PR with `git` and `gh`; each may stop at an approval prompt in
   the pane (ADR 0028). Never commit run scaffolding (`.agents/`, `.claude/`).
 - **Questions to the human** go through `archwright tool ask`.
+- **Publishing.** Chancery has no tracker access (ADR 0022), so its forks (`to-spec`, `to-tickets`, `wayfinder`) hand the spec, tickets or map back in full instead of creating issues or applying labels; the developer reviews them at the checkpoint and whoever publishes them does so afterwards. `/setup-matt-pocock-skills` pointers are removed. Chancery also forks `grilling` and `domain-modeling`, which its skills call; the latter proposes glossary and ADR text in the result instead of writing files (#163).
 - **Other skills.** A skill may call another skill only if it is in the same Guild's set.
 - Skills built for a person (HTML reports, interactive grilling) are adapted to the Guild's
   handback, not left as written.

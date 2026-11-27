@@ -236,3 +236,19 @@ func TestEveryShippedGuildSkillIsInvocableUnlessMarkedUserOnly(t *testing.T) {
 		}
 	}
 }
+
+// Chancery has no issue tracker and no Forge write (#163): its forks hand the
+// spec, tickets and map back as the result, never publish them or point the
+// agent at /setup-matt-pocock-skills.
+func TestChanceryForksAreModelInvocable(t *testing.T) {
+	for _, name := range []string{"to-spec", "to-tickets", "wayfinder", "grill-with-docs", "grilling", "domain-modeling"} {
+		fork, err := Vendored().Skill(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		flags, err := DisablingFlags(fork)
+		if err != nil || len(flags) > 0 {
+			t.Errorf("%s is flagged against the agent: %v %v", name, flags, err)
+		}
+	}
+}

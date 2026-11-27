@@ -77,10 +77,9 @@ func TestDisablingFlagsNamesEachWayASkillIsHiddenFromTheAgent(t *testing.T) {
 	}
 }
 
-// The Guilds whose Wardens and Wrights are meant to invoke their skills (#160)
-// ship none that is flagged against the agent. The Chancery skills still are
-// (#163), so this does not cover every Guild.
-var skillUsingGuilds = []string{"masonry", "survey", "hallmark"}
+// The Guilds whose Wardens and Wrights are meant to invoke their skills (#160,
+// #163) ship none that is flagged against the agent.
+var skillUsingGuilds = []string{"masonry", "survey", "hallmark", "chancery"}
 
 func shippedGuildSkills(t *testing.T, guild string) []Skill {
 	t.Helper()
@@ -113,6 +112,18 @@ func TestSkillsOfTheSkillUsingGuildsAreInvocableByTheAgent(t *testing.T) {
 				t.Errorf("%s on %s: %d of %d skills described: %v", guild, runner, len(got), len(set), err)
 			}
 		}
+	}
+}
+
+func TestChancerysSkillsAreTheOnesItCanRunWithoutATracker(t *testing.T) {
+	reg := defs.New(defs.Shipped(), "")
+	reg.Reload()
+	g, _ := reg.Guild("chancery")
+	if want := []string{"to-spec", "to-tickets", "wayfinder", "grill-with-docs", "grilling", "domain-modeling"}; !reflect.DeepEqual(g.Skills, want) {
+		t.Errorf("chancery skills = %v, want %v", g.Skills, want)
+	}
+	if len(g.UserOnly) != 0 {
+		t.Errorf("chancery marks skills user-only: %v", g.UserOnly)
 	}
 }
 

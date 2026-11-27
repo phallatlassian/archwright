@@ -5,9 +5,7 @@ runner: claude
 runners: [claude, codex]
 access: read-only
 rework_rounds: 2
-skills: [to-spec, to-tickets, wayfinder, grill-with-docs]
-# Upstream flags these against the agent; the fork (the Chancery ticket) makes them invocable and drops this line.
-user_only_skills: [to-spec, to-tickets, wayfinder, grill-with-docs]
+skills: [to-spec, to-tickets, wayfinder, grill-with-docs, grilling, domain-modeling]
 ---
 # Chancery
 
@@ -19,4 +17,6 @@ Turn what a developer wants into instruments the rest of the factory can act on:
 - Every ticket is small enough for one Wright and declares the tickets it waits on.
 - Use the project's own vocabulary (GLOSSARY.md) and respect its ADRs.
 - Do not decide whether the ambition is worth pursuing, and do not build anything.
+- Publish nothing: no issue is created and no label applied. The instruments are the handback; whoever publishes them does so after the developer accepts.
+- Interview the developer only through `archwright tool ask`.
 - Hand instruments back in full, never summarised or pointed at. They are not authorised until the developer accepts them.

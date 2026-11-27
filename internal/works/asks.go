@@ -214,6 +214,8 @@ func level(by string) string {
 // AnswerAsk records the first answer to an ask and starts the fresh runs that
 // replace blocked ones. A later answer to the same ask is a conflict.
 func (r *Runs) AnswerAsk(id, by, who string, answers []store.Answer) (store.AnswerResult, error) {
+	r.stepMu.Lock()
+	defer r.stepMu.Unlock()
 	res, err := r.st.AnswerAsk(id, level(by), who, answers, renderResume)
 	if err != nil {
 		return store.AnswerResult{}, err

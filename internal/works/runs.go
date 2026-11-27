@@ -107,6 +107,9 @@ type Runs struct {
 	// stepRuns is the latest Warden run of each started step, by job/step: a run
 	// that ends after a later one took over (an answered Ask) does not fail the step.
 	stepRuns map[string]string
+	// stepMu makes answering a Warden's Ask and registering the run it starts one
+	// step against a superseded run's end, so that end never fails the resumed step.
+	stepMu sync.Mutex
 }
 
 type run struct {

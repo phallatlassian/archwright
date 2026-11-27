@@ -89,9 +89,9 @@ func TestGuildsFromRegistryListsOnlyTheSkillsTheAgentCanInvoke(t *testing.T) {
 			t.Errorf("%s: %+v %v", guild, g.Skills, err)
 		}
 	}
-	// Chancery's skills are still flagged against the agent (#163): never listed.
-	if g, err := src("chancery"); err != nil || len(g.Skills) != 0 {
-		t.Errorf("chancery lists skills the agent cannot invoke: %+v %v", g.Skills, err)
+	// Chancery's forks are invocable (#163): all are listed.
+	if g, err := src("chancery"); err != nil || len(g.Skills) != 6 {
+		t.Errorf("chancery skills = %+v %v", g.Skills, err)
 	}
 	// With no catalogue there is nothing to list.
 	if g, _ := GuildsFromRegistry(reg, DefaultProfiles(), nil)("masonry"); len(g.Skills) != 0 {
