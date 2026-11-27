@@ -209,7 +209,7 @@ type Worktree struct {
 	ID        string     `json:"id"`
 	JobID     string     `json:"job_id"`
 	Site      string     `json:"site"`
-	Kind      string     `json:"kind"` // integration, wright (writing) or readonly (detached)
+	Kind      string     `json:"kind"` // integration, wright (writing), readonly (detached) or empty
 	Path      string     `json:"path"`
 	Branch    string     `json:"branch,omitempty"`
 	BaseRef   string     `json:"base_ref"`
@@ -223,6 +223,7 @@ const (
 	KindIntegration = "integration"
 	KindWright      = "wright"
 	KindReadOnly    = "readonly"
+	KindEmpty       = "empty" // a --no-checkout worktree with an empty index and tree (ADR 0030)
 )
 
 // NewWorktreeID returns a fresh worktree id.

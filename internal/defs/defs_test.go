@@ -178,16 +178,19 @@ func TestInvalidGuildKeepsPreviousAndReportsError(t *testing.T) {
 
 func TestInvalidGuildRules(t *testing.T) {
 	cases := map[string]string{
-		"widening key":       "---\nintake: a\nhandback: b\nrunner: claude\nrunners: [claude]\npermission_mode: bypassPermissions\n---\nx",
-		"allowed tools":      "---\nintake: a\nhandback: b\nrunner: claude\nrunners: [claude]\nallowed_tools: [Bash]\n---\nx",
-		"unknown runner":     "---\nintake: a\nhandback: b\nrunner: gpt\nrunners: [gpt]\n---\nx",
-		"default not in":     "---\nintake: a\nhandback: b\nrunner: claude\nrunners: [codex]\n---\nx",
-		"bad access":         "---\nintake: a\nhandback: b\nrunner: claude\nrunners: [claude]\naccess: root\n---\nx",
-		"unknown requires":   "---\nintake: a\nhandback: b\nrunner: claude\nrunners: [claude]\nrequires: [magic]\n---\nx",
-		"no charter":         "---\nintake: a\nhandback: b\nrunner: claude\nrunners: [claude]\n---\n",
-		"no intake":          "---\nhandback: b\nrunner: claude\nrunners: [claude]\n---\nx",
-		"user-only unlisted": "---\nintake: a\nhandback: b\nrunner: claude\nrunners: [claude]\nskills: [tdd]\nuser_only_skills: [pr]\n---\nx",
-		"negative rework":    "---\nintake: a\nhandback: b\nrunner: claude\nrunners: [claude]\nrework_rounds: -1\n---\nx",
+		"widening key":          "---\nintake: a\nhandback: b\nrunner: claude\nrunners: [claude]\npermission_mode: bypassPermissions\n---\nx",
+		"allowed tools":         "---\nintake: a\nhandback: b\nrunner: claude\nrunners: [claude]\nallowed_tools: [Bash]\n---\nx",
+		"unknown runner":        "---\nintake: a\nhandback: b\nrunner: gpt\nrunners: [gpt]\n---\nx",
+		"default not in":        "---\nintake: a\nhandback: b\nrunner: claude\nrunners: [codex]\n---\nx",
+		"bad access":            "---\nintake: a\nhandback: b\nrunner: claude\nrunners: [claude]\naccess: root\n---\nx",
+		"unknown requires":      "---\nintake: a\nhandback: b\nrunner: claude\nrunners: [claude]\nrequires: [magic]\n---\nx",
+		"no charter":            "---\nintake: a\nhandback: b\nrunner: claude\nrunners: [claude]\n---\n",
+		"no intake":             "---\nhandback: b\nrunner: claude\nrunners: [claude]\n---\nx",
+		"user-only unlisted":    "---\nintake: a\nhandback: b\nrunner: claude\nrunners: [claude]\nskills: [tdd]\nuser_only_skills: [pr]\n---\nx",
+		"bad worktree":          "---\nintake: a\nhandback: b\nrunner: claude\nrunners: [claude]\nworktree: everywhere\n---\nx",
+		"read-only integration": "---\nintake: a\nhandback: b\nrunner: claude\nrunners: [claude]\naccess: read-only\nworktree: integration\n---\nx",
+		"read-only branch":      "---\nintake: a\nhandback: b\nrunner: claude\nrunners: [claude]\naccess: read-only\nworktree: branch\n---\nx",
+		"negative rework":       "---\nintake: a\nhandback: b\nrunner: claude\nrunners: [claude]\nrework_rounds: -1\n---\nx",
 	}
 	for name, manifest := range cases {
 		cfg := t.TempDir()
@@ -339,5 +342,55 @@ func TestBindFailsOnUnmetCapability(t *testing.T) {
 	}
 	if _, err := Bind(g, "", map[string]Profile{}); !errors.Is(err, ErrCapability) {
 		t.Errorf("unknown runner profile: %v", err)
+	}
+}
+
+func TestWorktreeDefaultsToEmptyAndMasonryDeclaresIntegration(t *testing.T) {
+	r := New(Shipped(), "")
+	if errs := r.Reload(); len(errs) != 0 {
+		t.Fatal(errs)
+	}
+	want := map[string]Worktree{"masonry": WorktreeIntegration, "survey": WorktreeEmpty, "hallmark": WorktreeEmpty, "chancery": WorktreeEmpty}
+	for name, w := range want {
+		if g, ok := r.Guild(name); !ok || g.Worktree != w {
+			t.Errorf("%s worktree = %q, want %q", name, g.Worktree, w)
+		}
+	}
+}
+
+func TestJigStepWorktreeOverridesButCannotWiden(t *testing.T) {
+	ro := "---\nintake: a\nhandback: b\nrunner: claude\nrunners: [claude]\naccess: read-only\n---\nx"
+	rw := "---\nintake: a\nhandback: b\nrunner: claude\nrunners: [claude]\naccess: read-write\n---\nx"
+	jig := func(guild, wt string) string {
+		return "name: go\ndescription: d\nsteps:\n  - id: one\n    guild: " + guild + "\n    task: t\n    worktree: " + wt + "\n"
+	}
+	for _, c := range []struct {
+		guild, manifest, wt string
+		ok                  bool
+	}{
+		{"rw", rw, "branch", true},
+		{"rw", rw, "detached", true}, // narrows a writing Guild
+		{"ro", ro, "detached", true},
+		{"ro", ro, "integration", false},
+		{"ro", ro, "branch", false},
+		{"rw", rw, "everywhere", false},
+	} {
+		cfg := t.TempDir()
+		write(t, cfg, "guilds/"+c.guild+"/GUILD.md", c.manifest)
+		write(t, cfg, "guilds/"+c.guild+"/warden/SKILL.md", "w")
+		write(t, cfg, "jigs/go.yaml", jig(c.guild, c.wt))
+		r := New(fstest.MapFS{}, cfg)
+		r.Reload()
+		j, ok := r.Jig("go")
+		if ok != c.ok {
+			t.Errorf("%s step worktree %s: loaded=%v, want %v (%v)", c.guild, c.wt, ok, c.ok, errFor(r, "jig", "go"))
+			continue
+		}
+		if ok {
+			steps, err := j.Instantiate(nil)
+			if err != nil || steps[0].Worktree != c.wt {
+				t.Errorf("instantiated worktree %q, %v", steps[0].Worktree, err)
+			}
+		}
 	}
 }

@@ -22,6 +22,41 @@ const (
 	ReadWrite Access = "read-write"
 )
 
+// Worktree is the kind of worktree of the Site's main checkout a Warden
+// works in (ADR 0030).
+type Worktree string
+
+const (
+	// WorktreeIntegration is the Job's single full worktree, where accepted
+	// pieces are merged and the PR is raised. Guilds that ask for it in one Job
+	// share it, one writer at a time.
+	WorktreeIntegration Worktree = "integration"
+	// WorktreeBranch is the Warden's own branch, a full checkout.
+	WorktreeBranch Worktree = "branch"
+	// WorktreeDetached is a read-only full checkout.
+	WorktreeDetached Worktree = "detached"
+	// WorktreeEmpty is a worktree with an empty index and tree, so git status is quiet.
+	WorktreeEmpty Worktree = "empty"
+)
+
+// Valid says whether w is a known kind.
+func (w Worktree) Valid() bool {
+	switch w {
+	case WorktreeIntegration, WorktreeBranch, WorktreeDetached, WorktreeEmpty:
+		return true
+	}
+	return false
+}
+
+// CheckAccess refuses a worktree that would let a Guild with the given
+// access write: a read-only Guild never gets integration or branch (ADR 0009).
+func (w Worktree) CheckAccess(a Access) error {
+	if a == ReadOnly && (w == WorktreeIntegration || w == WorktreeBranch) {
+		return fmt.Errorf("worktree %q is writable but the Guild is read-only: a definition can only narrow, never widen", w)
+	}
+	return nil
+}
+
 // Guild is a loaded Guild definition: GUILD.md, warden/SKILL.md and wrights/*.md.
 type Guild struct {
 	Name         string            `json:"name"`
@@ -31,6 +66,7 @@ type Guild struct {
 	Runners      []string          `json:"runners"` // the permitted set
 	Requires     []string          `json:"requires,omitempty"`
 	Access       Access            `json:"access"`
+	Worktree     Worktree          `json:"worktree"` // the kind of worktree its Wardens work in; empty by default
 	DeniedTools  []string          `json:"denied_tools,omitempty"`
 	ReworkRounds int               `json:"rework_rounds,omitempty"`
 	Skills       []string          `json:"skills,omitempty"`
@@ -58,6 +94,7 @@ type JigStep struct {
 	Outputs    []string `json:"outputs,omitempty" yaml:"outputs"`
 	BlockedBy  []string `json:"blocked_by,omitempty" yaml:"blocked_by"`
 	Checkpoint bool     `json:"checkpoint,omitempty" yaml:"checkpoint"`
+	Worktree   Worktree `json:"worktree,omitempty" yaml:"worktree"` // overrides the Guild's; it can only narrow
 }
 
 // Jig is a loaded Jig definition: a prebuilt Plan.

@@ -7,10 +7,10 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
+	"github.com/phallatlassian/archwright/internal/defs"
 	"github.com/phallatlassian/archwright/internal/remote"
 	"github.com/phallatlassian/archwright/internal/store"
 )
@@ -213,7 +213,7 @@ func renderStepBrief(job store.Job, step store.Step, g Guild, charter, prior str
 // integration branch every accepted piece was merged into, and those pieces
 // by name. A step's Inputs, such as "fix.diff", are only labels; without this
 // a reviewing Warden has nothing to inspect (a Warden's own checkout is empty
-// by design). Empty when nothing was accepted yet.
+// unless its Guild or step declares another worktree, ADR 0030). Empty when nothing was accepted yet.
 func (r *Runs) priorWork(job store.Job) (string, error) {
 	pieces, err := r.st.Pieces(job.ID)
 	if err != nil {
@@ -234,7 +234,7 @@ func (r *Runs) priorWork(job store.Job) (string, error) {
 	r.mu.Unlock()
 	if sm != nil && job.Site != "" {
 		if t, err := sm.IntegrationPushTarget(job.ID); err == nil {
-			fmt.Fprintf(&w, "The accepted pieces are merged into the Job's integration branch `%s` on Site %s, based on `%s`; the Inputs named in this step refer to that work. Your own checkout is empty, so do not run git against it: read the work through inspect_wright.\n", t.Branch, job.Site, t.DefaultBranch)
+			fmt.Fprintf(&w, "The accepted pieces are merged into the Job's integration branch `%s` on Site %s, based on `%s`; the Inputs named in this step refer to that work. Unless your working directory is that integration worktree, your own checkout is empty, so do not run git against it: read the work through inspect_wright.\n", t.Branch, job.Site, t.DefaultBranch)
 			if wt, err := sm.IntegrationWorktree(job.ID); err == nil {
 				fmt.Fprintf(&w, "The branch is checked out at `%s`: push it from there, `git -C %s push origin %s`, only in the %s step.\n", wt, wt, t.Branch, OpenPRStep)
 			}
@@ -329,9 +329,9 @@ func (r *Runs) summon(sr store.StepRun, resumed, answered bool) error {
 	r.mu.Unlock()
 	go func() {
 		defer r.wg.Done()
-		wt, runErr := r.wardenWorkspace(env.Run, root)
+		wt, inRepo, runErr := r.wardenWorkspace(sr, env.Run, root)
 		var extra map[string]string
-		if runErr == nil {
+		if runErr == nil && inRepo {
 			extra, runErr = r.deliverGuildSkills(sr.Guild, env.Run, wt, nil)
 		}
 		if runErr == nil {
@@ -371,27 +371,70 @@ func (r *Runs) resumeAnsweredSteps(steps []store.StepRun) {
 	}
 }
 
-// wardenWorkspace is the directory a task Warden works in: a per-run
-// directory the Works creates outside any Site, since a Warden leads through
-// the Archwright tools and never touches code. It is a bare git repository
-// root so Guild skills can be delivered into it and hidden from git like in
-// a Wright's worktree.
-func (r *Runs) wardenWorkspace(run, root string) (string, error) {
+// wardenWorktreeKind is the kind of worktree a step's Warden works in: the
+// step's own, else its Guild's. A request wider than the Guild's access
+// allows is refused, so a bad definition fails closed (ADR 0009, 0011).
+func (r *Runs) wardenWorktreeKind(sr store.StepRun) (defs.Worktree, error) {
 	r.mu.Lock()
-	sd := r.skills
+	reg := r.defs
 	r.mu.Unlock()
+	kind := defs.WorktreeEmpty
+	var g defs.Guild
+	if reg != nil {
+		var ok bool
+		if g, ok = reg.Guild(sr.Guild); !ok {
+			return "", fmt.Errorf("no guild %q", sr.Guild)
+		}
+		kind = g.Worktree
+	}
+	if plan, err := r.st.GetPlan(sr.JobID); err == nil {
+		for _, s := range plan.Steps {
+			if s.ID == sr.Step && s.Worktree != "" {
+				kind = defs.Worktree(s.Worktree)
+			}
+		}
+	}
+	if !kind.Valid() {
+		return "", fmt.Errorf("worktree %q must be integration, branch, detached or empty", kind)
+	}
+	if reg != nil {
+		if err := kind.CheckAccess(g.Access); err != nil {
+			return "", err
+		}
+	}
+	return kind, nil
+}
+
+// wardenWorkspace is the directory a task Warden works in: a worktree of its
+// Site's main checkout of the kind its Guild or step declares (ADR 0030), so
+// it inherits the developer's folder trust and Guild skills can be delivered
+// into it and hidden from git like in a Wright's worktree. A Job with no Site
+// has no checkout to make one from: its Warden gets a plain directory with no
+// repository, and no skills.
+func (r *Runs) wardenWorkspace(sr store.StepRun, run, root string) (dir string, inRepo bool, err error) {
+	kind, err := r.wardenWorktreeKind(sr)
+	if err != nil {
+		return "", false, fmt.Errorf("preparing the Warden's worktree: %w", err)
+	}
+	r.mu.Lock()
+	sm, sd := r.sites, r.skills
+	r.mu.Unlock()
+	if job, err := r.st.GetJob(sr.JobID); err == nil && job.Site != "" && sm != nil {
+		wt, err := sm.WardenWorktree(sr.JobID, kind)
+		if err != nil {
+			return "", false, fmt.Errorf("preparing the Warden's worktree: %w", err)
+		}
+		return wt.Path, true, nil
+	}
 	base := filepath.Join(root, "warden-"+run)
 	if sd != nil && sd.RunDir != nil {
 		base = sd.RunDir(run)
 	}
-	dir := filepath.Join(base, "work")
+	dir = filepath.Join(base, "work")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", fmt.Errorf("preparing the Warden's directory: %w", err)
+		return "", false, fmt.Errorf("preparing the Warden's directory: %w", err)
 	}
-	if out, err := exec.Command("git", "-C", dir, "init", "-q").CombinedOutput(); err != nil {
-		return "", fmt.Errorf("preparing the Warden's directory: git init: %v: %s", err, strings.TrimSpace(string(out)))
-	}
-	return dir, nil
+	return dir, false, nil
 }
 
 // endRunRecord notes how a Warden or reviewer run ended; a failure to record it is logged.

@@ -92,7 +92,7 @@ var commands = []command{
 	{"Jobs", "plan reject", "ID", "the developer's no-go on a Job's ad hoc Plan", ""},
 	{"Jobs", "plan start", "ID JIG [--param NAME=VALUE]", "start a Job's Plan from a Jig",
 		"start a Job's Plan from a Jig; it starts without approval"},
-	{"Jobs", "worktree create", "ID integration|wright|readonly [--base-ref REF]", "create a Job's worktree from the Works' clone",
+	{"Jobs", "worktree create", "ID integration|wright|readonly|empty [--base-ref REF]", "create a Job's worktree from the Works' clone",
 		"create a Job's worktree from the Works' clone, after a fetch"},
 	{"Jobs", "worktree list", "ID", "list a Job's worktrees", ""},
 	{"Jobs", "worktree cleanup", "ID", "remove worktrees of Wrights merged into the integration branch", ""},
