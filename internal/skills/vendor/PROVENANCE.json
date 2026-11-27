@@ -31,6 +31,35 @@
       }
     },
     {
+      "name": "domain-modeling",
+      "upstream": "upstream/domain-modeling",
+      "edited": "for a read-only Chancery Wright in the factory (#163): proposes GLOSSARY.md and ADR text in its result instead of writing the files, asks with ask, reads the source issue with gh issue view; GLOSSARY-FORMAT.md and ADR-FORMAT.md are unchanged",
+      "upstream_files": {
+        "domain-modeling/ADR-FORMAT.md": "944c92aa790e8fbdc9199640b170979abb8a34ba8d0fe18c2a01a63bce140ca0",
+        "domain-modeling/GLOSSARY-FORMAT.md": "21dcc40cdec8e151a829b98ab1517c1867bc444e3665134a98c6983411996801",
+        "domain-modeling/SKILL.md": "7b925d7b1e341a2eeae33ad68a8a8c0ab889a38ddd22a7598e4c240e5a7556a3",
+        "domain-modeling/agents/openai.yaml": "f6bf2aa996c6e6f53fdd0708e18a0d16a56aed8322cca59fedbe3c0d2c75f06b"
+      }
+    },
+    {
+      "name": "grill-with-docs",
+      "upstream": "upstream/grill-with-docs",
+      "edited": "for a Chancery Wright in the factory (#163): says questions go through ask and docs are proposed in the result, reads the source issue with gh issue view; drops disable-model-invocation and allows implicit invocation in agents/openai.yaml",
+      "upstream_files": {
+        "grill-with-docs/SKILL.md": "7de372c13488f1ee96cc11cd8907b56b6809cc93eef776eeddd37de6b6cbe3fe",
+        "grill-with-docs/agents/openai.yaml": "94cd0ab161fb468a836349f5ed482ba58ce8e709a05c57ce533d739dbd35cca9"
+      }
+    },
+    {
+      "name": "grilling",
+      "upstream": "upstream/grilling",
+      "edited": "for a Chancery Wright in the factory (#163): each round of questions is one blocking ask with a recommended default per question, the run looks facts up itself instead of dispatching sub-agents, and skipped or defaulted answers are recorded as assumptions; reads the source issue with gh issue view",
+      "upstream_files": {
+        "grilling/SKILL.md": "a146842ed93ca43d833550fa9adf02e58cb63c83fea9d4b4522995b82242d4e2",
+        "grilling/agents/openai.yaml": "1411d7df7d99b7e621a1ff8283c8133cc2464be63d064e52d8ce169c6800ee9b"
+      }
+    },
+    {
       "name": "implement",
       "upstream": "upstream/implement",
       "edited": "for a Wright in the factory (#160): drops disable-model-invocation and allows implicit invocation in agents/openai.yaml; reads the source issue with gh issue view instead of the issue tracker; checks work with the Site's own commands in its own shell and says the Works' handback gate run is authoritative; commits its work to its own branch, never run scaffolding; asks with ask; drops the call to code-review, which is not in Masonry's set, since review is a separate step; points a Warden to implement-spec",
@@ -79,6 +108,24 @@
       }
     },
     {
+      "name": "to-spec",
+      "upstream": "upstream/to-spec",
+      "edited": "for a Chancery Wright in the factory (#163): hands the spec back whole as its result instead of publishing it to the issue tracker and labelling it, reads the source issue with gh issue view, asks with ask only when a gap changes what gets built, drops the /setup-matt-pocock-skills pointer; drops disable-model-invocation and allows implicit invocation in agents/openai.yaml",
+      "upstream_files": {
+        "to-spec/SKILL.md": "43ad9cf318e5e7d3d1fa360253a37021796dc87a0c2e595ad262661a10f85088",
+        "to-spec/agents/openai.yaml": "1c5b4d1e3d8e52287ef19cc2742fdbbfae1914ac75d33af3e4c8174f08cc55bb"
+      }
+    },
+    {
+      "name": "to-tickets",
+      "upstream": "upstream/to-tickets",
+      "edited": "for a Chancery Wright in the factory (#163): hands the tickets back whole, numbered in dependency order with their blocked-by edges, instead of publishing them to a tracker or local files; checks the breakdown with ask instead of quizzing the user; reads the source issue with gh issue view; drops the /setup-matt-pocock-skills pointer; drops disable-model-invocation and allows implicit invocation in agents/openai.yaml",
+      "upstream_files": {
+        "to-tickets/SKILL.md": "56ec23c5b2782785d4e65bff9e315b6d3aeb4ef977c174a219e99489fada1995",
+        "to-tickets/agents/openai.yaml": "21bc6215fffcd7614e9f772bb1760e87cc5fc7dcc707e7d282bc9414267a6090"
+      }
+    },
+    {
       "name": "triage",
       "upstream": "upstream/triage",
       "edited": "dispatches through the Works (dispatch_wright, inspect_wright, rework_wright, report_review, ask) and fills the gaps upstream leaves",
@@ -87,6 +134,15 @@
         "triage/agents/openai.yaml": "2e683717720cf456d165d0bb1a68bb600d0b6a8ccb61841c172e50d26f95351c",
         "triage/OUT-OF-SCOPE.md": "1fbf9b432130c6380aa65813b55553cfda150309b27c595e183f8e335b8a190d",
         "triage/SKILL.md": "917b0baf74be583e74f110857ed45df2766617f75c00baf61fd136d7af515edf"
+      }
+    },
+    {
+      "name": "wayfinder",
+      "upstream": "upstream/wayfinder",
+      "edited": "for a Chancery Wright in the factory (#163): charts the map and its decision tickets with blocking edges and the frontier in its result instead of creating issues, claiming tickets or branches; drops the work-through-the-map mode and the research subagents; asks with ask; reads the source issue with gh issue view; drops the /setup-matt-pocock-skills pointer; drops disable-model-invocation and allows implicit invocation in agents/openai.yaml",
+      "upstream_files": {
+        "wayfinder/SKILL.md": "0c9fa96791aebf3b7d654cf35c6aadde97d81f57c17b07d13b27c14d9c46561f",
+        "wayfinder/agents/openai.yaml": "88bc81a11a6d52ac67aeaa76b8b619e387020d47c5133a4dd4927fd15c4ad073"
       }
     }
   ],
