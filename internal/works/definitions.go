@@ -43,18 +43,19 @@ type Catalogue struct {
 
 // CatalogueGuild is a Guild as the Archwright chooses by: never its charter or skills.
 type CatalogueGuild struct {
-	Name     string      `json:"name"`
-	Intake   string      `json:"intake"`
-	Handback string      `json:"handback"`
-	Access   defs.Access `json:"access"`
-	Runners  []string    `json:"runners"`
-	Source   string      `json:"source"`
+	Name     string        `json:"name"`
+	Intake   string        `json:"intake"`
+	Handback string        `json:"handback"`
+	Access   defs.Access   `json:"access"`
+	Worktree defs.Worktree `json:"worktree"`
+	Runners  []string      `json:"runners"`
+	Source   string        `json:"source"`
 }
 
 func catalogueOf(reg *defs.Registry) Catalogue {
 	c := Catalogue{Guilds: []CatalogueGuild{}, Jigs: reg.Jigs(), Errors: reg.Errors()}
 	for _, g := range reg.Guilds() {
-		c.Guilds = append(c.Guilds, CatalogueGuild{Name: g.Name, Intake: g.Intake, Handback: g.Handback, Access: g.Access, Runners: g.Runners, Source: g.Source})
+		c.Guilds = append(c.Guilds, CatalogueGuild{Name: g.Name, Intake: g.Intake, Handback: g.Handback, Access: g.Access, Worktree: g.Worktree, Runners: g.Runners, Source: g.Source})
 	}
 	return c
 }
@@ -91,7 +92,12 @@ func checkStepGuilds(reg *defs.Registry, steps []store.Step) error {
 		return nil
 	}
 	for _, s := range steps {
-		if _, ok := reg.Guild(s.Guild); ok || s.Guild == "" { // an empty guild is the store's to reject
+		if g, ok := reg.Guild(s.Guild); ok {
+			if err := checkStepWorktree(s, g); err != nil {
+				return err
+			}
+			continue
+		} else if s.Guild == "" { // an empty guild is the store's to reject
 			continue
 		}
 		var names []string
@@ -99,6 +105,22 @@ func checkStepGuilds(reg *defs.Registry, steps []store.Step) error {
 			names = append(names, g.Name)
 		}
 		return fmt.Errorf("%w: step %q names unknown guild %q; valid guilds: %s", errInvalidInput, s.ID, s.Guild, strings.Join(names, ", "))
+	}
+	return nil
+}
+
+// checkStepWorktree refuses a step whose worktree is unknown or would widen
+// what its Guild's access allows (ADR 0009, 0011).
+func checkStepWorktree(s store.Step, g defs.Guild) error {
+	if s.Worktree == "" {
+		return nil
+	}
+	w := defs.Worktree(s.Worktree)
+	if !w.Valid() {
+		return fmt.Errorf("%w: step %q worktree %q must be integration, branch, detached or empty", errInvalidInput, s.ID, s.Worktree)
+	}
+	if err := w.CheckAccess(g.Access); err != nil {
+		return fmt.Errorf("%w: step %q: %v", errInvalidInput, s.ID, err)
 	}
 	return nil
 }

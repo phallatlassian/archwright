@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/phallatlassian/archwright/internal/defs"
 	"github.com/phallatlassian/archwright/internal/skills"
 	"github.com/phallatlassian/archwright/internal/store"
 )
@@ -40,7 +41,8 @@ func activeOf(wts []store.Worktree, kind string) []store.Worktree {
 // CreateWorktree makes a worktree for a Job under the Works' own directory,
 // from the Works' own clone of the Site, never from the developer's checkout
 // (ADR 0008, 0019). Kinds: integration (the Job's integration branch), wright
-// (own branch) and readonly (detached). baseRef defaults to the Job's
+// (own branch), readonly (detached) and empty (detached with an empty index
+// and tree, so git status is quiet). baseRef defaults to the Job's
 // integration branch, else the Site's base branch. The clone is fetched first
 // and a branch name is resolved against the remote's branches, so a Job starts
 // from what the remote has, not from anything local. Every branch is new and
@@ -48,8 +50,8 @@ func activeOf(wts []store.Worktree, kind string) []store.Worktree {
 func (m *Manager) CreateWorktree(jobID, kind, baseRef string) (store.Worktree, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if kind != store.KindIntegration && kind != store.KindWright && kind != store.KindReadOnly {
-		return store.Worktree{}, fmt.Errorf("kind must be integration, wright or readonly, not %q", kind)
+	if kind != store.KindIntegration && kind != store.KindWright && kind != store.KindReadOnly && kind != store.KindEmpty && kind != store.KindWarden {
+		return store.Worktree{}, fmt.Errorf("kind must be integration, wright, warden, readonly or empty, not %q", kind)
 	}
 	job, site, err := m.jobSite(jobID)
 	if err != nil {
@@ -100,6 +102,8 @@ func (m *Manager) CreateWorktree(jobID, kind, baseRef string) (store.Worktree, e
 	switch kind {
 	case store.KindReadOnly:
 		_, err = git(site.ClonePath, "worktree", "add", "--detach", dir, sha)
+	case store.KindEmpty:
+		err = addEmptyWorktree(site.ClonePath, dir, sha)
 	default:
 		w.Branch = "archwright/" + job.ID + "/" + id
 		if kind == store.KindIntegration {
@@ -268,4 +272,61 @@ func (m *Manager) Close(jobID, outcome string) ([]store.Worktree, error) {
 		return removed, err // job stays open so the rest can be retried
 	}
 	return removed, m.st.CloseJob(jobID, outcome)
+}
+
+// addEmptyWorktree adds a detached worktree whose index and tree are empty
+// yet inherits the main checkout's folder trust. A bare --no-checkout leaves
+// every file showing as a staged deletion, so a sparse checkout that
+// excludes everything is set and the index is read back from HEAD, which
+// marks each entry skip-worktree and keeps git status quiet.
+func addEmptyWorktree(clone, dir, sha string) error {
+	if _, err := git(clone, "worktree", "add", "--detach", "--no-checkout", dir, sha); err != nil {
+		return err
+	}
+	if _, err := git(dir, "sparse-checkout", "init", "--no-cone"); err != nil {
+		return err
+	}
+	file, err := git(dir, "rev-parse", "--path-format=absolute", "--git-path", "info/sparse-checkout")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(file, []byte("!/*\n"), 0o644); err != nil {
+		return err
+	}
+	_, err = git(dir, "read-tree", "-mu", "HEAD")
+	return err
+}
+
+// WardenWorktree gives a Warden a worktree of the Site's main checkout of the
+// kind a Guild or step declares (ADR 0030). integration is the Job's single
+// full worktree, shared by every Warden that asks for it, so the Job has it
+// made if need be and it is never created twice. branch is a writing worktree
+// on its own branch, detached a read-only full checkout, and empty a
+// --no-checkout worktree. Each of the last three is new per call and based on
+// the Job's integration branch once it exists.
+func (m *Manager) WardenWorktree(jobID string, kind defs.Worktree) (store.Worktree, error) {
+	if kind == defs.WorktreeIntegration {
+		if err := m.EnsureIntegration(jobID); err != nil {
+			return store.Worktree{}, err
+		}
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		wts, err := m.st.Worktrees(jobID)
+		if err != nil {
+			return store.Worktree{}, err
+		}
+		integration := activeOf(wts, store.KindIntegration)
+		if len(integration) == 0 {
+			return store.Worktree{}, fmt.Errorf("job %s has no integration worktree: %w", jobID, store.ErrConflict)
+		}
+		return integration[0], nil
+	}
+	storeKind := map[defs.Worktree]string{defs.WorktreeBranch: store.KindWarden, defs.WorktreeDetached: store.KindReadOnly, defs.WorktreeEmpty: store.KindEmpty}[kind]
+	if storeKind == "" {
+		return store.Worktree{}, fmt.Errorf("unknown worktree kind %q", kind)
+	}
+	return m.CreateWorktree(jobID, storeKind, "")
 }

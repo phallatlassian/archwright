@@ -52,6 +52,10 @@ _Avoid_: base checkout, trusted folder
 A Job's single full worktree, where accepted pieces are merged and from which the Job's pull request is raised. The Warden of the Guild that declares it stands in it (ADR 0030).
 _Avoid_: merge worktree, Warden's workspace
 
+**Warden worktree**:
+The worktree of the Site's main checkout a Warden works in, of the kind its Guild's `worktree:` (default `empty`) or its Jig or Plan step declares: `integration` (the Job's shared full worktree), `branch` (its own branch), `detached` (read-only full checkout) or `empty` (no files, quiet `git status`). A definition can only narrow, never widen (ADR 0030).
+_Avoid_: workspace, Warden's directory
+
 **Trust probe**:
 A Session the Works launches at Site registration, in the Site's main checkout, so the developer accepts each runner's folder trust (and Codex's hook trust) once. A Session that starts is the evidence both were given and the hooks reach the Works.
 _Avoid_: trust check, warm-up

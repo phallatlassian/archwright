@@ -38,6 +38,7 @@ type manifest struct {
 	Runners      []string `yaml:"runners"`
 	Requires     []string `yaml:"requires"`
 	Access       Access   `yaml:"access"`
+	Worktree     Worktree `yaml:"worktree"`
 	DeniedTools  []string `yaml:"denied_tools"`
 	ReworkRounds int      `yaml:"rework_rounds"`
 	Skills       []string `yaml:"skills"`
@@ -81,10 +82,13 @@ func loadGuild(fsys fs.FS, dir, name, source string) (Guild, error) {
 		return Guild{}, fmt.Errorf("GUILD.md manifest: %w", err)
 	}
 	g := Guild{Name: name, Intake: m.Intake, Handback: m.Handback, Runner: m.Runner, Runners: m.Runners, Requires: m.Requires,
-		Access: m.Access, DeniedTools: m.DeniedTools, ReworkRounds: m.ReworkRounds, Skills: m.Skills, UserOnly: m.UserOnly,
+		Access: m.Access, Worktree: m.Worktree, DeniedTools: m.DeniedTools, ReworkRounds: m.ReworkRounds, Skills: m.Skills, UserOnly: m.UserOnly,
 		Charter: strings.TrimSpace(string(charter)), Wrights: map[string]string{}, Source: source}
 	if g.Access == "" {
 		g.Access = ReadOnly // the narrowest, when the manifest does not say
+	}
+	if g.Worktree == "" {
+		g.Worktree = WorktreeEmpty // the narrowest, when the manifest does not say
 	}
 	if m.Name != "" && m.Name != name {
 		return Guild{}, fmt.Errorf("manifest name %q does not match its directory %q", m.Name, name)
@@ -125,6 +129,12 @@ func (g Guild) validate() error {
 	}
 	if g.Access != ReadOnly && g.Access != ReadWrite {
 		return fmt.Errorf("access %q must be %s or %s", g.Access, ReadOnly, ReadWrite)
+	}
+	if !g.Worktree.Valid() {
+		return fmt.Errorf("worktree %q must be integration, branch, detached or empty", g.Worktree)
+	}
+	if err := g.Worktree.CheckAccess(g.Access); err != nil {
+		return err
 	}
 	if len(g.Runners) == 0 {
 		return errors.New("manifest needs a permitted runners set")
@@ -248,6 +258,14 @@ func (j Jig) validate(guilds map[string]Guild) error {
 		if _, ok := guilds[s.Guild]; !ok {
 			return fmt.Errorf("step %q names unknown Guild %q", s.ID, s.Guild)
 		}
+		if s.Worktree != "" {
+			if !s.Worktree.Valid() {
+				return fmt.Errorf("step %q worktree %q must be integration, branch, detached or empty", s.ID, s.Worktree)
+			}
+			if err := s.Worktree.CheckAccess(guilds[s.Guild].Access); err != nil {
+				return fmt.Errorf("step %q: %w", s.ID, err)
+			}
+		}
 		for _, m := range paramRef.FindAllStringSubmatch(s.Task, -1) {
 			if !params[m[1]] {
 				return fmt.Errorf("step %q task uses undeclared parameter %q", s.ID, m[1])
@@ -277,7 +295,7 @@ func (j Jig) plan(vals map[string]string) []store.Step {
 		if title == "" {
 			title = s.ID
 		}
-		steps = append(steps, store.Step{ID: s.ID, Guild: s.Guild, Title: title, BlockedBy: s.BlockedBy, Checkpoint: s.Checkpoint, Brief: brief})
+		steps = append(steps, store.Step{ID: s.ID, Guild: s.Guild, Title: title, BlockedBy: s.BlockedBy, Checkpoint: s.Checkpoint, Worktree: string(s.Worktree), Brief: brief})
 	}
 	return steps
 }

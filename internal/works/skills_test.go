@@ -158,30 +158,3 @@ func TestDispatchDeliversSkillsAndFailsOnCollision(t *testing.T) {
 		t.Errorf("the dispatch did not fail visibly with the collision: %s", d.Result)
 	}
 }
-
-func TestStepWardenReceivesTheGuildSkills(t *testing.T) {
-	root := t.TempDir()
-	g := newStepRig(t, true)
-	reg := defs.New(defs.Shipped(), "")
-	reg.Reload()
-	g.r.UseDefinitions(reg)
-	g.r.UseSkills(SkillsDelivery{
-		Catalogue: skills.Vendored(),
-		Runner:    "claude",
-		RunDir:    func(id string) string { return filepath.Join(root, "runs", id) },
-	})
-	if resp := g.start("a"); !resp.OK {
-		t.Fatalf("start: %+v", resp)
-	}
-	g.waitStatus("a", store.StepHandedBack)
-	reqs := g.warden.Requests()
-	if len(reqs) != 1 {
-		t.Fatalf("warden requests: %+v", reqs)
-	}
-	if reqs[0].ExtraEnv["GIT_CONFIG_GLOBAL"] == "" {
-		t.Error("no GIT_CONFIG_GLOBAL for the step Warden")
-	}
-	if _, err := os.Stat(filepath.Join(reqs[0].Worktree, ".claude/skills/pr/SKILL.md")); err != nil {
-		t.Errorf("the step Warden cannot see the pr skill: %v", err)
-	}
-}

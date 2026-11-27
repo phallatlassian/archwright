@@ -4,7 +4,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"testing/fstest"
 
+	"github.com/phallatlassian/archwright/internal/skills"
 	"github.com/phallatlassian/archwright/internal/store"
 )
 
@@ -132,6 +134,20 @@ func TestMergePieceRefusesADirtyIntegrationWorktree(t *testing.T) {
 	}
 	if _, err := e.m.MergePiece(j.ID, w.Branch); err == nil {
 		t.Fatal("merged into a dirty worktree")
+	}
+}
+
+func TestMergePieceIgnoresSkillsDeliveredIntoTheIntegrationWorktree(t *testing.T) {
+	e := setup(t)
+	j, integ, w := pieceJob(t, e)
+	commitFile(t, e, j, w.Path, "b.txt", "b")
+	set := []skills.Skill{{Name: "demo", FS: fstest.MapFS{"SKILL.md": {Data: []byte("---\nname: demo\n---\n")}}}}
+	if _, err := skills.Deliver(skills.Request{Worktree: integ.Path, RunDir: filepath.Join(realTemp(t), "run"), Runner: "claude", Skills: set}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := e.m.MergePiece(j.ID, w.Branch)
+	if err != nil || got.Status != PieceMerged {
+		t.Fatalf("merge = %+v, %v; want merged", got, err)
 	}
 }
 

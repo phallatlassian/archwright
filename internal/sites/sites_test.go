@@ -12,6 +12,7 @@ import (
 	"testing"
 	"testing/fstest"
 
+	"github.com/phallatlassian/archwright/internal/defs"
 	"github.com/phallatlassian/archwright/internal/skills"
 	"github.com/phallatlassian/archwright/internal/store"
 )
@@ -1169,5 +1170,82 @@ func TestCleanupMergedRemovesMergedWorktreeHoldingOnlyDeliveredSkills(t *testing
 	}
 	if _, err := os.Stat(w.Path); !os.IsNotExist(err) {
 		t.Error("merged worktree kept")
+	}
+}
+
+func TestWardenWorktreeKinds(t *testing.T) {
+	e := setup(t)
+	job := e.job(t).ID
+
+	empty, err := e.m.WardenWorktree(job, defs.WorktreeEmpty)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entries, _ := os.ReadDir(empty.Path); len(entries) != 1 || entries[0].Name() != ".git" {
+		t.Errorf("empty worktree holds %v", entries)
+	}
+	if out := run(t, empty.Path, "status", "--porcelain"); out != "" {
+		t.Errorf("empty worktree's git status is not quiet: %q", out)
+	}
+	if empty.Kind != store.KindEmpty {
+		t.Errorf("kind %s", empty.Kind)
+	}
+
+	detached, err := e.m.WardenWorktree(job, defs.WorktreeDetached)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(detached.Path, "a.txt")); err != nil {
+		t.Error("detached worktree is not a full checkout")
+	}
+	if b := run(t, detached.Path, "branch", "--show-current"); b != "" {
+		t.Errorf("detached worktree is on branch %q", b)
+	}
+
+	first, err := e.m.WardenWorktree(job, defs.WorktreeIntegration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := e.m.WardenWorktree(job, defs.WorktreeIntegration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ID != again.ID || first.Path != again.Path {
+		t.Errorf("integration worktree not shared: %s and %s", first.Path, again.Path)
+	}
+	if _, err := os.Stat(filepath.Join(first.Path, "a.txt")); err != nil {
+		t.Error("integration worktree is not a full checkout")
+	}
+
+	branch, err := e.m.WardenWorktree(job, defs.WorktreeBranch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b := run(t, branch.Path, "branch", "--show-current"); b == "" || b != branch.Branch || b == first.Branch {
+		t.Errorf("branch worktree is on %q, record says %q", b, branch.Branch)
+	}
+	if branch.Kind != store.KindWarden {
+		t.Errorf("branch worktree kind is %s", branch.Kind)
+	}
+	if _, err := e.m.MergePiece(job, branch.Branch); err == nil {
+		t.Error("a Warden's branch was merged as a Wright piece")
+	}
+	if _, err := e.m.WardenWorktree(job, "weird"); err == nil {
+		t.Error("an unknown kind was accepted")
+	}
+}
+
+func TestEmptyWorktreeRemovesWithItsJob(t *testing.T) {
+	e := setup(t)
+	job := e.job(t).ID
+	empty, err := e.m.WardenWorktree(job, defs.WorktreeEmpty)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.m.Close(job, "accepted"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(empty.Path); err == nil {
+		t.Error("empty worktree outlived its Job")
 	}
 }

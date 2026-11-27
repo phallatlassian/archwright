@@ -408,3 +408,16 @@ func writeGitConfig(runDir string, hidden []string) (string, error) {
 	}
 	return cfgPath, nil
 }
+
+// Delivered lists the worktree-relative paths Deliver created there.
+func Delivered(worktree string) []string {
+	file, err := deliveredPath(worktree)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, p := range readDelivered(file) {
+		out = append(out, path.Clean(strings.TrimPrefix(p, "/")))
+	}
+	return out
+}

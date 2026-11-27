@@ -4,6 +4,7 @@ handback: "A diff, passing tests, and anything noticed that exceeds the Guild's 
 runner: claude
 runners: [claude, codex]
 access: read-write
+worktree: integration
 rework_rounds: 2
 skills: [implement, implement-spec, tdd, codebase-design, pr, diagnosing-bugs, prototype]
 ---

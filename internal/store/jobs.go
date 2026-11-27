@@ -41,6 +41,7 @@ type Step struct {
 	Title      string   `json:"title"`
 	BlockedBy  []string `json:"blocked_by,omitempty"`
 	Checkpoint bool     `json:"checkpoint,omitempty"` // a human checkpoint
+	Worktree   string   `json:"worktree,omitempty"`   // the kind of worktree its Warden works in; empty means its Guild's (ADR 0030)
 	Brief      string   `json:"brief,omitempty"`      // what the step asks for; the Spec axis of a Review falls back to it (ADR 0012)
 }
 
