@@ -144,7 +144,7 @@ Required before you commit and report:
 
 ## Limits
 
-There are no new limits. If a loop (a flaky test run many times, a race-detector run) is too long for your wall-time limit, report blocked with what was run.
+No extra limits apply. If a loop (a flaky test run many times, a race-detector run) is too long for your wall-time limit, report blocked with what was run.
 
 ## Your result: the diagnosis
 

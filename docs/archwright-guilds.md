@@ -127,9 +127,10 @@ present a guess with the same confidence as a citation.
 
 **Intake.** A ticket or spec specific enough to implement, with its constraints stated.
 **Handback.** A diff, passing tests, and anything the Guild noticed that exceeds its remit.
-**Draws on.** `implement`, `implement-spec`, `tdd`, `pr`, with `codebase-design` as a standing
-standard every brief inherits. `prototype` is not in its `skills:` yet (#165). The shipped Guild's skills are forks the Works lists in each Warden's and Wright's
-brief (#160).
+**Draws on.** `implement`, `implement-spec`, `tdd`, `pr` and `diagnosing-bugs`, with
+`codebase-design` as a standing standard every brief inherits. `prototype` is not in its
+`skills:` yet (#165). The shipped Guild's skills are forks the Works lists in each Warden's and
+Wright's brief (#160, #186).
 
 Masons built to a lodge's standards, course by course, each stone set on those already
 laid. Here the courses are tickets and the standards are the codebase's.
