@@ -86,3 +86,28 @@ func TestAttachItemIsNotRepeatedForTheSameWright(t *testing.T) {
 		t.Fatalf("%d attach items", n)
 	}
 }
+
+func TestReworkedInteractiveWrightFilesANewAttachItemOnRelaunch(t *testing.T) {
+	g := newSessionRig(t, reworkScript())
+	g.ok(g.warden, "dispatch_wright", `{"piece":"p","interactive":true,"brief":`+goodBrief+`}`, nil)
+	g.waitReported("p")
+	old := g.fake.Sessions()[0]
+	waitSessionIdle(t, old)
+	old.Cancel() // the pane is gone
+	old.Result()
+	g.fake.SetScript(hosted.Turn(callsTool("report_result", `{"status":"done","result":"fresh","evidence":["e"]}`)))
+	eventually(t, "the first item to clear", func() bool { return len(attachItems(t, g.st)) == 0 })
+
+	g.rework("p")
+	g.waitReportedRound("p", 1)
+	inbox, _ := g.st.Inbox(false)
+	reported := 0
+	for _, i := range inbox {
+		if i.Name == "interactive_wright" {
+			reported++
+		}
+	}
+	if reported != 2 {
+		t.Fatalf("%d interactive_wright reports, want one per launch", reported)
+	}
+}
